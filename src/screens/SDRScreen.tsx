@@ -67,9 +67,28 @@ export default function SDRScreen({ route, navigation }: Props) {
           `try { if (typeof window._lsvExitAudioOnly === 'function') window._lsvExitAudioOnly(); } catch(e) {}`
         );
       } else {
-        wvRef.current?.inject(
-          `try { if (typeof window._lsvEnterAudioOnly === 'function') window._lsvEnterAudioOnly(); } catch(e) {}`
-        );
+        if (Platform.OS === 'android') {
+          // On Android, do NOT enter audio-only mode — it can disconnect the stream.
+          // Instead, explicitly keep the AudioContext and media element alive so the
+          // foreground MediaService can maintain background playback.
+          wvRef.current?.inject(`
+            try {
+              if (window.audioContext && window.audioContext.state !== 'running') {
+                window.audioContext.resume().catch(function(){});
+              }
+              document.querySelectorAll('audio').forEach(function(a) {
+                if (a.paused) a.play().catch(function(){});
+              });
+              if (window.mediaElement && window.mediaElement.paused) {
+                window.mediaElement.play().catch(function(){});
+              }
+            } catch(e) {}
+          `);
+        } else {
+          wvRef.current?.inject(
+            `try { if (typeof window._lsvEnterAudioOnly === 'function') window._lsvEnterAudioOnly(); } catch(e) {}`
+          );
+        }
       }
     });
     return () => sub.remove();

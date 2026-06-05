@@ -114,8 +114,8 @@ function buildInject(skinHtml: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.48') return;
-  window.__vibeSdrInjected = '0.1.48';
+  if (window.__vibeSdrInjected === '0.1.49') return;
+  window.__vibeSdrInjected = '0.1.49';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -340,18 +340,27 @@ function buildInject(skinHtml: string): string {
   }, 500);
 
   // ── 8. Android audio-started signal ────────────────────────────────────────
+  // Uses a DOM capture-phase 'play' event so it fires for any <audio> element
+  // regardless of UberSDR's internal variable name. Also polls window.mediaElement
+  // as a fallback. Once fired, tells native to start the foreground MediaService.
   (function() {
     var _sent = false;
+    function _signal() {
+      if (_sent) return;
+      _sent = true;
+      try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'audio-started' })); } catch(_) {}
+    }
+    // Primary: catch any audio element starting to play
+    document.addEventListener('play', function(e) {
+      if (e.target && e.target.nodeName === 'AUDIO') _signal();
+    }, true);
+    // Fallback: poll window.mediaElement (UberSDR desktop path)
     var _pt = setInterval(function() {
       try {
-        if (!window.mediaElement || window.mediaElement.paused) return;
-        if (_sent) { clearInterval(_pt); return; }
-        _sent = true;
-        clearInterval(_pt);
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'audio-started' }));
+        if (window.mediaElement && !window.mediaElement.paused) { clearInterval(_pt); _signal(); }
       } catch(_) {}
     }, 500);
-    setTimeout(function() { clearInterval(_pt); }, 30000);
+    setTimeout(function() { clearInterval(_pt); }, 60000);
   })();
 })();
 `;
