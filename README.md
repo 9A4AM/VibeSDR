@@ -6,6 +6,22 @@ A mobile-first SDR receiver app for iOS and Android, built with Expo / React Nat
 
 ---
 
+## Screenshots
+
+| | | |
+|---|---|---|
+| ![Instance picker](screenshots/01-instance-picker.png) | ![Waterfall portrait](screenshots/02-waterfall-portrait.png) | ![RTTY decoder](screenshots/04-rtty-decoder.png) |
+| *Instance picker — sorted by distance* | *Default skin — Radio Caroline 648 kHz AM* | *RTTY decoder — DWD weather bulletin* |
+| ![LSB — The Pip](screenshots/06-lsb-the-pip.png) | ![Speech-to-text](screenshots/07-speech-to-text.png) | ![HFDL aircraft map](screenshots/08-hfdl-aircraft-map.png) |
+| *LSB — tuned to The Pip (Kaplya), Rostov* | *Speech-to-text decoder — BBC Radio 5* | *HFDL aircraft tracking map — 179 aircraft* |
+
+| | |
+|---|---|
+| ![Landscape](screenshots/03-waterfall-landscape.png) | ![Landscape wide](screenshots/05-waterfall-landscape-wide.png) |
+| *Landscape — Radio Caroline* | *Landscape wide zoom — AM broadcast band* |
+
+---
+
 ## Features
 
 ### Interface & Skins
