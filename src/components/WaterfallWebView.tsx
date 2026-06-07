@@ -3,6 +3,7 @@ import { Platform, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { SKIN_HTML } from '../assets/skinHtml';
+import { VIBE_WATERFALL_HTML, VIBE_WATERFALL_JS } from '../assets/vibeWaterfall';
 import { FONTS_CSS } from '../assets/fontsCSS';
 import { LEAFLET_CSS } from '../assets/leafletCSS';
 import { LEAFLET_JS } from '../assets/leafletJS';
@@ -78,6 +79,22 @@ function buildPreInject(
   // consistent across every server without relying on per-origin localStorage.
   try { localStorage.setItem('lsv_prefs', ${prefsJson}); } catch(e) {}
 
+  // Inject cross-origin global waterfall defaults from RN AsyncStorage so
+  // "Save Global" applies to every server, not just the one it was saved on.
+  try {
+    var _g = ${JSON.stringify(appPrefs.vsdr_wf_global ?? null)};
+    if (_g) localStorage.setItem('vsdr_wf_defaults', JSON.stringify(_g));
+  } catch(e) {}
+
+  ${isAndroid ? `// Override visibility API so UberSDR always sees the page as visible.
+  // When Android backgrounds the app the WebView fires visibilitychange but
+  // UberSDR reads document.visibilityState in the handler — returning 'visible'
+  // means it takes no action and the server inactivity timer never fires.
+  try {
+    Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+    Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
+  } catch(e) {}` : ''}
+
   // Enable UberSDR's Android Chrome audio path so the HTTP audio stream
   // (<audio src="/audio/stream?session=...">) is used instead of AudioContext.
   // UberSDR reads this flag at module load time — must be set before app.js runs.
@@ -119,12 +136,12 @@ true;
 `;}
 
 // ── Post-load injection ───────────────────────────────────────────────────────
-function buildInject(skinHtml: string): string {
+function buildInject(skinHtml: string, vibeJs: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.53') return;
-  window.__vibeSdrInjected = '0.1.53';
+  if (window.__vibeSdrInjected === '0.2.00') return;
+  window.__vibeSdrInjected = '0.2.00';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -157,8 +174,7 @@ function buildInject(skinHtml: string): string {
     '#digital-spots-badges-main{display:none!important;}',
     '#cw-spots-badges-main{display:none!important;}',
     '.container{display:block!important;padding:0!important;margin:0!important;width:100vw!important;height:100vh!important;overflow:hidden!important;}',
-    '.spectrum-display-panel,.spectrum-display-container{width:100vw!important;padding:0!important;margin:0!important;}',
-    '#spectrum-display-canvas{width:100%!important;display:block!important;}',
+    '.spectrum-display-panel,.spectrum-display-container,.openwebrx-spectrum-container{height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important;padding:0!important;margin:0!important;}',
   ].join('');
   document.head.appendChild(baseStyle);
 
@@ -199,6 +215,7 @@ function buildInject(skinHtml: string): string {
     if (node.nodeName !== 'SCRIPT') document.body.appendChild(node.cloneNode(true));
   });
 
+  // Run skin scripts — these may be blocked by server CSP but are non-critical
   var scripts = skinDoc.querySelectorAll('script');
   var idx = 0;
   function runNext() {
@@ -210,6 +227,9 @@ function buildInject(skinHtml: string): string {
   }
   runNext();
 
+  // ── 3b. Waterfall JS — runs directly here (injectJavaScript bypasses CSP) ─
+  ${vibeJs}
+
   // ── 4. Auto-click start ───────────────────────────────────────────────────
   var _startTries = 0;
   function tryStart() {
@@ -218,6 +238,53 @@ function buildInject(skinHtml: string): string {
     if (++_startTries < 20) setTimeout(tryStart, 250);
   }
   setTimeout(tryStart, 500);
+
+  // ── 4b. Force spectrum display settings for consistent look ──────────────
+  // Ensures auto gain, no smoothing, spectrum visible, black background — regardless
+  // of how any individual server is configured.
+  (function forceSpectrumSettings() {
+    // Force localStorage flags so UberSDR initialises correctly on next render
+    try { localStorage.setItem('spectrumLineGraphEnabled', 'true'); } catch(e) {}
+    try { localStorage.setItem('spectrumSmoothing', 'false'); } catch(e) {}
+
+    var _specTries = 0;
+    var _specTimer = setInterval(function() {
+      var sd = window.spectrumDisplay;
+      if (!sd) { if (++_specTries > 40) clearInterval(_specTimer); return; }
+      clearInterval(_specTimer);
+
+      // Auto gain — never manual
+      if (sd.config) {
+        sd.config.manualRangeEnabled = false;
+        sd.config.autoContrast = (typeof sd.config.autoContrast === 'number') ? sd.config.autoContrast : 10;
+      }
+
+      // Disable UberSDR smoothing — we do our own temporal smoothing
+      sd.smoothingEnabled = false;
+
+      // Force spectrum (line graph) visible
+      var lgc = document.getElementById('spectrum-line-graph-canvas') ||
+                (sd.lineGraphCanvas);
+      if (lgc && lgc.style.display === 'none') {
+        lgc.style.display = 'block';
+        lgc.classList.add('split-mode');
+      }
+
+      // Hide UberSDR's own overlay div — we own all rendering above it
+      if (sd.overlayDiv) { sd.overlayDiv.style.display = 'none'; }
+      if (lgc) lgc.style.display = 'none';
+
+      // Also patch the fill used in drawLineGraph — override ctx fillStyle on each draw
+      // by making the canvas background transparent via CSS
+      var wfCanvas = document.getElementById('waterfall-canvas') ||
+                     document.querySelector('canvas.waterfall');
+      if (wfCanvas) wfCanvas.style.backgroundColor = 'transparent';
+
+      // Force body/page background black so nothing bleeds through our overlay
+      document.body.style.backgroundColor = '#000';
+      document.documentElement.style.backgroundColor = '#000';
+    }, 250);
+  })();
 
   // ── 5. Media session / AirPods fix ───────────────────────────────────────
   // iOS only: UberSDR's media session handling is broken on Safari — it calls
@@ -248,13 +315,18 @@ function buildInject(skinHtml: string): string {
         });
       }
 
-      // Both platforms: map next/prev track to VTS station arrows
-      try { navigator.mediaSession.setActionHandler('nexttrack', function() {
-        try { var b=document.getElementById('lsv-vts-rarr'); if(b) b.click(); } catch(e) {}
-      }); } catch(e) {}
-      try { navigator.mediaSession.setActionHandler('previoustrack', function() {
-        try { var b=document.getElementById('lsv-vts-larr'); if(b) b.click(); } catch(e) {}
-      }); } catch(e) {}
+      // Both platforms: map next/prev to frequency step-tune
+      function _stepTune(dir) {
+        try {
+          var si = document.getElementById('frequency');
+          var hz = 0;
+          if (si) { var dv = si.getAttribute('data-hz-value'); if (dv) hz = parseInt(dv, 10); }
+          var step = window.frequencyScrollStep || 1000;
+          if (hz > 0 && typeof window.setFrequency === 'function') window.setFrequency(hz + dir * step);
+        } catch(e) {}
+      }
+      try { navigator.mediaSession.setActionHandler('nexttrack',     function() { _stepTune(1);  }); } catch(e) {}
+      try { navigator.mediaSession.setActionHandler('previoustrack', function() { _stepTune(-1); }); } catch(e) {}
 
       function _fmtHz(hz) {
         if (!hz) return 'VibeSDR';
@@ -361,42 +433,50 @@ function buildInject(skinHtml: string): string {
     } catch(e) {}
   }, 500);
 
-  // ── 8. Android audio-started signal ────────────────────────────────────────
-  // Uses a DOM capture-phase 'play' event so it fires for any <audio> element
-  // regardless of UberSDR's internal variable name. Also polls window.mediaElement
-  // as a fallback. Once fired, tells native to start the foreground MediaService.
+
+  // ── 8. Stream URL discovery — post to native RNTP player ──────────────────
+  // Poll for window.userSessionID (set globally by UberSDR app.js).
+  // Once found, post the stream URL to native so TrackPlayer can take over audio.
+  // Also wire radioAPI events for live metadata updates.
   (function() {
-    var _sent = false;
-    function _signal() {
-      if (_sent) return;
-      _sent = true;
-      try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'audio-started' })); } catch(_) {}
-    }
-    // Primary: catch any audio element starting to play
-    document.addEventListener('play', function(e) {
-      if (e.target && e.target.nodeName === 'AUDIO') _signal();
-    }, true);
-    // Fallback: poll window.mediaElement (UberSDR desktop path)
-    var _pt = setInterval(function() {
-      try {
-        if (window.mediaElement && !window.mediaElement.paused) { clearInterval(_pt); _signal(); }
-      } catch(_) {}
-    }, 500);
-    setTimeout(function() { clearInterval(_pt); }, 60000);
+    var _posted = false;
+    var _sidPoll = setInterval(function() {
+      if (_posted) { clearInterval(_sidPoll); return; }
+      if (window.userSessionID) {
+        clearInterval(_sidPoll);
+        _posted = true;
+        var streamUrl = window.location.origin + '/audio/stream?session=' + encodeURIComponent(window.userSessionID);
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'stream-url', url: streamUrl }));
+        // Wire radioAPI for live frequency/mute metadata
+        var _apiPoll = setInterval(function() {
+          if (!window.radioAPI) return;
+          clearInterval(_apiPoll);
+          window.radioAPI.on('frequency_changed', function(d) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'state', hz: d.frequency }));
+          });
+          window.radioAPI.on('mute_changed', function(d) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'state', muted: d.muted }));
+          });
+        }, 300);
+        setTimeout(function() { clearInterval(_apiPoll); }, 30000);
+      }
+    }, 250);
+    setTimeout(function() { clearInterval(_sidPoll); }, 15000);
   })();
 })();
 `;
 }
 
-const INJECT_SCRIPT = buildInject(SKIN_HTML);
+const INJECT_SCRIPT = buildInject(SKIN_HTML + VIBE_WATERFALL_HTML, VIBE_WATERFALL_JS);
 
 interface WaterfallWebViewProps {
-  url:        string;
-  viewMode?:  ViewMode;
-  appPrefs?:  Record<string, unknown>;
-  onMessage?: (event: WebViewMessageEvent) => void;
-  onLoad?:    () => void;
-  onError?:   () => void;
+  url:              string;
+  viewMode?:        ViewMode;
+  appPrefs?:        Record<string, unknown>;
+  serverLongitude?: number | null;
+  onMessage?:       (event: WebViewMessageEvent) => void;
+  onLoad?:          () => void;
+  onError?:         () => void;
 }
 
 export interface WaterfallWebViewHandle {
@@ -404,13 +484,24 @@ export interface WaterfallWebViewHandle {
 }
 
 const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProps>(
-  ({ url, viewMode = 'default', appPrefs = {}, onMessage, onLoad, onError }, ref) => {
+  ({ url, viewMode = 'default', appPrefs = {}, serverLongitude, onMessage, onLoad, onError }, ref) => {
     const webViewRef = useRef<WebView>(null as any);
 
     const preInject = useMemo(
       () => buildPreInject(viewMode, FONTS_CSS, LEAFLET_CSS, LEAFLET_JS, appPrefs),
       [viewMode, appPrefs],
     );
+
+    // Inject ITU region derived from server longitude (from instances API) as early as possible
+    const ituInjectRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (serverLongitude == null) return;
+      const region = serverLongitude < -30 ? 2 : serverLongitude < 60 ? 1 : 3;
+      const key = `r${region}`;
+      const js = `window.VIBE_ITU_REGION=${region};if(typeof _BDA!=='undefined'){_BD=_BDA['${key}']||_BDA.world;}true;`;
+      ituInjectRef.current = js;
+      webViewRef.current?.injectJavaScript(js);
+    }, [serverLongitude]);
 
     useImperativeHandle(ref, () => ({
       inject: (js: string) => {
@@ -420,6 +511,8 @@ const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProp
 
     const handleLoad = () => {
       webViewRef.current?.injectJavaScript(INJECT_SCRIPT + '; true;');
+      // Re-inject ITU region after page load in case effect fired before WebView was ready
+      if (ituInjectRef.current) webViewRef.current?.injectJavaScript(ituInjectRef.current);
       onLoad?.();
     };
 
@@ -428,16 +521,14 @@ const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProp
         ref={webViewRef}
         source={{ uri: url }}
         style={styles.webview}
+        webviewDebuggingEnabled
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         allowsBackForwardNavigationGestures={false}
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
-        userAgent={Platform.OS === 'android'
-          ? "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
-          : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        }
+        userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         injectedJavaScriptBeforeContentLoaded={preInject}
         onMessage={onMessage}
         onLoad={handleLoad}

@@ -12,7 +12,7 @@ import { ViewMode } from './src/services/viewMode';
 export type RootStackParamList = {
   ViewPicker:     undefined;
   InstancePicker: undefined;
-  SDR:        { baseUrl: string; password?: string; instanceName?: string; viewMode: ViewMode };
+  SDR:        { baseUrl: string; password?: string; instanceName?: string; viewMode: ViewMode; serverLongitude?: number | null };
   WebViewer:  { url: string; title?: string };
 };
 

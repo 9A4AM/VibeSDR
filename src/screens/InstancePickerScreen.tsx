@@ -30,11 +30,17 @@ import {
   getDefaultInstance,
   setDefaultInstance,
 } from '../services/defaultInstance';
+import { Favourite, getFavourites, toggleFavourite } from '../services/favourites';
 import { ViewMode, clearViewMode, getViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 
 type SortMode = 'nearest' | 'snr';
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
+
+// A unified list item — either a real SDRInstance or a favourited custom URL
+type ListItem =
+  | { kind: 'instance'; data: SDRInstance }
+  | { kind: 'custom';   fav: Favourite };
 
 export default function InstancePickerScreen({ navigation }: Props) {
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
@@ -48,54 +54,55 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [modeReady,   setModeReady]     = useState(false);
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
+  const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function init() {
+    async function loadAndInit() {
       const mode = await getViewMode();
       if (cancelled) return;
       if (!mode) { navigation.replace('ViewPicker'); return; }
       setViewModeState(mode);
       setModeReady(true);
 
-      const d = await getDefaultInstance();
-      if (!cancelled && d) {
-        setDefaultInst(d);
-        navigation.navigate('SDR', { baseUrl: d.url, instanceName: d.name, viewMode: mode });
-      }
-    }
+      const favs = await getFavourites();
+      if (!cancelled) setFavourites(favs);
 
-    async function load() {
+      let allInst: typeof instances = [];
       try {
-        // Try to get user location to enable distance + sort
         const loc = await getUserLocation();
         if (!cancelled) userLocRef.current = loc;
-
-        const list = await fetchInstances(loc?.lat, loc?.lon);
-        if (!cancelled) setInstances(list);
+        allInst = await fetchInstances(loc?.lat, loc?.lon);
+        if (!cancelled) setInstances(allInst);
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load instances');
+        const msg = (e.message ?? '');
+        if (!cancelled) setError(
+          msg.includes('429') ? 'Server busy — please try again in a moment' : (msg || 'Failed to load instances')
+        );
       } finally {
         if (!cancelled) setLoading(false);
       }
+
+      const d = await getDefaultInstance();
+      if (!cancelled && d) {
+        setDefaultInst(d);
+        const match = allInst.find(i => i.url === d.url);
+        navigation.navigate('SDR', { baseUrl: d.url, instanceName: d.name, viewMode: mode, serverLongitude: match?.longitude ?? null });
+      }
     }
 
-    init();
-    load();
+    loadAndInit();
     return () => { cancelled = true; };
   }, []);
 
-  // Re-read viewMode each time the screen comes into focus so that a skin
-  // change made inside an active instance is picked up for the next connection.
   useFocusEffect(useCallback(() => {
     getViewMode().then(mode => { if (mode) setViewModeState(mode); });
   }, []));
 
   const { colors: C, font: F, scale } = themeFor(viewMode);
 
-  // Normalised custom URL for default-checking
   const normalisedCustomUrl = useMemo(() => {
     let u = customUrl.trim().replace(/\/+$/, '');
     if (u && !u.startsWith('http://') && !u.startsWith('https://')) u = 'http://' + u;
@@ -103,7 +110,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
   }, [customUrl]);
   const fs = (base: number) => Math.round(base * scale);
 
-  const connect = useCallback(async (url: string, name: string, password?: string) => {
+  const isFav = useCallback((url: string) => favourites.some(f => f.url === url), [favourites]);
+
+  const handleToggleFav = useCallback(async (fav: Favourite) => {
+    const next = await toggleFavourite(fav, favourites);
+    setFavourites(next);
+  }, [favourites]);
+
+  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null) => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
     setConnecting(true);
@@ -120,7 +134,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
         return;
       }
       setConnecting(false);
-      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode });
+      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude });
     } catch (e: any) {
       setConnecting(false);
       Alert.alert('Connection Error', e.message ?? 'Could not reach server');
@@ -159,108 +173,153 @@ export default function InstancePickerScreen({ navigation }: Props) {
     );
   }, [navigation]);
 
-  // Filter by name, location AND callsign
-  const filtered = useMemo(() => {
+  // Build list: favourites section (pinned top) then filtered instances
+  const listData = useMemo((): ListItem[] => {
     const q = filter.toLowerCase().trim();
-    const list = !q ? instances : instances.filter(i =>
-      i.name.toLowerCase().includes(q) ||
-      (i.location ?? '').toLowerCase().includes(q) ||
-      (i.callsign ?? '').toLowerCase().includes(q),
-    );
+
+    // Favourited custom URLs (not in the instances list)
+    const instanceUrls = new Set(instances.map(i => i.url));
+    const customFavs: ListItem[] = favourites
+      .filter(f => !instanceUrls.has(f.url))
+      .filter(f => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q))
+      .map(f => ({ kind: 'custom', fav: f }));
+
+    // Favourited instances (pinned to top)
+    const favInstances: ListItem[] = instances
+      .filter(i => isFav(i.url))
+      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q))
+      .map(i => ({ kind: 'instance', data: i }));
+
+    // Remaining instances (not favourited)
+    let rest = instances
+      .filter(i => !isFav(i.url))
+      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q));
 
     if (sortMode === 'snr') {
-      return [...list].sort((a, b) => {
-        const sa = a.bestSnr ?? -Infinity;
-        const sb = b.bestSnr ?? -Infinity;
-        return sb - sa;
-      });
+      rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
     }
-    // 'nearest' — preserve API order which is already sorted by distance
-    // (server uses IP geolocation; if we passed GPS coords the distances
-    //  are more precise but the relative order is still from the API)
-    return list;
-  }, [instances, filter, sortMode]);
+
+    return [
+      ...customFavs,
+      ...favInstances,
+      ...rest.map(i => ({ kind: 'instance' as const, data: i })),
+    ];
+  }, [instances, favourites, filter, sortMode, isFav]);
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item }: { item: SDRInstance }) => {
-    const isDefault = defaultInst?.url === item.url;
-    const versionOld = isVersionOld(item.version);
+  const renderItem = ({ item, index }: { item: ListItem; index: number }) => {
+    // Section header before first non-favourite instance
+    const favCount = listData.filter(d =>
+      d.kind === 'custom' || (d.kind === 'instance' && isFav(d.data.url))
+    ).length;
+    const showFavHeader   = index === 0 && favCount > 0;
+    const showOtherHeader = index === favCount && favCount > 0 && listData.length > favCount;
+
+    if (item.kind === 'custom') {
+      const fav = item.fav;
+      const isDefault = defaultInst?.url === fav.url;
+      return (
+        <>
+          {showFavHeader && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
+          <TouchableOpacity
+            style={[styles.row, { borderColor: C.borderBright, backgroundColor: 'rgba(255,100,100,0.06)' }]}
+            onPress={() => connect(fav.url, fav.name)}
+            disabled={connecting}
+          >
+            <View style={styles.rowMain}>
+              <View style={styles.nameRow}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber, flex: 1 }} numberOfLines={1}>
+                  {isDefault ? '★ ' : ''}{fav.name}
+                </Text>
+              </View>
+              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }} numberOfLines={1}>{fav.url}</Text>
+            </View>
+            <View style={styles.rowRight}>
+              <TouchableOpacity style={{ padding: 4 }}
+                onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })}>
+                <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ padding: 4 }} onPress={() => handleToggleFav(fav)}>
+                <Text style={{ fontSize: fs(18), color: C.red }}>♥</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </>
+      );
+    }
+
+    const inst = item.data;
+    const isDefault = defaultInst?.url === inst.url;
+    const versionOld = isVersionOld(inst.version);
+    const favoured = isFav(inst.url);
 
     return (
-      <TouchableOpacity
-        style={[
-          styles.row,
-          { borderColor: C.border },
-          isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
-        ]}
-        onPress={() => connect(item.url, item.name)}
-        disabled={connecting}
-      >
-        <View style={styles.rowMain}>
-          {/* Name row */}
-          <View style={styles.nameRow}>
-            <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber, flex: 1 }} numberOfLines={1}>
-              {isDefault ? '★ ' : ''}{item.name}
-            </Text>
-            {item.version ? (
-              <Text style={{ fontFamily: F, fontSize: fs(9), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
-                v{item.version}
+      <>
+        {showFavHeader  && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
+        {showOtherHeader && <SectionHeader label="ALL INSTANCES" fs={fs} F={F} C={C} />}
+        <TouchableOpacity
+          style={[
+            styles.row,
+            { borderColor: C.border },
+            isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
+            favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
+          ]}
+          onPress={() => connect(inst.url, inst.name, undefined, inst.longitude)}
+          disabled={connecting}
+        >
+          <View style={styles.rowMain}>
+            <View style={styles.nameRow}>
+              <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber, flex: 1 }} numberOfLines={1}>
+                {isDefault ? '★ ' : ''}{inst.name}
+              </Text>
+              {inst.version ? (
+                <Text style={{ fontFamily: F, fontSize: fs(9), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
+                  v{inst.version}
+                </Text>
+              ) : null}
+            </View>
+            {versionOld && (
+              <Text style={{ fontFamily: F, fontSize: fs(9), color: C.red, marginTop: 2 }}>
+                ⚠ Older than v{MIN_RECOMMENDED_VERSION} — may have visual glitches
+              </Text>
+            )}
+            <View style={styles.metaRow}>
+              {inst.location ? (
+                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.gold }} numberOfLines={1}>{inst.location}</Text>
+              ) : null}
+              {inst.callsign ? (
+                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
+                  {inst.location ? '  ·  ' : ''}{inst.callsign}
+                </Text>
+              ) : null}
+              {inst.distance != null ? (
+                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
+                  {'  ·  '}{inst.distance < 1 ? '<1' : Math.round(inst.distance)} km
+                </Text>
+              ) : null}
+            </View>
+            {inst.bestSnr != null ? (
+              <Text style={{ fontFamily: F, fontSize: fs(9), color: snrColor(inst.bestSnr, C), marginTop: 2 }}>
+                {snrLabel(inst.bestSnr)}
               </Text>
             ) : null}
           </View>
-
-          {/* Version warning */}
-          {versionOld && (
-            <Text style={{ fontFamily: F, fontSize: fs(9), color: C.red, marginTop: 2 }}>
-              ⚠ Older than v{MIN_RECOMMENDED_VERSION} — may have visual glitches
-            </Text>
-          )}
-
-          {/* Meta row: location · callsign · distance */}
-          <View style={styles.metaRow}>
-            {item.location ? (
-              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.gold }} numberOfLines={1}>
-                {item.location}
-              </Text>
+          <View style={styles.rowRight}>
+            {(inst.users != null && inst.maxUsers) ? (
+              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>{inst.users}/{inst.maxUsers}</Text>
             ) : null}
-            {item.callsign ? (
-              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
-                {item.location ? '  ·  ' : ''}{item.callsign}
-              </Text>
-            ) : null}
-            {item.distance != null ? (
-              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
-                {'  ·  '}{item.distance < 1 ? '<1' : Math.round(item.distance)} km
-              </Text>
-            ) : null}
+            <TouchableOpacity style={{ padding: 4 }}
+              onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })}>
+              <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={{ padding: 4 }}
+              onPress={() => handleToggleFav({ name: inst.name, url: inst.url })}>
+              <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
+            </TouchableOpacity>
           </View>
-
-          {/* SNR badge */}
-          {item.bestSnr != null ? (
-            <Text style={{ fontFamily: F, fontSize: fs(9), color: snrColor(item.bestSnr, C), marginTop: 2 }}>
-              {snrLabel(item.bestSnr)}
-            </Text>
-          ) : null}
-        </View>
-
-        {/* Right column */}
-        <View style={styles.rowRight}>
-          {(item.users != null && item.maxUsers) ? (
-            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
-              {item.users}/{item.maxUsers}
-            </Text>
-          ) : null}
-          <TouchableOpacity
-            style={{ padding: 4 }}
-            onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: item.name, url: item.url })}
-          >
-            <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>
-              {isDefault ? '★' : '☆'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </>
     );
   };
 
@@ -281,7 +340,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
               textShadowColor: C.amberGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
               VibeSDR
             </Text>
-            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v0.1</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v1.2</Text>
           </View>
           <TouchableOpacity style={{ padding: 8 }} onPress={handleResetSettings}>
             <Text style={{ fontSize: fs(20), color: C.textDim }}>⚙</Text>
@@ -324,35 +383,46 @@ export default function InstancePickerScreen({ navigation }: Props) {
             returnKeyType="go"
             onSubmitEditing={connectCustom}
           />
-          {/* Star — sets custom URL as default without connecting */}
           {normalisedCustomUrl ? (
-            <TouchableOpacity
-              style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
-              onPress={() => {
-                const url  = normalisedCustomUrl;
-                const name = url.replace(/^https?:\/\//, '');
-                if (defaultInst?.url === url) {
-                  handleClearDefault();
-                } else {
-                  Alert.alert(
-                    'Set as Default',
-                    `Auto-connect to "${name}" on every startup?`,
-                    [
+            <>
+              {/* Heart — favourite this custom URL */}
+              <TouchableOpacity
+                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
+                onPress={() => {
+                  const url  = normalisedCustomUrl;
+                  const name = url.replace(/^https?:\/\//, '');
+                  handleToggleFav({ name, url });
+                }}
+              >
+                <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.textDim }}>
+                  {isFav(normalisedCustomUrl) ? '♥' : '♡'}
+                </Text>
+              </TouchableOpacity>
+              {/* Star — set as default */}
+              <TouchableOpacity
+                style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
+                onPress={() => {
+                  const url  = normalisedCustomUrl;
+                  const name = url.replace(/^https?:\/\//, '');
+                  if (defaultInst?.url === url) {
+                    handleClearDefault();
+                  } else {
+                    Alert.alert('Set as Default', `Auto-connect to "${name}" on every startup?`, [
                       { text: 'Cancel', style: 'cancel' },
                       { text: 'Set Default', onPress: async () => {
                           await setDefaultInstance({ name, url });
                           setDefaultInst({ name, url });
                         },
                       },
-                    ],
-                  );
-                }
-              }}
-            >
-              <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.amber : C.goldDim }}>
-                {defaultInst?.url === normalisedCustomUrl ? '★' : '☆'}
-              </Text>
-            </TouchableOpacity>
+                    ]);
+                  }
+                }}
+              >
+                <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.amber : C.goldDim }}>
+                  {defaultInst?.url === normalisedCustomUrl ? '★' : '☆'}
+                </Text>
+              </TouchableOpacity>
+            </>
           ) : null}
           <TouchableOpacity
             style={[styles.connectBtn, { borderColor: C.borderBright }, connecting && { opacity: 0.5 }]}
@@ -405,8 +475,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
           </View>
         ) : (
           <FlatList
-            data={filtered}
-            keyExtractor={item => item.url}
+            data={listData}
+            keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
             renderItem={renderItem}
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
@@ -419,6 +489,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function SectionHeader({ label, fs, F, C }: { label: string; fs: (n: number) => number; F: string; C: any }) {
+  return (
+    <View style={{ paddingHorizontal: 4, paddingTop: 10, paddingBottom: 4 }}>
+      <Text style={{ fontFamily: F, fontSize: fs(9), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
+    </View>
   );
 }
 

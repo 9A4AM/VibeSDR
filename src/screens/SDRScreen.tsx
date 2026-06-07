@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, DeviceEventEmitter, NativeModules, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
+
+const VibeStream = Platform.OS === 'android' ? NativeModules.VibeStreamModule : null;
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebViewMessageEvent } from 'react-native-webview';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import WaterfallWebView, { WaterfallWebViewHandle, loadAppPrefs, saveAppPref } from '../components/WaterfallWebView';
 import {
   clearDefaultInstance,
@@ -16,8 +19,21 @@ import { ViewMode, setViewMode } from '../services/viewMode';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SDR'>;
 
-// ── Android media service bridge ──────────────────────────────────────────────
-const MediaSvc = Platform.OS === 'android' ? NativeModules.VibeMediaService : null;
+// Step-tune JS — reads current Hz and steps by frequencyScrollStep
+const STEP_UP_JS = `try{
+  var _si=document.getElementById('frequency');
+  var _hz=0;
+  if(_si){var _dv=_si.getAttribute('data-hz-value');if(_dv)_hz=parseInt(_dv,10);}
+  var _step=window.frequencyScrollStep||1000;
+  if(_hz>0&&typeof window.setFrequency==='function')window.setFrequency(_hz+_step);
+}catch(e){}`;
+const STEP_DOWN_JS = `try{
+  var _si=document.getElementById('frequency');
+  var _hz=0;
+  if(_si){var _dv=_si.getAttribute('data-hz-value');if(_dv)_hz=parseInt(_dv,10);}
+  var _step=window.frequencyScrollStep||1000;
+  if(_hz>0&&typeof window.setFrequency==='function')window.setFrequency(_hz-_step);
+}catch(e){}`;
 
 function formatHz(hz: number): string {
   if (!hz) return 'VibeSDR';
@@ -26,11 +42,12 @@ function formatHz(hz: number): string {
 }
 
 export default function SDRScreen({ route, navigation }: Props) {
-  const { baseUrl, instanceName, viewMode = 'default' } = route.params;
+  const { baseUrl, instanceName, viewMode = 'default', serverLongitude } = route.params;
   useKeepAwake();
 
   const insets      = useSafeAreaInsets();
   const wvRef       = useRef<WaterfallWebViewHandle>(null);
+  const lastMuted   = useRef<boolean | null>(null);
   const [isDefault, setIsDefault] = useState(false);
   const [appPrefs, setAppPrefs]   = useState<Record<string, unknown>>({});
 
@@ -38,11 +55,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     loadAppPrefs().then(setAppPrefs);
   }, []);
 
-  // Android media-service state refs (avoid triggering re-renders)
-  const mediaStarted = useRef(false);
-  const lastTitle    = useRef('');
-  const lastArtist   = useRef('');
-  const lastMuted    = useRef(false);
+  // ── Android stream service cleanup on unmount ───────────────────────────────
+  useEffect(() => {
+    return () => { VibeStream?.stop(); };
+  }, []);
+
+  // ── Android: media notification button events → WebView ────────────────────
+  useEffect(() => {
+    if (!VibeStream) return;
+    const sub = DeviceEventEmitter.addListener('vibeMediaControl', (action: string) => {
+      switch (action) {
+        case 'next':  wvRef.current?.inject(STEP_UP_JS);   break;
+        case 'prev':  wvRef.current?.inject(STEP_DOWN_JS); break;
+        case 'play':  wvRef.current?.inject(`try{if(window.isMuted&&typeof window.toggleMute==='function')window.toggleMute();}catch(e){}`);  break;
+        case 'pause': wvRef.current?.inject(`try{if(!window.isMuted&&typeof window.toggleMute==='function')window.toggleMute();}catch(e){}`); break;
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // ── Default instance ────────────────────────────────────────────────────────
 
@@ -66,76 +96,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         wvRef.current?.inject(
           `try { if (typeof window._lsvExitAudioOnly === 'function') window._lsvExitAudioOnly(); } catch(e) {}`
         );
-      } else {
-        if (Platform.OS === 'android') {
-          // On Android, do NOT enter audio-only mode — it can disconnect the stream.
-          // Instead, explicitly keep the AudioContext and media element alive so the
-          // foreground MediaService can maintain background playback.
-          wvRef.current?.inject(`
-            try {
-              if (window.audioContext && window.audioContext.state !== 'running') {
-                window.audioContext.resume().catch(function(){});
-              }
-              document.querySelectorAll('audio').forEach(function(a) {
-                if (a.paused) a.play().catch(function(){});
-              });
-              if (window.mediaElement && window.mediaElement.paused) {
-                window.mediaElement.play().catch(function(){});
-              }
-            } catch(e) {}
-          `);
-        } else {
-          wvRef.current?.inject(
-            `try { if (typeof window._lsvEnterAudioOnly === 'function') window._lsvEnterAudioOnly(); } catch(e) {}`
-          );
-        }
+      } else if (Platform.OS !== 'android') {
+        wvRef.current?.inject(
+          `try { if (typeof window._lsvEnterAudioOnly === 'function') window._lsvEnterAudioOnly(); } catch(e) {}`
+        );
       }
     });
     return () => sub.remove();
   }, []);
 
-  // ── Android: listen for notification media-control events ──────────────────
-
-  useEffect(() => {
-    if (!MediaSvc) return;
-
-    const sub = DeviceEventEmitter.addListener('vibeMediaControl', (action: string) => {
-      switch (action) {
-        case 'play':
-          // Unmute if muted
-          wvRef.current?.inject(
-            `try { if (window.isMuted && typeof window.toggleMute==='function') window.toggleMute(); } catch(e) {}`
-          );
-          break;
-        case 'pause':
-          // Mute if not muted
-          wvRef.current?.inject(
-            `try { if (!window.isMuted && typeof window.toggleMute==='function') window.toggleMute(); } catch(e) {}`
-          );
-          break;
-        case 'next':
-          wvRef.current?.inject(
-            `try { var b=document.getElementById('lsv-vts-rarr')||document.getElementById('vts-desktop-wrap-rarr'); if(b) b.click(); } catch(e) {}`
-          );
-          break;
-        case 'prev':
-          wvRef.current?.inject(
-            `try { var b=document.getElementById('lsv-vts-larr')||document.getElementById('vts-desktop-wrap-larr'); if(b) b.click(); } catch(e) {}`
-          );
-          break;
-      }
-    });
-
-    return () => {
-      sub.remove();
-      MediaSvc.stop();
-    };
-  }, []);
-
   // ── Navigation ──────────────────────────────────────────────────────────────
 
   const goBack = useCallback(() => {
-    if (MediaSvc) MediaSvc.stop();
     navigation.goBack();
   }, [navigation]);
 
@@ -171,6 +143,38 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
   }, [isDefault, baseUrl, instanceName, refreshDefault]);
 
+  // ── Reset all VibeSDR app data ──────────────────────────────────────────────
+
+  const resetInstanceData = useCallback(() => {
+    // Clear only this server's vsdr instance prefs from localStorage, then reload
+    wvRef.current?.inject(
+      `try{
+        var host = location.hostname;
+        Object.keys(localStorage).filter(function(k){
+          return k.startsWith('vsdr_wf_inst_') || k === 'vsdr_rate' || k === 'vsdr_rate_idle_off';
+        }).forEach(function(k){localStorage.removeItem(k);});
+        location.reload();
+      }catch(e){}`
+    );
+  }, []);
+
+  const resetAppData = useCallback(async (clearFavourites: boolean) => {
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const toDelete = allKeys.filter(k =>
+        k.startsWith('vsdr_') && (clearFavourites || k !== 'vsdr_favourites')
+      );
+      for (const k of toDelete) await AsyncStorage.removeItem(k);
+      await AsyncStorage.removeItem('@vibesdr/app_prefs');
+      setAppPrefs({});
+    } catch {}
+    // Clear localStorage on current origin then go back to instance picker
+    wvRef.current?.inject(
+      `try{Object.keys(localStorage).filter(function(k){return k.startsWith('vsdr_');}).forEach(function(k){localStorage.removeItem(k);});}catch(e){}`
+    );
+    navigation.navigate('InstancePicker');
+  }, [navigation]);
+
   // ── Message handler ─────────────────────────────────────────────────────────
 
   const onMessage = useCallback((e: WebViewMessageEvent) => {
@@ -195,28 +199,60 @@ export default function SDRScreen({ route, navigation }: Props) {
         navigation.navigate('WebViewer', { url: msg.url, title: msg.title });
       }
 
-      // ── Android media service ──────────────────────────────────────────────
-      if (MediaSvc) {
-        if (msg.type === 'audio-started' && !mediaStarted.current) {
-          mediaStarted.current = true;
-          const title  = formatHz(msg.hz ?? 0);
-          const artist = msg.station || instanceName || 'SDR Receiver';
-          lastTitle.current  = title;
-          lastArtist.current = artist;
-          lastMuted.current  = false;
-          MediaSvc.start(title, artist, true);
-        }
+      if (msg.type === 'reset-instance') {
+        resetInstanceData();
+      }
 
-        if (msg.type === 'state' && mediaStarted.current) {
-          const title  = formatHz(msg.hz ?? 0);
-          const artist = (msg.station as string) || instanceName || 'SDR Receiver';
-          const muted  = !!(msg.muted);
-          // Only push update if something changed
-          if (title !== lastTitle.current || artist !== lastArtist.current || muted !== lastMuted.current) {
-            lastTitle.current  = title;
-            lastArtist.current = artist;
-            lastMuted.current  = muted;
-            MediaSvc.update(title, artist, !muted);
+      if (msg.type === 'reset-app') {
+        Alert.alert(
+          'Reset All App Data',
+          'Clear all VibeSDR settings, global defaults, and per-server preferences?\n\nThis will reload the current page.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Keep Favourites',
+              onPress: async () => {
+                await resetAppData(false);
+              },
+            },
+            {
+              text: 'Clear Everything',
+              style: 'destructive',
+              onPress: async () => {
+                await resetAppData(true);
+              },
+            },
+          ]
+        );
+      }
+
+      // ── Android: hand stream URL to native MediaPlayer service ────────────
+      if (msg.type === 'stream-url' && msg.url && VibeStream) {
+        VibeStream.startStream(
+          msg.url as string,
+          formatHz(0),
+          instanceName || 'SDR Receiver'
+        );
+        // Mute WebView audio elements only — do NOT suspend audioContext as
+        // UberSDR uses it to keep the session alive server-side
+        wvRef.current?.inject(
+          `try{document.querySelectorAll('audio').forEach(function(a){a.volume=0;a.muted=true;});}catch(e){}`
+        );
+      }
+
+      if (msg.type === 'state' && VibeStream) {
+        if (msg.hz) {
+          VibeStream.updateMetadata(
+            formatHz(msg.hz as number),
+            (msg.station as string) || instanceName || 'SDR Receiver'
+          );
+        }
+        // Detect unmute transition: WebView unmuted while native service is paused
+        if (typeof msg.muted === 'boolean') {
+          const wasMuted = lastMuted.current;
+          lastMuted.current = msg.muted;
+          if (wasMuted === true && msg.muted === false) {
+            VibeStream.resume();
           }
         }
       }
@@ -231,6 +267,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         url={baseUrl + '/'}
         viewMode={viewMode}
         appPrefs={appPrefs}
+        serverLongitude={serverLongitude}
         onMessage={onMessage}
         onLoad={refreshDefault}
         onError={() =>

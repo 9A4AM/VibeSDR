@@ -28,12 +28,6 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
-    <service
-        android:name=".MediaService"
-        android:exported="false"
-        android:foregroundServiceType="mediaPlayback"/>
-    <receiver
-        android:name=".MediaButtonReceiver"
-        android:exported="false"/>
+    <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="false" />
   </application>
 </manifest>
