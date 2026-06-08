@@ -1,4 +1,5 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import type { WfMessage } from './NativeWaterfall';
 import { Platform, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
@@ -53,6 +54,20 @@ function buildPreInject(
   window.__vibeAppSkin = true;
   window.__vibeAndroid = ${isAndroid ? 'true' : 'false'};
 
+  // Intercept window.open so admin links, map links etc open in the in-app
+  // WebViewer (‹ SDR back button) rather than the system browser.
+  window.open = function(href, _target, _features) {
+    try {
+      var u = href ? String(href) : '';
+      if (u && u !== 'about:blank' && window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'open-url', url: u, title: document.title || ''
+        }));
+      }
+    } catch(e) {}
+    return null;
+  };
+
   // document.head is null at documentStart — use documentElement as fallback
   var _head = document.head || document.documentElement;
 
@@ -85,6 +100,7 @@ function buildPreInject(
     var _g = ${JSON.stringify(appPrefs.vsdr_wf_global ?? null)};
     if (_g) localStorage.setItem('vsdr_wf_defaults', JSON.stringify(_g));
   } catch(e) {}
+
 
   ${isAndroid ? `// Override visibility API so UberSDR always sees the page as visible.
   // When Android backgrounds the app the WebView fires visibilitychange but
@@ -136,12 +152,20 @@ true;
 `;}
 
 // ── Post-load injection ───────────────────────────────────────────────────────
+function chunkString(s: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < s.length; i += size) chunks.push(s.slice(i, i + size));
+  return chunks;
+}
+
 function buildInject(skinHtml: string, vibeJs: string): string {
-  const skinEscaped = JSON.stringify(skinHtml);
+  // Split skin into 80KB chunks so no single string literal hits iOS WKWebView limits
+  const chunks = chunkString(skinHtml, 80000);
+  const skinExpr = chunks.map(c => JSON.stringify(c)).join('+');
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.2.00') return;
-  window.__vibeSdrInjected = '0.2.00';
+  if (window.__vibeAppInjected === '0.2.00') return;
+  window.__vibeAppInjected = '0.2.00';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -161,7 +185,11 @@ function buildInject(skinHtml: string, vibeJs: string): string {
   var baseStyle = document.createElement('style');
   baseStyle.id = 'vibesdr-base';
   baseStyle.textContent = [
-    'body,html{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}',
+    'body,html{margin:0!important;padding:0!important;overflow:hidden!important;background:transparent!important;background-color:transparent!important;}',
+    'canvas:not(#vsdr-ov):not(#vsdr-wf):not(#lsv-vfo):not(#lsv-zoom):not(#lsv-dec-canvas):not(#lsv-snr-spark):not(#lsv-snr-spark-lscape){opacity:0!important;pointer-events:none!important;}',
+    'body>div:not([id^="lsv"]):not([id^="freq"]):not([id^="u-"]):not([id^="vts"]):not([id^="vibe"]):not([id^="vsdr"]):not([id="share-toast"]):not([id$="-overlay"]):not([id*="splash"]):not([id*="login"]):not([id*="auth"]):not([id*="password"]){background:transparent!important;background-color:transparent!important;background-image:none!important;}',
+    'body>div:not([id^="lsv"]):not([id^="freq"]):not([id^="u-"]):not([id^="vts"]):not([id^="vibe"]):not([id^="vsdr"]):not([id="share-toast"]):not([id$="-overlay"]):not([id*="splash"]):not([id*="login"]):not([id*="auth"]):not([id*="password"]) *{background:transparent!important;background-color:transparent!important;background-image:none!important;}',
+    '[class*="modal"],[class*="dialog"],[class*="auth-form"],[class*="login-form"],[id*="password"],[id*="login"],[id*="auth"]{background-color:rgba(0,0,0,0.9)!important;background-image:none!important;}',
     '.controls{display:none!important;}',
     '.band-status-bar{display:none!important;}',
     '#audio-buffer-display{display:none!important;}',
@@ -193,7 +221,7 @@ function buildInject(skinHtml: string, vibeJs: string): string {
   setTimeout(function(){ clearInterval(_wfT); setWFHeight(); }, 10000);
 
   // ── 3. Inject app skin ────────────────────────────────────────────────────
-  var skinHtml = ${skinEscaped};
+  var skinHtml = ${skinExpr};
   var parser = new DOMParser();
   var skinDoc = parser.parseFromString('<html><body>' + skinHtml + '</body></html>', 'text/html');
 
@@ -229,6 +257,47 @@ function buildInject(skinHtml: string, vibeJs: string): string {
 
   // ── 3b. Waterfall JS — runs directly here (injectJavaScript bypasses CSP) ─
   ${vibeJs}
+
+  // ── 3c. Velocity-aware setFrequency debounce ─────────────────────────────
+  // Slow clicks (≥150ms apart) fire immediately — zero latency.
+  // Fast bursts are debounced: the wait scales with velocity so a furious
+  // swipe (very short delta) gets a longer 200ms tail (drum still spinning),
+  // while a moderate flick gets 100ms. Only the final landed frequency fires.
+  (function patchSetFrequency() {
+    var _patch = function(fn) {
+      var _lastT = 0, _timer = null, _pendingHz = null;
+      var SLOW_MS = 150;
+      return function(hz) {
+        var now = Date.now(), delta = now - _lastT;
+        _lastT = now;
+        if (_timer) { clearTimeout(_timer); _timer = null; }
+        if (delta >= SLOW_MS) {
+          // Deliberate single click — fire immediately
+          _pendingHz = null;
+          return fn(hz);
+        }
+        // Fast burst — wait scales: very fast swipe (delta<20ms) = 200ms, moderate = 100ms
+        var wait = delta < 20 ? 200 : 100;
+        _pendingHz = hz;
+        var _captured = fn;
+        _timer = setTimeout(function() {
+          _timer = null;
+          if (_pendingHz !== null) { var h = _pendingHz; _pendingHz = null; _captured(h); }
+        }, wait);
+      };
+    };
+    var _attempts = 0;
+    function _tryPatch() {
+      if (typeof window.setFrequency === 'function' && !window.setFrequency.__vibePatch) {
+        var orig = window.setFrequency;
+        window.setFrequency = _patch(orig);
+        window.setFrequency.__vibePatch = true;
+      } else if (!window.setFrequency && ++_attempts < 20) {
+        setTimeout(_tryPatch, 300);
+      }
+    }
+    _tryPatch();
+  })();
 
   // ── 4. Auto-click start ───────────────────────────────────────────────────
   var _startTries = 0;
@@ -280,9 +349,9 @@ function buildInject(skinHtml: string, vibeJs: string): string {
                      document.querySelector('canvas.waterfall');
       if (wfCanvas) wfCanvas.style.backgroundColor = 'transparent';
 
-      // Force body/page background black so nothing bleeds through our overlay
-      document.body.style.backgroundColor = '#000';
-      document.documentElement.style.backgroundColor = '#000';
+      // v2: body must be transparent so native GLView waterfall shows through
+      document.body.style.backgroundColor = 'transparent';
+      document.documentElement.style.backgroundColor = 'transparent';
     }, 250);
   })();
 
@@ -475,8 +544,10 @@ interface WaterfallWebViewProps {
   appPrefs?:        Record<string, unknown>;
   serverLongitude?: number | null;
   onMessage?:       (event: WebViewMessageEvent) => void;
+  onWfMsg?:         (msg: WfMessage) => void;
   onLoad?:          () => void;
   onError?:         () => void;
+  onOpenUrl?:       (url: string, title?: string) => void;
 }
 
 export interface WaterfallWebViewHandle {
@@ -484,8 +555,24 @@ export interface WaterfallWebViewHandle {
 }
 
 const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProps>(
-  ({ url, viewMode = 'default', appPrefs = {}, serverLongitude, onMessage, onLoad, onError }, ref) => {
+  ({ url, viewMode = 'default', appPrefs = {}, serverLongitude,
+     onMessage, onWfMsg, onLoad, onError, onOpenUrl }, ref) => {
     const webViewRef = useRef<WebView>(null as any);
+
+    // Intercept wf-* messages destined for native renderer; pass everything else up
+    const handleMessage = useCallback((event: WebViewMessageEvent) => {
+      if (onWfMsg) {
+        try {
+          const msg = JSON.parse(event.nativeEvent.data);
+          if (msg.type === 'wf-row' || msg.type === 'wf-cmap' ||
+              msg.type === 'wf-layout' || msg.type === 'wf-flush') {
+            onWfMsg(msg as WfMessage);
+            return;
+          }
+        } catch {}
+      }
+      onMessage?.(event);
+    }, [onMessage, onWfMsg]);
 
     const preInject = useMemo(
       () => buildPreInject(viewMode, FONTS_CSS, LEAFLET_CSS, LEAFLET_JS, appPrefs),
@@ -521,19 +608,35 @@ const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProp
         ref={webViewRef}
         source={{ uri: url }}
         style={styles.webview}
+        {...({ backgroundColor: 'transparent' } as object)}
         webviewDebuggingEnabled
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
+        mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
         allowsBackForwardNavigationGestures={false}
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
         userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         injectedJavaScriptBeforeContentLoaded={preInject}
-        onMessage={onMessage}
+        onMessage={handleMessage}
         onLoad={handleLoad}
         onError={onError}
         onHttpError={onError}
+        onShouldStartLoadWithRequest={(req) => {
+          // Always allow the initial SDR page and same-origin navigation
+          try {
+            if (req.url === url) return true;
+            const reqHost = new URL(req.url).hostname;
+            const baseHost = new URL(url).hostname;
+            if (reqHost === baseHost) return true;
+          } catch {}
+          // External URL — open in in-app WebViewer instead
+          if (req.url && req.url !== 'about:blank') {
+            onOpenUrl?.(req.url);
+          }
+          return false;
+        }}
         scalesPageToFit={false}
         scrollEnabled={false}
         bounces={false}
@@ -554,5 +657,6 @@ export default WaterfallWebView;
 export { loadAppPrefs, saveAppPref };
 
 const styles = StyleSheet.create({
-  webview: { flex: 1, backgroundColor: '#000000' },
+  // v2: transparent so native GLView waterfall is visible behind the WebView
+  webview: { flex: 1, backgroundColor: 'transparent' },
 });

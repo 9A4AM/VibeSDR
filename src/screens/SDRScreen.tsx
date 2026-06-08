@@ -108,7 +108,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Navigation ──────────────────────────────────────────────────────────────
 
   const goBack = useCallback(() => {
-    navigation.goBack();
+    // Kill the waterfall RAF loop before unmounting to prevent CPU spike
+    wvRef.current?.inject(
+      `try{if(typeof window.__vibeWFKill==='function')window.__vibeWFKill();}catch(e){}`
+    );
+    setTimeout(() => navigation.goBack(), 150);
   }, [navigation]);
 
   const toggleDefault = useCallback(async () => {

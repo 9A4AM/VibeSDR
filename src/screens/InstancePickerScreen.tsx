@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
+import { CommonActions } from '@react-navigation/native';
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
@@ -31,7 +33,7 @@ import {
   setDefaultInstance,
 } from '../services/defaultInstance';
 import { Favourite, getFavourites, toggleFavourite } from '../services/favourites';
-import { ViewMode, clearViewMode, getViewMode } from '../services/viewMode';
+import { ViewMode, clearViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 
 type SortMode = 'nearest' | 'snr';
@@ -61,14 +63,30 @@ export default function InstancePickerScreen({ navigation }: Props) {
     let cancelled = false;
 
     async function loadAndInit() {
-      const mode = await getViewMode();
+      let mode = await getViewMode();
       if (cancelled) return;
-      if (!mode) { navigation.replace('ViewPicker'); return; }
+      const { width } = require('react-native').Dimensions.get('window');
+      const isSmallScreen = width <= 390;
+      if (!mode) {
+        if (isSmallScreen) { await setViewMode('accessibility'); mode = 'accessibility'; }
+        else { navigation.replace('ViewPicker'); return; }
+      } else if (isSmallScreen && mode !== 'accessibility') {
+        await setViewMode('accessibility'); mode = 'accessibility';
+      }
       setViewModeState(mode);
       setModeReady(true);
 
       const favs = await getFavourites();
       if (!cancelled) setFavourites(favs);
+
+      // Load default instance early so splash shows the target name before list fetch.
+      // Do NOT dismiss splash here — NativeSDRScreen dismisses it after WebView loads.
+      const dEarly = await getDefaultInstance();
+      if (!cancelled && dEarly) {
+        setDefaultInst(dEarly);
+        // Update label but keep splash visible — SDR screen will dismiss it
+        splashBridge.updateLabel(dEarly.name || dEarly.url);
+      }
 
       let allInst: typeof instances = [];
       try {
@@ -82,14 +100,16 @@ export default function InstancePickerScreen({ navigation }: Props) {
           msg.includes('429') ? 'Server busy — please try again in a moment' : (msg || 'Failed to load instances')
         );
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          // Only dismiss splash here if no default instance (it was already dismissed above)
+          if (!dEarly) splashBridge.dismiss();
+        }
       }
 
-      const d = await getDefaultInstance();
-      if (!cancelled && d) {
-        setDefaultInst(d);
-        const match = allInst.find(i => i.url === d.url);
-        navigation.navigate('SDR', { baseUrl: d.url, instanceName: d.name, viewMode: mode, serverLongitude: match?.longitude ?? null });
+      if (!cancelled && dEarly) {
+        const match = allInst.find(i => i.url === dEarly.url);
+        navigation.dispatch(CommonActions.reset({ index: 1, routes: [{ name: 'InstancePicker' }, { name: 'SDR', params: { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: match?.longitude ?? null } }] }));
       }
     }
 
@@ -134,7 +154,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
         return;
       }
       setConnecting(false);
-      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude });
+      navigation.dispatch(CommonActions.reset({ index: 1, routes: [{ name: 'InstancePicker' }, { name: 'SDR', params: { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude } }] }));
     } catch (e: any) {
       setConnecting(false);
       Alert.alert('Connection Error', e.message ?? 'Could not reach server');
@@ -205,6 +225,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       ...rest.map(i => ({ kind: 'instance' as const, data: i })),
     ];
   }, [instances, favourites, filter, sortMode, isFav]);
+
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
@@ -340,7 +361,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
               textShadowColor: C.amberGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
               VibeSDR
             </Text>
-            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v1.2</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v2.0RC</Text>
           </View>
           <TouchableOpacity style={{ padding: 8 }} onPress={handleResetSettings}>
             <Text style={{ fontSize: fs(20), color: C.textDim }}>⚙</Text>
@@ -457,12 +478,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
         </View>
 
         {/* List */}
-        {loading ? (
-          <View style={styles.centred}>
-            <ActivityIndicator color={C.amber} />
-            <Text style={{ fontFamily: F, fontSize: fs(12), color: C.gold }}>Loading instances…</Text>
-          </View>
-        ) : error ? (
+        {loading ? null : error ? (
           <View style={styles.centred}>
             <Text style={{ fontFamily: F, fontSize: fs(12), color: C.red, textAlign: 'center' }}>{error}</Text>
             <TouchableOpacity onPress={() => {
@@ -488,6 +504,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
           />
         )}
       </KeyboardAvoidingView>
+
     </SafeAreaView>
   );
 }

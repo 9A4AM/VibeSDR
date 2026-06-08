@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   SafeAreaView,
@@ -8,13 +8,14 @@ import {
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../../App';
+import { RootStackParamList, splashBridge } from '../../App';
 import { ViewMode, setViewMode } from '../services/viewMode';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ViewPicker'>;
 
 export default function ViewPickerScreen({ navigation }: Props) {
   const [saving, setSaving] = useState(false);
+  useEffect(() => { splashBridge.dismiss(); }, []);
 
   const choose = async (mode: ViewMode) => {
     setSaving(true);

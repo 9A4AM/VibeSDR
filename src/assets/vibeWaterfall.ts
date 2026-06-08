@@ -314,34 +314,51 @@ canvas:not(#vsdr-wf):not(#vsdr-ov):not(#lsv-vfo):not(#lsv-zoom):not(#lsv-dec-can
 export const VIBE_WATERFALL_JS: string = `(function(){
 'use strict';
 
+// ── Kill any previous waterfall instance ──────────────────────────────────
+if (typeof window.__vibeWFKill === 'function') window.__vibeWFKill();
+var _alive = true;
+window.__vibeWFKill = function() { _alive = false; };
+
 // ── Defensive DOM bootstrap ───────────────────────────────────────────────
 // Create our canvas/panel elements programmatically in case the HTML-template
 // append in buildInject was blocked by the page's DOM structure or CSP.
 // Runs synchronously in injectJavaScript context — guaranteed to succeed.
 (function ensureVsdrDOM() {
-  if (!document.getElementById('vsdr-css')) {
-    var st = document.createElement('style');
-    st.id = 'vsdr-css';
-    st.textContent = [
-      'body{background:#000!important;}',
-      '#vsdr-root{position:fixed;inset:0;z-index:9000;pointer-events:none;overflow:hidden;background:transparent;}',
-      '#vsdr-wf,#vsdr-ov{position:absolute;inset:0;width:100%;height:100%;display:block;}',
-      '#vsdr-wf{background:#000;}',
-      '#vsdr-ov{pointer-events:auto;}',
-      'canvas:not(#vsdr-wf):not(#vsdr-ov):not(#lsv-vfo):not(#lsv-zoom):not(#lsv-dec-canvas):not(#lsv-snr-spark):not(#lsv-snr-spark-lscape){opacity:0!important;pointer-events:none!important;}',
-      '#lsv-mp-spectrum-row,#lsv-mp-spectrum-toggle,#lsv-mp-hold,#lsv-mp-hold-row,#lsv-mp-smooth,#lsv-mp-smooth-row,.lsv-mp-slider-wrap,#lsv-mp-palette-row{display:none!important;}',
-      '#vsdr-sp-panel{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(10,8,4,0.97);border-top:2px solid rgba(255,184,51,0.45);border-radius:14px 14px 0 0;display:none;flex-direction:column;color:#FFB833;font:13px "Courier New",monospace;pointer-events:auto;max-height:60vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom,0px);}',
-    ].join('');
-    (document.head || document.documentElement).appendChild(st);
-  }
-  if (!document.getElementById('vsdr-root')) {
-    var root = document.createElement('div');
+  // Always replace vsdr-css so the correct canvas exemptions are applied even
+  // when an older server-deployed skin already injected a stale version.
+  var _existCss = document.getElementById('vsdr-css');
+  if (_existCss) _existCss.parentNode && _existCss.parentNode.removeChild(_existCss);
+  var st = document.createElement('style');
+  st.id = 'vsdr-css';
+  st.textContent = [
+    'body{background:#000!important;}',
+    '#vsdr-root{position:fixed;inset:0;z-index:9000;pointer-events:none;overflow:hidden;background:transparent;}',
+    '#vsdr-wf,#vsdr-ov{position:absolute;inset:0;width:100%;height:100%;display:block;}',
+    '#vsdr-wf{background:#000;}',
+    '#vsdr-ov{pointer-events:auto;}',
+    'canvas:not(#vsdr-wf):not(#vsdr-ov):not(#lsv-vfo):not(#lsv-zoom):not(#lsv-dec-canvas):not(#lsv-snr-spark):not(#lsv-snr-spark-lscape){opacity:0!important;pointer-events:none!important;}',
+    '#lsv-mp-spectrum-row,#lsv-mp-spectrum-toggle,#lsv-mp-hold,#lsv-mp-hold-row,#lsv-mp-smooth,#lsv-mp-smooth-row,.lsv-mp-slider-wrap,#lsv-mp-palette-row{display:none!important;}',
+    '#vsdr-sp-panel{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(10,8,4,0.97);border-top:2px solid rgba(255,184,51,0.45);border-radius:14px 14px 0 0;display:none;flex-direction:column;color:#FFB833;font:13px "Courier New",monospace;pointer-events:auto;max-height:60vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom,0px);}',
+  ].join('');
+  (document.head || document.documentElement).appendChild(st);
+
+  // Ensure vsdr-root exists with BOTH vsdr-wf and vsdr-ov canvases.
+  // Old server skins may have created vsdr-root without vsdr-wf, so check for
+  // vsdr-wf specifically rather than vsdr-root.
+  var root = document.getElementById('vsdr-root');
+  if (!root) {
+    root = document.createElement('div');
     root.id = 'vsdr-root';
     root.setAttribute('aria-hidden', 'true');
-    var wf = document.createElement('canvas'); wf.id = 'vsdr-wf';
-    var ov = document.createElement('canvas'); ov.id = 'vsdr-ov';
-    root.appendChild(wf); root.appendChild(ov);
     document.body.appendChild(root);
+  }
+  if (!document.getElementById('vsdr-wf')) {
+    var wf = document.createElement('canvas'); wf.id = 'vsdr-wf';
+    root.insertBefore(wf, root.firstChild);
+  }
+  if (!document.getElementById('vsdr-ov')) {
+    var ov = document.createElement('canvas'); ov.id = 'vsdr-ov';
+    root.appendChild(ov);
   }
   if (!document.getElementById('vsdr-sp-panel')) {
     var sp = document.createElement('div');
@@ -1461,6 +1478,7 @@ function fmtHz(hz) {
 // responsive even when no new data frame has arrived (e.g. after tuning).
 var _lastOverlayMs = 0;
 function frame(ts) {
+  if (!_alive) return;
   requestAnimationFrame(frame);
   try {
     hookSources();
