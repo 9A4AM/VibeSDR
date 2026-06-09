@@ -60,5 +60,20 @@ target 'VibeSDR' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+    # Link pre-built libopus.a and expose its headers to the app target
+    ['release', 'debug'].each do |cfg|
+      xcconfig_path = "#{installer.sandbox.root}/Target Support Files/Pods-VibeSDR/Pods-VibeSDR.#{cfg}.xcconfig"
+      next unless File.exist?(xcconfig_path)
+      content = File.read(xcconfig_path)
+      opus_lib = '"$(SRCROOT)/VibeSDR/opus/libopus.a"'
+      opus_hdr = '"$(SRCROOT)/VibeSDR/opus/include"'
+      content.gsub!(/^OTHER_LDFLAGS = (.*)$/, "OTHER_LDFLAGS = \\1 #{opus_lib}") unless content.include?(opus_lib)
+      content.gsub!(/^HEADER_SEARCH_PATHS = (.*)$/, "HEADER_SEARCH_PATHS = \\1 #{opus_hdr}") unless content.include?(opus_hdr)
+      # ReactNativeDependencies.xcframework (Folly/Boost) must be explicitly linked
+      unless content.include?('-framework "ReactNativeDependencies"')
+        content.gsub!(/^OTHER_LDFLAGS = (.*)$/, 'OTHER_LDFLAGS = \1 -framework "ReactNativeDependencies"')
+      end
+      File.write(xcconfig_path, content)
+    end
   end
 end

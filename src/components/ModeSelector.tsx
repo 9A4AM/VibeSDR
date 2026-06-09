@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Colors } from '../constants/theme';
-import { Mode, MODES } from '../services/ubersdrProtocol';
+import { Colors, Fonts } from '../constants/theme';
+import { Mode, MODES } from '../services/sdrTypes';
 
 interface ModeSelectorProps {
   visible:    boolean;
@@ -65,7 +65,7 @@ const styles = StyleSheet.create({
   sheetLabel: {
     textAlign:     'center',
     color:         Colors.textDim,
-    fontFamily:    'Courier',
+    fontFamily:    Fonts.mono,
     fontSize:      10,
     letterSpacing: 3,
     marginBottom:  14,
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     borderColor:     'rgba(160,90,0,0.6)',
   },
   btnText: {
-    fontFamily:    'Courier',
+    fontFamily:    Fonts.mono,
     fontSize:      14,
     color:         Colors.textDim,
   },
@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   closeBtnText: {
-    fontFamily:    'Courier',
+    fontFamily:    Fonts.mono,
     fontSize:      11,
     color:         Colors.textDim,
   },

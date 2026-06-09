@@ -11,8 +11,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Colors } from '../constants/theme';
-import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/ubersdrProtocol';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Colors, Fonts } from '../constants/theme';
+import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -42,16 +43,25 @@ export default function FreqModal({ visible, currentHz, onConfirm, onClose }: Fr
   const [value, setValue] = useState('');
   const inputRef          = useRef<TextInput>(null);
 
+  // Load persisted unit once on mount
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_fq_unit').then(u => {
+      if (u === 'hz' || u === 'khz' || u === 'mhz') setUnit(u as Unit);
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (visible) {
       setValue(toDisplay(currentHz, unit));
       setTimeout(() => { inputRef.current?.focus(); }, 80);
     }
-  }, [visible, currentHz, unit]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, currentHz]);
 
   const switchUnit = (u: Unit) => {
     const hz = fromDisplay(value, unit);
     setUnit(u);
+    AsyncStorage.setItem('lsv_fq_unit', u).catch(() => {});
     if (hz > 0) setValue(toDisplay(hz, u));
   };
 
@@ -168,7 +178,7 @@ const styles = StyleSheet.create({
     fontFamily:    'Courier',
     fontSize:      11,
     letterSpacing: 2,
-    color:         Colors.goldDim,
+    color:         Colors.unit,
     paddingBottom: 6,
   },
   units: {
@@ -190,7 +200,7 @@ const styles = StyleSheet.create({
     borderColor:     'rgba(160,90,0,0.6)',
   },
   unitBtnText: {
-    fontFamily: 'Courier',
+    fontFamily: Fonts.mono,
     fontSize:   11,
     color:      Colors.textDim,
   },
@@ -210,7 +220,7 @@ const styles = StyleSheet.create({
     alignItems:      'center',
   },
   cancelText: {
-    fontFamily: 'Courier',
+    fontFamily: Fonts.mono,
     fontSize:   12,
     color:      Colors.textDim,
   },
@@ -224,7 +234,7 @@ const styles = StyleSheet.create({
     alignItems:      'center',
   },
   tuneText: {
-    fontFamily: 'Courier',
+    fontFamily: Fonts.mono,
     fontSize:   12,
     color:      Colors.amber,
     fontWeight: 'bold',

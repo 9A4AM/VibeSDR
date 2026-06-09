@@ -25,7 +25,7 @@ import {
   isVersionOld,
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
-import { checkConnection } from '../services/ubersdrProtocol';
+import { checkConnection } from '../services/sdrTypes';
 import {
   DefaultInstance,
   clearDefaultInstance,
@@ -69,7 +69,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       const isSmallScreen = width <= 390;
       if (!mode) {
         if (isSmallScreen) { await setViewMode('accessibility'); mode = 'accessibility'; }
-        else { navigation.replace('ViewPicker'); return; }
+        else { navigation.replace('InstancePicker'); return; }
       } else if (isSmallScreen && mode !== 'accessibility') {
         await setViewMode('accessibility'); mode = 'accessibility';
       }
@@ -79,12 +79,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
       const favs = await getFavourites();
       if (!cancelled) setFavourites(favs);
 
-      // Load default instance early so splash shows the target name before list fetch.
-      // Do NOT dismiss splash here — NativeSDRScreen dismisses it after WebView loads.
       const dEarly = await getDefaultInstance();
       if (!cancelled && dEarly) {
         setDefaultInst(dEarly);
-        // Update label but keep splash visible — SDR screen will dismiss it
         splashBridge.updateLabel(dEarly.name || dEarly.url);
       }
 
@@ -102,8 +99,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          // Only dismiss splash here if no default instance (it was already dismissed above)
-          if (!dEarly) splashBridge.dismiss();
+          splashBridge.dismiss();
         }
       }
 
@@ -188,7 +184,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       'Clears your display mode choice and returns to the setup screen. Your default instance is kept.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: async () => { await clearViewMode(); navigation.replace('ViewPicker'); } },
+        { text: 'Reset', style: 'destructive', onPress: async () => { await clearViewMode(); navigation.replace('InstancePicker'); } },
       ],
     );
   }, [navigation]);

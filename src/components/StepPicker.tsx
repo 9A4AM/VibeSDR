@@ -1,7 +1,7 @@
 import React from 'react';
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Colors } from '../constants/theme';
-import { STEPS_HZ } from '../services/ubersdrProtocol';
+import { Colors, Fonts } from '../constants/theme';
+import { STEPS_HZ } from '../services/sdrTypes';
 
 function stepLabel(hz: number): string {
   if (hz >= 1000) return (hz / 1000) + ' kHz';
@@ -65,7 +65,7 @@ const styles = StyleSheet.create({
     borderColor:     'rgba(160,90,0,0.65)',
   },
   itemText: {
-    fontFamily:    'Courier',
+    fontFamily:    Fonts.mono,
     fontSize:      11,
     color:         'rgba(150,100,30,0.85)',
     letterSpacing: 0.5,
