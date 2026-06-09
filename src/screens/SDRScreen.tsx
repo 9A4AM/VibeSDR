@@ -100,10 +100,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (Platform.OS !== 'ios') return;
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeTuned', (e: { frequency: number; mode: string }) => {
+      const freq = e.frequency;
+      const mode = (e.mode as SDRMode) ?? undefined;
+      // Keep UberSDRClient internal state in sync so spectrum status updates don't snap back
+      client.current?.syncFrequency(freq, mode);
       setStatus(prev => ({
         ...prev,
-        frequency: e.frequency,
-        mode: (e.mode as SDRMode) ?? prev.mode,
+        frequency: freq,
+        ...(mode ? { mode } : {}),
       }));
     });
     return () => sub.remove();
@@ -195,11 +199,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current;
     if (!c) return;
     const s = c.getStatus();
-    if (!s.binBandwidth || !s.centerHz) return;
-    const dHz   = Math.round(dxPx * s.binBandwidth);
-    const newCx = s.centerHz - dHz; // pan: drag right → freq decreases
+    if (!s.bwHz || !s.centerHz) return;
+    // 1 pixel = bwHz / screenWidth Hz
+    const dHz   = Math.round((dxPx / screenW) * s.bwHz);
+    const newCx = s.centerHz + dHz;
     c.pan(newCx);
-  }, []);
+  }, [screenW]);
 
   // ── Waterfall zoom → zoom spectrum view ──────────────────────────────────
 
@@ -208,8 +213,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c) return;
     const s = c.getStatus();
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
-    const factor = Math.pow(0.9, Math.round(dyPx / 20));
+    // drag up (negative dy) = zoom in, drag down = zoom out
+    const factor = Math.pow(0.985, dyPx);
     c.zoom(s.centerHz, Math.max(1, s.binBandwidth * factor));
+  }, []);
+
+  // ── Waterfall pinch → zoom spectrum ──────────────────────────────────────
+
+  const onWfPinchZoom = useCallback((scaleDelta: number) => {
+    const c = client.current;
+    if (!c) return;
+    const s = c.getStatus();
+    if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
+    // scaleDelta > 1 = fingers spreading = zoom in = fewer Hz per bin
+    c.zoom(s.centerHz, Math.max(1, s.binBandwidth / scaleDelta));
+  }, []);
+
+  // ── Waterfall tap → tune ──────────────────────────────────────────────────
+
+  const onWfTapTune = useCallback((hz: number) => {
+    const c = client.current;
+    if (!c) return;
+    const clamped = Math.max(MIN_HZ, Math.min(MAX_HZ, hz));
+    c.tune(clamped);
+    setStatus(prev => ({ ...prev, frequency: clamped }));
   }, []);
 
   // ── Mode change ───────────────────────────────────────────────────────────
@@ -278,6 +305,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         height={screenH}
         onPanDelta={onWfPanDelta}
         onZoomDelta={onWfZoomDelta}
+        onTapTune={onWfTapTune}
+        onPinchZoom={onWfPinchZoom}
       />
 
       {/* ── Controls pill — absolute overlay at bottom ───────────────── */}

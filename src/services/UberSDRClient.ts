@@ -107,6 +107,20 @@ export class UberSDRClient {
     if (frequency) this.status.frequency = frequency;
     if (mode)      this.status.mode = mode;
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
+    // Re-centre spectrum on new frequency so waterfall follows the VFO
+    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+      this.spectrumWs.send(JSON.stringify({
+        type:         'zoom',
+        frequency,
+        binBandwidth: this.status.binBandwidth || 100,
+      }));
+    }
+  }
+
+  /** Update internal state only — used when native already sent the tune (e.g. lock screen skip). */
+  syncFrequency(frequency: number, mode?: SDRMode) {
+    if (frequency) this.status.frequency = frequency;
+    if (mode)      this.status.mode = mode;
   }
 
   setMode(mode: SDRMode) {
