@@ -288,6 +288,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           step={step}
           connected={connected}
           bottomInset={0}
+          instanceHost={instanceName ?? baseUrl}
           onVfoDelta={onVfoDelta}
           onBwDelta={onBwDelta}
           onMode={onMode}

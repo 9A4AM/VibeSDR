@@ -60,8 +60,10 @@ class VibePowerModule: RCTEventEmitter {
     configureAVSession()
     startEngine(sampleRate: 48000, channels: 1)
     openAudioWs(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
-    updateNowPlaying()
-    setupRemoteCommands()
+    DispatchQueue.main.async {
+      self.setupRemoteCommands()
+      self.updateNowPlaying()
+    }
   }
 
   @objc func stopAudioEngine() {
@@ -73,7 +75,7 @@ class VibePowerModule: RCTEventEmitter {
     currentFreq = frequency
     currentMode = mode
     sendWsJson(["type": "tune", "frequency": frequency, "mode": mode])
-    updateNowPlaying()
+    DispatchQueue.main.async { self.updateNowPlaying() }
   }
 
   @objc func sendBandwidth(_ low: Int, high: Int) {
@@ -86,17 +88,13 @@ class VibePowerModule: RCTEventEmitter {
 
   @objc func setInstanceName(_ name: String) {
     instanceName = name
-    updateNowPlaying()
+    DispatchQueue.main.async { self.updateNowPlaying() }
   }
 
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
-    if muted {
-      playerNode?.pause()
-    } else {
-      playerNode?.play()
-    }
-    updateNowPlaying()
+    if muted { playerNode?.pause() } else { playerNode?.play() }
+    DispatchQueue.main.async { self.updateNowPlaying() }
   }
 
   @objc func setVolume(_ volume: Double) {
@@ -198,7 +196,7 @@ class VibePowerModule: RCTEventEmitter {
   private func configureAVSession() {
     do {
       let s = AVAudioSession.sharedInstance()
-      try s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try s.setCategory(.playback, mode: .default)
       try s.setActive(true)
       NSLog("[VibePowerModule] AVAudioSession active")
     } catch {
@@ -384,7 +382,7 @@ class VibePowerModule: RCTEventEmitter {
     cc.previousTrackCommand.removeTarget(nil)
     cc.previousTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      let newFreq = self.currentFreq - self.currentStep
+      let newFreq = max(100_000, self.currentFreq - self.currentStep)
       self.currentFreq = newFreq
       self.sendWsJson(["type": "tune", "frequency": newFreq])
       self.updateNowPlaying()
