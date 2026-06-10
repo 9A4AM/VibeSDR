@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { Animated, ActivityIndicator, LogBox, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
@@ -30,6 +31,11 @@ export const splashBridge = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
+    'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
+  });
+
   const [splashDone, setSplashDone]   = useState(false);
   const [splashLabel, setSplashLabel] = useState('CONNECTING TO INSTANCE LIST');
   const splashOpacity = useRef(new Animated.Value(1)).current;
@@ -40,6 +46,9 @@ export default function App() {
       .start(() => setSplashDone(true));
   }, [splashOpacity]);
   splashBridge.updateLabel = (label: string) => setSplashLabel(label.toUpperCase());
+
+  // Hold splash until fonts are ready — prevents flash of Courier New fallback
+  if (!fontsLoaded) return null;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

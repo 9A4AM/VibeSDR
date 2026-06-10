@@ -142,7 +142,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [themeName, setThemeName] = useState<ThemeName>('amber');
   const setTheme = (name: ThemeName) => setThemeName(name);
   return (
-    <ThemeContext.Provider value={{ theme: THEMES[themeName], themeName, setTheme }}>
+    <ThemeContext.Provider value={{ theme: THEMES[themeName as ThemeName], themeName, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

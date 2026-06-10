@@ -37,19 +37,36 @@ export interface MenuSheetProps {
   onDbMin:     (v: number) => void;
   onDbMax:     (v: number) => void;
 
-  filterLow:   number;
-  filterHigh:  number;
-  agc:         boolean;
+  filterLow:    number;
+  filterHigh:   number;
   onFilterLow:  (v: number) => void;
   onFilterHigh: (v: number) => void;
-  onAgc:        (on: boolean) => void;
   nr?:          boolean;
-  onNr?:        (on: boolean) => void;
+  onNr?:        (mode: 'off'|'nr'|'nr2') => void;
+  onZoomIn?:    () => void;
+  onZoomOut?:   () => void;
+  onSetDefault?: () => void;
+  onDecoder?:   (type: 'rtty'|'navtex'|'wefax'|'sstv'|'morse') => void;
   nb?:          boolean;
   onNb?:        (on: boolean) => void;
   recording?:   boolean;
   onRec?:       () => void;
   recSeconds?:  number;
+
+  // SNR squelch — value ≤ -999 = off/open
+  snrSquelch?:    number;
+  onSnrSquelch?:  (v: number) => void;
+  // FM squelch — only shown for fm/nfm modes
+  fmSquelch?:     number;
+  onFmSquelch?:   (v: number) => void;
+  isFmMode?:      boolean;
+
+  // Server DSP
+  serverDspEnabled?:   boolean;
+  serverDspFilter?:    string;
+  serverDspParams?:    Record<string, number>;
+  onServerDsp?:        (enabled: boolean, filter?: string, params?: Record<string,number>) => void;
+  onServerDspParams?:  (params: Record<string,number>) => void;
 
   signalMode?:     'snr' | 'smeter' | 'dbfs';
   onSignalMode?:   (m: 'snr' | 'smeter' | 'dbfs') => void;
@@ -70,6 +87,37 @@ export interface MenuSheetProps {
   onReconnect?:     () => void;
   onResetSettings?: () => void;
   onDisplaySettings?: () => void;
+
+  // Display settings panel props
+  vfoNeedle?:         string;
+  onVfoNeedle?:       (hex: string) => void;
+  wfCoarse?:          'auto' | 'manual';
+  onWfCoarse?:        (v: 'auto' | 'manual') => void;
+  /** UberSDR auto-range symmetric contrast 0–20 (web calibration = 10). */
+  autoContrast?:      number;
+  onAutoContrast?:    (v: number) => void;
+  /** M9PSY 5-tap spatial waterfall smooth. */
+  spatialSmooth?:     boolean;
+  onSpatialSmooth?:   (v: boolean) => void;
+  wfBrightness?:      number;
+  onWfBrightness?:    (v: number) => void;
+  wfContrast?:        number;
+  onWfContrast?:      (v: number) => void;
+  wfSharpness?:       number;
+  onWfSharpness?:     (v: number) => void;
+  specShow?:          boolean;
+  onSpecShow?:        (v: boolean) => void;
+  specSmoothing?:     number;
+  onSpecSmoothing?:   (v: number) => void;
+  specFloor?:         number;
+  onSpecFloor?:       (v: number) => void;
+  specPeakScale?:     number;
+  onSpecPeakScale?:   (v: number) => void;
+  peakHold?:          boolean;
+  onPeakHold?:        (v: boolean) => void;
+  frameRate?:         'native' | '20fps' | '60fps';
+  onFrameRate?:       (v: 'native' | '20fps' | '60fps') => void;
+  onSpecRatio?:       () => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -140,13 +188,13 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   return <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>;
 }
 
-function Btn({ label, active, danger, onPress, full }: {
+function Btn({ label, active, danger, onPress, full, style }: {
   label: string; active?: boolean; danger?: boolean;
-  onPress?: () => void; full?: boolean;
+  onPress?: () => void; full?: boolean; style?: object;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull]}
+      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull, style]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
       <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
@@ -164,7 +212,7 @@ function OptRow({ children }: { children: React.ReactNode }) {
   return <View style={[styles.btnRow, styles.optRow]}>{children}</View>;
 }
 
-function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void; key?: React.Key }) {
   return (
     <TouchableOpacity style={[styles.btn, active && styles.btnActive]} onPress={onPress} hitSlop={4} activeOpacity={0.7}>
       <Text style={[styles.btnText, active && styles.btnTextActive]}>{label}</Text>
@@ -196,7 +244,7 @@ function RTTYPanel() {
       {seg(['5N1','5N1.5','5N2','7N1','8N1','4/7'], frame, setFrame)}
       <SubLabel label="Encoding" />
       {seg(['ITA2','ASCII','CCIR476'], enc, setEnc)}
-      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv(p => !p)} /></OptRow>
+      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv((p: boolean) => !p)} /></OptRow>
     </>
   );
 }
@@ -221,7 +269,7 @@ function NAVTEXPanel() {
       <OptRow>{['170','200','425'].map(o => <SegBtn key={o} label={o} active={shift===o} onPress={() => setShift(o)} />)}</OptRow>
       <SubLabel label="Baud" />
       <OptRow>{['100','50'].map(o => <SegBtn key={o} label={o} active={baud===o} onPress={() => setBaud(o)} />)}</OptRow>
-      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv(p => !p)} /></OptRow>
+      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv((p: boolean) => !p)} /></OptRow>
     </>
   );
 }
@@ -242,9 +290,9 @@ function WEFAXPanel() {
       <SubLabel label="Bandwidth" />
       <OptRow>{['NARROW','MIDDLE','WIDE'].map(o => <SegBtn key={o} label={o} active={bw===o} onPress={() => setBw(o)} />)}</OptRow>
       <OptRow>
-        <Btn label="USE PHASING" active={phasing}   onPress={() => setPhasing(p => !p)} />
-        <Btn label="AUTO-STOP"   active={autoStop}  onPress={() => setAutoStop(p => !p)} />
-        <Btn label="AUTO-START"  active={autoStart} onPress={() => setAutoStart(p => !p)} />
+        <Btn label="USE PHASING" active={phasing}   onPress={() => setPhasing((p: boolean) => !p)} />
+        <Btn label="AUTO-STOP"   active={autoStop}  onPress={() => setAutoStop((p: boolean) => !p)} />
+        <Btn label="AUTO-START"  active={autoStart} onPress={() => setAutoStart((p: boolean) => !p)} />
       </OptRow>
     </>
   );
@@ -258,7 +306,7 @@ function SSTVPanel() {
     <>
       <SubLabel label="Quick Tune" />
       <OptRow>{QT.map(o => <SegBtn key={o} label={o} active={qt===o} onPress={() => setQt(o)} />)}</OptRow>
-      <OptRow><Btn label="AUTO-SAVE" active={autoSave} onPress={() => setAutoSave(p => !p)} /></OptRow>
+      <OptRow><Btn label="AUTO-SAVE" active={autoSave} onPress={() => setAutoSave((p: boolean) => !p)} /></OptRow>
       <SubLabel label="Mode auto-detected from VIS code · 47 modes supported" small />
     </>
   );
@@ -292,7 +340,7 @@ function WhisperPanel() {
       <OptRow>{['AUTO','EN','DE','FR','ES','IT'].map(o => <SegBtn key={o} label={o} active={lang===o} onPress={() => setLang(o)} />)}</OptRow>
       <SubLabel label="Line Limit" />
       <OptRow>{['10','20','50','100','∞'].map(o => <SegBtn key={o} label={o} active={lines===o} onPress={() => setLines(o)} />)}</OptRow>
-      <OptRow><Btn label="TIMESTAMPS" active={ts} onPress={() => setTs(p => !p)} /></OptRow>
+      <OptRow><Btn label="TIMESTAMPS" active={ts} onPress={() => setTs((p: boolean) => !p)} /></OptRow>
     </>
   );
 }
@@ -302,8 +350,11 @@ function WhisperPanel() {
 export default function MenuSheet({
   visible, serverName, serverUrl,
   colormap, dbMin, dbMax, onColormap, onDbMin, onDbMax,
-  filterLow, filterHigh, agc, onFilterLow, onFilterHigh, onAgc,
+  filterLow, filterHigh, onFilterLow, onFilterHigh,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
+  snrSquelch = -999, onSnrSquelch,
+  fmSquelch  = -999, onFmSquelch, isFmMode = false,
+  serverDspEnabled = false, serverDspFilter = 'wiener', serverDspParams = {}, onServerDsp, onServerDspParams,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
   drumMode = 'normal', onDrumMode,
@@ -311,12 +362,43 @@ export default function MenuSheet({
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   onClose, onBack, onReconnect, onResetSettings, onDisplaySettings,
+  onZoomIn, onZoomOut, onSetDefault, onDecoder,
+  vfoNeedle = '#ff8800', onVfoNeedle,
+  wfCoarse = 'auto', onWfCoarse,
+  autoContrast = 10, onAutoContrast,
+  spatialSmooth = true, onSpatialSmooth,
+  wfBrightness = 0, onWfBrightness,
+  wfContrast = 0, onWfContrast,
+  wfSharpness = 5, onWfSharpness,
+  specShow = true, onSpecShow,
+  specSmoothing = 5, onSpecSmoothing,
+  specFloor = 0, onSpecFloor,
+  specPeakScale = 10, onSpecPeakScale,
+  peakHold = false, onPeakHold,
+  frameRate = '60fps', onFrameRate,
+  onSpecRatio,
 }: MenuSheetProps) {
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
   const [activeDecoder,    setActiveDecoder]    = useState<DecoderKey>(null);
+
+  // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
+  const [nrMode, setNrMode] = useState<'off'|'nr'|'nr2'|'serv'>(
+    serverDspEnabled ? 'serv' : nr ? 'nr' : 'off'
+  );
+  const cycleNr = useCallback(() => {
+    if (nrMode === 'serv') return; // locked — server DSP section controls this
+    const next = nrMode === 'off' ? 'nr' : nrMode === 'nr' ? 'nr2' : 'off';
+    setNrMode(next);
+    onNr?.(next);
+  }, [nrMode, onNr]);
+  // Sync when server DSP toggled externally
+  useEffect(() => {
+    if (serverDspEnabled) setNrMode('serv');
+    else if (nrMode === 'serv') setNrMode('off');
+  }, [serverDspEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filterBw   = filterHigh - filterLow;
   const setFilterBw = useCallback((bw: number) => {
@@ -342,7 +424,7 @@ export default function MenuSheet({
   if (!visible) return null;
 
   const toggleDecoder = (key: DecoderKey) =>
-    setActiveDecoder(prev => prev === key ? null : key);
+    setActiveDecoder((prev: DecoderKey) => prev === key ? null : key);
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
@@ -378,42 +460,147 @@ export default function MenuSheet({
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
             <SectionLabel label="SPECTRUM / WATERFALL" />
             <BtnRow>
-              <Btn label="− ZOOM" onPress={() => {}} />
-              <Btn label="+ ZOOM" onPress={() => {}} />
-              <Btn label="MIN"    onPress={() => {}} />
-              <Btn label="MAX"    onPress={() => {}} />
+              <Btn label="− ZOOM" onPress={onZoomOut} />
+              <Btn label="+ ZOOM" onPress={onZoomIn} />
+              <Btn label="MIN"    onPress={() => { onDbMin(-130); onDbMax(-40); }} />
+              <Btn label="MAX"    onPress={() => { onDbMin(-120); onDbMax(-20); }} />
             </BtnRow>
             <BtnRow>
               <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
-                onPress={() => onDisplaySettings ? onDisplaySettings() : setDispSettingsOpen(p => !p)} />
+                onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             {dispSettingsOpen && (
               <View style={styles.subPanel}>
-                <SubLabel label="Colormap" />
+
+                {/* Save row */}
+                <BtnRow>
+                  <Btn label="↺ RESET"       onPress={() => {}} />
+                  <Btn label="💾 THIS SERVER" onPress={() => {}} />
+                  <Btn label="🌐 GLOBAL"      onPress={() => {}} />
+                </BtnRow>
+
+                {/* Layout — spectrum/waterfall ratio */}
+                <SubLabel label="Layout" />
+                <BtnRow>
+                  <Btn label="📐 SPECTRUM / WATERFALL RATIO" full
+                    onPress={() => onSpecRatio?.()} />
+                </BtnRow>
+
+                {/* Colour Map — picker-style row */}
+                <SubLabel label="Colour Map" />
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.cmapStrip}>
-                  {COLORMAP_NAMES.map(name => (
+                  {(['sonar','gqrx','green','inferno','plasma','viridis'] as const).map(name => (
                     <TouchableOpacity key={name}
                       style={[styles.cmapPill, name === colormap && styles.cmapPillActive]}
                       onPress={() => onColormap(name)} hitSlop={4}>
                       <Text style={[styles.cmapPillText, name === colormap && styles.cmapPillTextActive]}>
-                        {name}
+                        {name.charAt(0).toUpperCase()+name.slice(1)}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
-                <SubLabel label="dB Floor" />
-                <View style={styles.sliderWrap}>
-                  <Slider style={{flex:1}} minimumValue={-200} maximumValue={dbMax-10} step={5} value={dbMin}
-                    onValueChange={onDbMin} minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-                  <Text style={styles.sliderVal}>{dbMin} dB</Text>
+
+                {/* VFO Needle Colour — colour swatches */}
+                <SubLabel label="VFO Needle Colour" />
+                <View style={styles.swatchRow}>
+                  {([
+                    {hex:'#ff2020',label:'Red'},    {hex:'#00ff44',label:'Green'},
+                    {hex:'#4499ff',label:'Blue'},   {hex:'#ffdd00',label:'Yellow'},
+                    {hex:'#00eeff',label:'Cyan'},   {hex:'#ff8800',label:'Orange'},
+                    {hex:'#ffffff',label:'White'},  {hex:'#cc44ff',label:'Purple'},
+                  ]).map(c => (
+                    <TouchableOpacity key={c.hex} hitSlop={4}
+                      style={[styles.swatch, { backgroundColor: c.hex },
+                        vfoNeedle === c.hex && styles.swatchActive]}
+                      onPress={() => onVfoNeedle?.(c.hex)}
+                    />
+                  ))}
                 </View>
-                <SubLabel label="dB Ceiling" />
+
+                {/* Waterfall — Coarse */}
+                <SubLabel label="Waterfall — Coarse" />
+                <BtnRow>
+                  <Btn label="AUTO"   active={wfCoarse==='auto'}   onPress={() => onWfCoarse?.('auto')} />
+                  <Btn label="MANUAL" active={wfCoarse==='manual'} onPress={() => onWfCoarse?.('manual')} />
+                </BtnRow>
+                {wfCoarse === 'auto' && (
+                  <View style={styles.sliderWrap}>
+                    <Text style={styles.sliderLabel}>Auto Range</Text>
+                    <Slider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
+                      value={autoContrast} onValueChange={onAutoContrast ?? (() => {})}
+                      minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    <Text style={styles.sliderVal}>{autoContrast}</Text>
+                  </View>
+                )}
+
+                {/* Waterfall — Fine */}
+                <SubLabel label="Waterfall — Fine" />
                 <View style={styles.sliderWrap}>
-                  <Slider style={{flex:1}} minimumValue={dbMin+10} maximumValue={0} step={5} value={dbMax}
-                    onValueChange={onDbMax} minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-                  <Text style={styles.sliderVal}>{dbMax} dB</Text>
+                  <Text style={styles.sliderLabel}>Brightness</Text>
+                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                    value={wfBrightness} onValueChange={onWfBrightness ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{(wfBrightness > 0 ? '+' : '') + wfBrightness} dB</Text>
                 </View>
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Contrast</Text>
+                  <Slider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
+                    value={wfContrast} onValueChange={onWfContrast ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{(wfContrast > 0 ? '+' : '') + wfContrast}</Text>
+                </View>
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Sharpness</Text>
+                  <Slider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
+                    value={wfSharpness} onValueChange={onWfSharpness ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{wfSharpness}</Text>
+                </View>
+                <BtnRow>
+                  <Btn label="SPATIAL SMOOTH" active={spatialSmooth}
+                       onPress={() => onSpatialSmooth?.(!spatialSmooth)} />
+                </BtnRow>
+
+                {/* Spectrum Trace */}
+                <SubLabel label="Spectrum Trace" />
+                <BtnRow>
+                  <Btn label="SHOW" active={specShow}  onPress={() => onSpecShow?.(!specShow)} />
+                  <Btn label="HIDE" active={!specShow} onPress={() => onSpecShow?.(false)} />
+                </BtnRow>
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Smoothing</Text>
+                  <Slider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
+                    value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{specSmoothing}</Text>
+                </View>
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Floor</Text>
+                  <Slider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                    value={specFloor} onValueChange={onSpecFloor ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
+                </View>
+                <View style={styles.sliderWrap}>
+                  <Text style={styles.sliderLabel}>Peak Scale</Text>
+                  <Slider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
+                    value={specPeakScale} onValueChange={onSpecPeakScale ?? (() => {})}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                  <Text style={styles.sliderVal}>{(specPeakScale / 10).toFixed(1)}×</Text>
+                </View>
+                <BtnRow>
+                  <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
+                </BtnRow>
+
+                {/* Frame Interpolation */}
+                <SubLabel label="Frame Interpolation" />
+                <BtnRow>
+                  <Btn label="NATIVE" active={frameRate==='native'} onPress={() => onFrameRate?.('native')} />
+                  <Btn label="20fps"  active={frameRate==='20fps'}  onPress={() => onFrameRate?.('20fps')} />
+                  <Btn label="60fps"  active={frameRate==='60fps'}  onPress={() => onFrameRate?.('60fps')} />
+                </BtnRow>
+
               </View>
             )}
 
@@ -424,7 +611,7 @@ export default function MenuSheet({
               <Slider style={styles.bwSlider}
                 minimumValue={0} maximumValue={15_000} step={50}
                 value={Math.abs(filterLow)}
-                onValueChange={v => onFilterLow(-v)}
+                onValueChange={(v: number) => onFilterLow(-v)}
                 minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
                 thumbTintColor={C.gold} />
               <Text style={styles.bwVal}>−{fmtHz(Math.abs(filterLow))}</Text>
@@ -439,8 +626,15 @@ export default function MenuSheet({
                 thumbTintColor={C.gold} />
               <Text style={styles.bwVal}>+{fmtHz(filterHigh)}</Text>
             </View>
+
+            {/* NR cycles off→NR→NR2. Shows SERV (green, locked) when server DSP active. */}
             <BtnRow>
-              <Btn label="NR"      active={nr}        onPress={() => onNr?.(!nr)} />
+              <Btn
+                label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
+                active={nrMode !== 'off'}
+                style={nrMode === 'serv' ? { borderColor: 'rgba(50,210,100,0.60)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
+                onPress={cycleNr}
+              />
               <Btn label="NB"      active={nb}        onPress={() => onNb?.(!nb)} />
               <Btn label="⏺ REC"  active={recording} onPress={onRec} />
             </BtnRow>
@@ -450,6 +644,49 @@ export default function MenuSheet({
                 <Text style={styles.recTime}>{fmtRecTime(recSeconds)}</Text>
               </View>
             )}
+
+            {/* SNR Squelch — audio gate, always visible. Slider 24–80 dB, left = Off */}
+            <View style={styles.bwRow}>
+              <Text style={styles.bwLabel}>SNR SQL</Text>
+              <Slider style={styles.bwSlider}
+                minimumValue={24} maximumValue={80} step={0.5}
+                value={Math.max(24, snrSquelch === -999 ? 24 : snrSquelch)}
+                onValueChange={(v: number) => onSnrSquelch?.(v <= 24.1 ? -999 : v)}
+                minimumTrackTintColor={snrSquelch > 24 ? C.gold : C.muted}
+                maximumTrackTintColor={C.muted}
+                thumbTintColor={C.gold} />
+              <Text style={styles.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
+            </View>
+
+            {/* FM Squelch — only shown for fm/nfm. Currently feature-flagged off in UberSDR. */}
+            {isFmMode && (
+              <View style={styles.bwRow}>
+                <Text style={styles.bwLabel}>FM SQL</Text>
+                <Slider style={styles.bwSlider}
+                  minimumValue={0} maximumValue={100} step={1}
+                  value={fmSquelch <= -999 ? 0 : Math.round((fmSquelch + 48) * 99 / 68 + 1)}
+                  onValueChange={(v: number) => {
+                    const db = v === 0 ? -999 : -48 + (v - 1) * (68 / 99);
+                    onFmSquelch?.(db);
+                  }}
+                  minimumTrackTintColor={fmSquelch > -999 ? C.gold : C.muted}
+                  maximumTrackTintColor={C.muted}
+                  thumbTintColor={C.gold} />
+                <Text style={styles.bwVal}>{fmSquelch <= -999 ? 'Open' : `${fmSquelch.toFixed(1)}dB`}</Text>
+              </View>
+            )}
+
+            {/* ── SERVER DSP ─────────────────────────────────────── */}
+            <SectionLabel label="SERVER DSP" />
+            <BtnRow>
+              <Btn
+                label={serverDspEnabled ? 'DISABLE SERVER NR' : 'ENABLE SERVER NR'}
+                active={serverDspEnabled}
+                full
+                style={serverDspEnabled ? { borderColor: 'rgba(50,210,100,0.50)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
+                onPress={() => onServerDsp?.(!serverDspEnabled, serverDspFilter, serverDspParams)}
+              />
+            </BtnRow>
 
             {/* ── SERVER MAPS ────────────────────────────────────── */}
             <SectionLabel label="SERVER MAPS" />
@@ -463,15 +700,10 @@ export default function MenuSheet({
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).map(k => (
-                <Btn key={k} label={k.toUpperCase()} active={activeDecoder === k}
-                  onPress={() => toggleDecoder(k)} />
+                <Btn key={k} label={k.toUpperCase()}
+                  onPress={() => { onDecoder?.(k); onClose(); }} />
               ))}
             </BtnRow>
-            {activeDecoder === 'rtty'   && <View style={styles.subPanel}><RTTYPanel /></View>}
-            {activeDecoder === 'navtex' && <View style={styles.subPanel}><NAVTEXPanel /></View>}
-            {activeDecoder === 'wefax'  && <View style={styles.subPanel}><WEFAXPanel /></View>}
-            {activeDecoder === 'sstv'   && <View style={styles.subPanel}><SSTVPanel /></View>}
-            {activeDecoder === 'morse'  && <View style={styles.subPanel}><MORSEPanel /></View>}
 
             {/* ── SERVER EXTENSIONS ──────────────────────────────── */}
             <SectionLabel label="SERVER EXTENSIONS" />
@@ -520,7 +752,7 @@ export default function MenuSheet({
             <SectionLabel label="INSTANCE" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
             <BtnRow>
-              <Btn label="☆ SET DEFAULT" onPress={() => {}} />
+              <Btn label="☆ SET DEFAULT" onPress={onSetDefault} />
               <Btn label="← BACK"        onPress={onBack ?? onClose} />
             </BtnRow>
             <BtnRow col>
@@ -562,7 +794,7 @@ const styles = StyleSheet.create({
   },
   sectionBarFirst: { borderTopWidth: 0, marginTop: 2 },
   sectionLabel: {
-    color: C.sectionC, fontFamily: 'Courier', fontSize: 11,
+    color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11,
     fontWeight: 'bold', letterSpacing: 2,
   },
 
@@ -578,7 +810,7 @@ const styles = StyleSheet.create({
   btnActive:     { backgroundColor: C.active, borderColor: C.gold },
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
-  btnText:       { color: C.muted, fontFamily: 'Courier', fontSize: 11, fontWeight: 'bold', letterSpacing: 0.5 },
+  btnText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11, fontWeight: 'bold', letterSpacing: 0.5 },
   btnTextActive: { color: C.gold },
   btnTextDanger: { color: '#ff6666' },
 
@@ -590,17 +822,17 @@ const styles = StyleSheet.create({
   },
   vtsArrowText: { color: C.gold, fontSize: 18 },
   vtsInfo:  { flex: 1, alignItems: 'center', gap: 3 },
-  vtsName:  { color: C.text, fontFamily: 'Courier', fontSize: 14, letterSpacing: 1 },
-  vtsFreq:  { color: C.sectionC, fontFamily: 'Courier', fontSize: 11, letterSpacing: 1 },
+  vtsName:  { color: C.text, fontFamily: 'Nixie One', fontSize: 14, letterSpacing: 1 },
+  vtsFreq:  { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1 },
 
   sliderRow:   { paddingVertical: 4, gap: 4 },
-  sliderLabel: { color: C.sectionC, fontFamily: 'Courier', fontSize: 11, letterSpacing: 1 },
+  sliderLabel: { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 72, flexShrink: 0 },
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
-  bwLabel:  { color: C.sectionC, fontFamily: 'Courier', fontSize: 11, letterSpacing: 1, width: 32 },
+  bwLabel:  { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
-  bwVal:    { color: C.gold, fontFamily: 'Courier', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  bwVal:    { color: C.gold, fontFamily: 'Nixie One', fontSize: 11, minWidth: 68, textAlign: 'right' },
   sliderWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  sliderVal:   { color: C.gold, fontFamily: 'Courier', fontSize: 11, minWidth: 72, textAlign: 'right' },
+  sliderVal:   { color: C.gold, fontFamily: 'Nixie One', fontSize: 11, minWidth: 72, textAlign: 'right' },
 
   stepSlider: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   stepSliderBtn: {
@@ -608,35 +840,38 @@ const styles = StyleSheet.create({
     borderRadius: 4, width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
   },
   stepSliderBtnTxt: { color: C.gold, fontSize: 18, fontWeight: 'bold', lineHeight: 22 },
-  stepSliderVal: { color: C.gold, fontFamily: 'Courier', fontSize: 12, flex: 1, textAlign: 'center' },
+  stepSliderVal: { color: C.gold, fontFamily: 'Nixie One', fontSize: 12, flex: 1, textAlign: 'center' },
 
   subPanel: {
     backgroundColor: 'rgba(255,160,0,0.05)', borderRadius: 6,
     borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,160,0,0.15)',
     padding: 8, marginBottom: 4,
   },
-  subLabel:      { color: C.sectionC, fontFamily: 'Courier', fontSize: 11, letterSpacing: 1, paddingTop: 6, paddingBottom: 2 },
+  subLabel:      { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, paddingTop: 6, paddingBottom: 2 },
   subLabelSmall: { fontSize: 9, opacity: 0.5 },
 
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
-  recTime:  { color: C.gold, fontFamily: 'Courier', fontSize: 13 },
+  recTime:  { color: C.gold, fontFamily: 'Nixie One', fontSize: 13 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
-  ctrlLabel: { color: C.sectionC, fontFamily: 'Courier', fontSize: 10, letterSpacing: 1.5 },
+  ctrlLabel: { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 10, letterSpacing: 1.5 },
 
+  swatchRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
+  swatch:     { width: 32, height: 32, borderRadius: 16, borderWidth: 3, borderColor: 'transparent' },
+  swatchActive: { borderColor: '#fff' },
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
   cmapPillActive:     { backgroundColor: C.active, borderColor: C.gold },
-  cmapPillText:       { color: C.muted, fontFamily: 'Courier', fontSize: 11 },
+  cmapPillText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11 },
   cmapPillTextActive: { color: C.gold },
 
-  instanceUrl: { color: 'rgba(255,184,51,0.30)', fontFamily: 'Courier', fontSize: 10, paddingBottom: 4 },
+  instanceUrl: { color: 'rgba(255,184,51,0.30)', fontFamily: 'Nixie One', fontSize: 10, paddingBottom: 4 },
 
   closeBtn: {
     margin: 12, alignSelf: 'center', backgroundColor: C.btnBg,
     borderWidth: 1, borderColor: C.border, borderRadius: 6,
     paddingHorizontal: 24, paddingVertical: 8,
   },
-  closeBtnText: { color: C.goldDim, fontFamily: 'Courier', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
+  closeBtnText: { color: C.goldDim, fontFamily: 'Nixie One', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
 });

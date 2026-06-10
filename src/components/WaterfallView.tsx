@@ -1,31 +1,54 @@
 /**
- * WaterfallView — 120Hz ProMotion waterfall + spectrum with peak hold.
+ * WaterfallView — 120Hz ProMotion waterfall + spectrum, v1.5 visual parity.
+ *
+ * Layout (top → bottom), all in dp:
+ *   ┌──────────────────────────────────────────┐
+ *   │ BAND_H (20)  — band plan strip           │  coloured allocations + labels
+ *   ├──────────────────────────────────────────┤
+ *   │ TICK_H (22)  — frequency ticker          │  green glow "7.153M" labels
+ *   ├──────────────────────────────────────────┤
+ *   │ specH        — spectrum trace            │  LUT-gradient fill + peak hold
+ *   ├──────────────────────────────────────────┤
+ *   │ wfH          — waterfall                 │  Skia image ring buffer
+ *   └──────────────────────────────────────────┘
+ *   Acrylic sideband panels + LED needle span band-strip-bottom → screen bottom.
  *
  * Architecture:
- *   - Ring buffer stores ROWS rows of colourised pixels at bin resolution.
- *   - On each spectrum frame: write new row, rebuild display-order SkImage.
- *   - Reanimated useDerivedValue drives a smooth Y-translate that runs on the
- *     UI thread at full display rate (120Hz ProMotion) — no JS involvement.
- *   - Each new row animates sliding in from the top over the inter-frame period,
- *     matching the "flowing river" feel of the original NativeWaterfall.
- *   - Spectrum: downsampled to screen width, 5-pt smoothed, quadratic curves.
- *   - Peak hold: per-bin decay at PEAK_DECAY rate, drawn as glowing white line.
+ *   - SignalProcessor (M9PSY pipeline + UberSDR auto-range) maps raw dBFS bins
+ *     → LUT indices; this component never touches dB maths directly.
+ *   - Ring buffer stores LUT *indices* (1 byte/bin); colourised at assembly so
+ *     palette switches are instant with no reprocessing.
+ *   - Reanimated useDerivedValue drives the scroll translate on the UI thread
+ *     at full display rate (120Hz ProMotion) — zero JS work per scroll tick.
+ *   - Text (band labels, ticker, dB axis) rendered as absolutely-positioned RN
+ *     <Text> overlays — crisper than Skia text and uses the expo-font faces.
+ *
+ * Visuals ported 1:1 from vibeWaterfall.ts v1.5 (M9PSY / Stuey3D):
+ *   - BAND_COLS, label sizing rules, bottom border rgba(255,200,80,0.25)
+ *   - niceTick / fmtHz ticker with #00aa33 glow text, minGap 52px
+ *   - dB axis: 5 stops, amber rgba(255,180,60,0.90), faint reference lines
+ *   - Spectrum fill: colormap LUT sampled at 9 stops, indices 15→235
+ *   - Peak hold line: VFO colour (matches user's needle selection)
+ *   - Acrylic sidebands: 4-stop gradient 0.03→0.28 alpha in VFO colour
+ *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Skia,
   Image as SkiaImage,
   Path,
   Group,
+  Rect,
   LinearGradient,
   BlurStyle,
   vec,
   AlphaType,
   ColorType,
   type SkImage,
+  type SkPath,
 } from '@shopify/react-native-skia';
 import {
   useSharedValue,
@@ -35,168 +58,204 @@ import {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
+import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
+import { BAND_PLAN, type Band } from '../constants/bandPlan';
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
-const ROWS        = 256;    // waterfall history depth — 256 rows at ~20fps = ~12s
-const SPEC_FRAC   = 0.26;   // fraction of height for spectrum panel
-const PEAK_DECAY  = 0.984;  // peak hold decay factor per data frame (~3s to -6dB)
-const SPEC_PTS    = 512;    // max spectrum path points (downsampled from bin count)
-const SMOOTH_W    = 5;      // spectrum smoothing kernel half-width
+const BAND_H   = 20;   // band plan strip height
+const TICK_H   = 22;   // frequency ticker height
+const ROWS     = 256;  // waterfall history depth
 
-// ── Props ──────────────────────────────────────────────────────────────────────
+// Band type → colour. Indices match v1.5 BAND_COLS: ham=red, broadcast=blue,
+// utility=green, cb=orange. (Screenshot reference: 40m Ham red, 41m B/C blue.)
+const BAND_COLS: Record<string, string> = {
+  ham:       'rgba(207,0,0,0.92)',
+  broadcast: 'rgba(9,0,255,0.92)',
+  utility:   'rgba(7,189,0,0.92)',
+  cb:        'rgba(255,119,0,0.92)',
+};
+
+// ── Helpers (ported verbatim from v1.5) ──────────────────────────────────────
+
+function niceTick(approx: number): number {
+  const pow  = Math.pow(10, Math.floor(Math.log10(approx)));
+  const norm = approx / pow;
+  const nice = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+  return nice * pow;
+}
+
+function fmtHz(hz: number): string {
+  if (hz >= 1e9) return (hz / 1e9).toFixed(2) + 'G';
+  if (hz >= 1e6) return (hz / 1e6).toFixed(3) + 'M';
+  if (hz >= 1e3) return (hz / 1e3).toFixed(hz < 1e5 ? 1 : 0) + 'k';
+  return hz.toFixed(0) + 'Hz';
+}
+
+function hexRgba(hex: string, a: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/** 11m CB special-case (typed 'utility' in bandPlan.ts but coloured orange). */
+function bandColor(b: Band): string {
+  if (b.name.includes('CB')) return BAND_COLS.cb;
+  return BAND_COLS[b.type] ?? BAND_COLS.utility;
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface WaterfallViewProps {
-  bins:          Float32Array | null;
-  binCount:      number;
-  centerHz:      number;
-  bwHz:          number;
-  tuneHz:        number;
-  dbMin?:        number;
-  dbMax?:        number;
-  colormap?:     string;
-  width:         number;
-  height:        number;
-  onPanDelta?:   (dxPx: number) => void;
-  onZoomDelta?:  (dyPx: number) => void;
-  onTapTune?:    (hz: number) => void;
-  onPinchZoom?:  (scale: number) => void;
+  bins:        Float32Array | null;
+  binCount:    number;
+  centerHz:    number;
+  bwHz:        number;
+  tuneHz:      number;
+  /** Filter edges (Hz offsets from carrier; low negative, high positive). */
+  filterLow?:  number;
+  filterHigh?: number;
+  /** Manual range — only used when wfCoarse='manual'. */
+  dbMin?:      number;
+  dbMax?:      number;
+  wfCoarse?:   'auto' | 'manual';
+  colormap?:   string;
+  width:       number;
+  height:      number;
+  ituRegion?:  number;            // 1/2/3 — filters regional band plan entries
+  fontFamily?: string;            // default Atkinson Hyperlegible (accessibility skin)
+  onPanDelta?:  (dxPx: number) => void;
+  onZoomDelta?: (dyPx: number) => void;
+  onTapTune?:   (hz: number) => void;
+  onPinchZoom?: (scale: number) => void;
+
+  // Display settings (SignalProcessor + layout)
+  specShow?:       boolean;
+  specFrac?:       number;        // spectrum fraction of (height − BAND_H − TICK_H)
+  autoContrast?:   number;        // 0–20, default 10 (UberSDR calibration)
+  specSmoothing?:  number;        // 1–10 → smoothingFrames
+  specFloor?:      number;        // ±20 dB
+  specPeakScale?:  number;        // 10 = 1.0×
+  peakHold?:       boolean;
+  spatialSmooth?:  boolean;
+  wfBrightness?:   number;
+  wfContrast?:     number;
+  wfSharpness?:    number;
+  frameRate?:      'native' | '20fps' | '60fps';
+  needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/** Downsample bins to at most maxPts points by taking the max in each window. */
-function downsample(bins: Float32Array, maxPts: number): Float32Array {
-  const n = bins.length;
-  if (n <= maxPts) return bins;
-  const out = new Float32Array(maxPts);
-  const ratio = n / maxPts;
-  for (let i = 0; i < maxPts; i++) {
-    const lo = Math.floor(i * ratio);
-    const hi = Math.min(n, Math.ceil((i + 1) * ratio));
-    let mx = bins[lo];
-    for (let j = lo + 1; j < hi; j++) if (bins[j] > mx) mx = bins[j];
-    out[i] = mx;
-  }
-  return out;
-}
-
-/** 5-point boxcar smooth in-place on a Float32Array copy. */
-function smooth(arr: Float32Array, w: number): Float32Array {
-  const out = new Float32Array(arr.length);
-  const len = arr.length;
-  for (let i = 0; i < len; i++) {
-    let sum = 0, count = 0;
-    for (let k = -w; k <= w; k++) {
-      const j = i + k;
-      if (j >= 0 && j < len) { sum += arr[j]; count++; }
-    }
-    out[i] = sum / count;
-  }
-  return out;
-}
-
-// ── Component ──────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function WaterfallView({
-  bins,
-  binCount,
-  centerHz,
-  bwHz,
-  tuneHz,
-  dbMin       = -120,
-  dbMax       = -20,
-  colormap    = 'gqrx',
-  width,
-  height,
-  onPanDelta,
-  onZoomDelta,
-  onTapTune,
-  onPinchZoom,
+  bins, binCount, centerHz, bwHz, tuneHz,
+  filterLow = -3000, filterHigh = 3000,
+  dbMin = -120, dbMax = -20, wfCoarse = 'auto',
+  colormap = 'gqrx', width, height,
+  ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
+  onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
+  specShow = true, specFrac = 0.26,
+  autoContrast = 10, specSmoothing = 5, specFloor = 0, specPeakScale = 10,
+  peakHold = true, spatialSmooth = true,
+  wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
+  frameRate = '60fps', needleColor = '#ff2020',
 }: WaterfallViewProps) {
-  const specH  = Math.round(height * SPEC_FRAC);
-  const wfH    = height - specH;
-  const rowH   = wfH / ROWS;
 
-  // ── Colourmap LUT ──────────────────────────────────────────────────────────
+  // ── Vertical layout ─────────────────────────────────────────────────────────
+  const tickTop  = BAND_H;
+  const specTop  = tickTop + TICK_H;
+  const below    = Math.max(0, height - specTop);
+  const specH    = specShow ? Math.round(below * Math.max(0.05, Math.min(0.65, specFrac))) : 0;
+  const wfTop    = specTop + specH;
+  const wfH      = height - wfTop;
+  const wfRenderH = wfH + Math.ceil(wfH / ROWS) + 2; // hide bottom-edge judder
+  const rowH      = wfRenderH / ROWS;
+
+  const FRAME_DUR_MAX = frameRate === 'native' ? 80 : frameRate === '20fps' ? 400 : 150;
+
+  // ── Signal processor (owns all dB→index maths) ──────────────────────────────
+  const proc = useRef(new SignalProcessor());
+  useEffect(() => {
+    const patch: Partial<SignalProcessorSettings> = {
+      autoContrast,
+      manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
+      specFloor, specPeakScale,
+      smoothingFrames: specSmoothing,
+      spatialSmooth, peakHold,
+      wfBrightness, wfContrast, wfSharpness,
+    };
+    proc.current.applySettings(patch);
+  }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
+      specSmoothing, spatialSmooth, peakHold, wfBrightness, wfContrast, wfSharpness]);
+
+  // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
+  const specGradColors = useMemo(() => {
+    const stops: string[] = [];
+    for (let gi = 0; gi <= 8; gi++) {
+      const idx = Math.max(0, Math.min(255, Math.round(15 + (gi / 8) * 220)));
+      stops.push(`rgba(${lut[idx * 4]},${lut[idx * 4 + 1]},${lut[idx * 4 + 2]},1)`);
+    }
+    return stops.reverse(); // gradient runs top→bottom; hot colour at top
+  }, [lut]);
 
-  // ── Ring buffer ────────────────────────────────────────────────────────────
-  const pixBuf       = useRef<Uint8Array | null>(null);
+  // ── Ring buffer of LUT indices ──────────────────────────────────────────────
+  const idxBuf       = useRef<Uint8Array | null>(null);
   const rowHead      = useRef(0);
   const lastBinCount = useRef(0);
 
-  const ensureBuffer = useCallback((n: number) => {
-    if (n !== lastBinCount.current) {
-      pixBuf.current      = new Uint8Array(n * ROWS * 4);
-      rowHead.current     = 0;
-      lastBinCount.current = n;
-    }
-  }, []);
+  // ── Display state ───────────────────────────────────────────────────────────
+  const [wfImage,  setWfImage]  = useState<SkImage | null>(null);
+  const [specPath, setSpecPath] = useState<SkPath | null>(null);
+  const [peakPath, setPeakPath] = useState<SkPath | null>(null);
+  const [liveRange, setLiveRange] = useState({ dbMin: -120, dbMax: -20 });
 
-  // ── Peak hold buffer ───────────────────────────────────────────────────────
-  const peakBuf = useRef<Float32Array | null>(null);
-
-  // ── Waterfall image state ──────────────────────────────────────────────────
-  const [wfImage,   setWfImage]   = useState<SkImage | null>(null);
-
-  // ── Spectrum + peak paths ──────────────────────────────────────────────────
-  const [specPath,  setSpecPath]  = useState<ReturnType<typeof Skia.Path.Make> | null>(null);
-  const [fillPath,  setFillPath]  = useState<ReturnType<typeof Skia.Path.Make> | null>(null);
-  const [peakPath,  setPeakPath]  = useState<ReturnType<typeof Skia.Path.Make> | null>(null);
-
-  // ── Smooth scroll (Reanimated, runs on UI thread at display rate) ──────────
-  // scrollFrac: 0 = new row just arrived (off-screen above), 1 = row fully settled
-  const scrollFrac = useSharedValue(1);
-
-  // Image transform: slide in from top — runs on UI thread, no JS each frame
+  // ── Smooth scroll (UI thread) ───────────────────────────────────────────────
+  const scrollFrac  = useSharedValue(1);
   const wfTransform = useDerivedValue(() => [
     { translateY: -(1 - scrollFrac.value) * rowH },
   ]);
+  const lastFrameTs = useRef(0);
+  const avgFrameMs  = useRef(150);
 
-  // ── Inter-frame timing estimate ────────────────────────────────────────────
-  const lastFrameTs  = useRef(0);
-  const avgFrameMs   = useRef(150); // initial guess: 150ms between spectrum frames
-
-  // ── Process new spectrum data ──────────────────────────────────────────────
+  // ── Frame processing ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!bins || bins.length === 0 || width < 4) return;
-
     const n = bins.length;
-    ensureBuffer(n);
-    const buf = pixBuf.current!;
-    const dbRange = dbMax - dbMin;
 
-    // ── 1. Update peak hold ──────────────────────────────────────────────────
-    if (!peakBuf.current || peakBuf.current.length !== n) {
-      peakBuf.current = new Float32Array(n).fill(dbMin);
-    }
-    const peak = peakBuf.current;
-    for (let i = 0; i < n; i++) {
-      peak[i] = Math.max(bins[i], peak[i] * PEAK_DECAY + dbMin * (1 - PEAK_DECAY));
-    }
+    // 1. M9PSY pipeline + UberSDR auto-range
+    const frame = proc.current.process(bins, centerHz, bwHz);
+    setLiveRange(prev =>
+      prev.dbMin === frame.dbMin && prev.dbMax === frame.dbMax
+        ? prev : { dbMin: frame.dbMin, dbMax: frame.dbMax });
 
-    // ── 2. Write new row into ring buffer ────────────────────────────────────
-    const rowOff = rowHead.current * n * 4;
-    for (let i = 0; i < n; i++) {
-      const idx = Math.max(0, Math.min(255, Math.round(((bins[i] - dbMin) / dbRange) * 255)));
-      const l   = idx * 4;
-      buf[rowOff + i * 4]     = lut[l];
-      buf[rowOff + i * 4 + 1] = lut[l + 1];
-      buf[rowOff + i * 4 + 2] = lut[l + 2];
-      buf[rowOff + i * 4 + 3] = 255;
+    // 2. Ring buffer write (LUT indices)
+    if (n !== lastBinCount.current || !idxBuf.current) {
+      idxBuf.current = new Uint8Array(n * ROWS);
+      rowHead.current = 0;
+      lastBinCount.current = n;
     }
+    const buf = idxBuf.current;
+    buf.set(frame.row, rowHead.current * n);
     rowHead.current = (rowHead.current + 1) % ROWS;
 
-    // ── 3. Assemble display-order image (newest row at top) ──────────────────
+    // 3. Assemble display image — colourise via current LUT (newest row on top)
     const display = new Uint8Array(n * ROWS * 4);
-    const head    = rowHead.current;
+    const head = rowHead.current;
     for (let r = 0; r < ROWS; r++) {
       const srcRow = (head - 1 - r + ROWS * 2) % ROWS;
-      const srcOff = srcRow * n * 4;
-      display.set(buf.subarray(srcOff, srcOff + n * 4), r * n * 4);
+      const srcOff = srcRow * n;
+      const dstOff = r * n * 4;
+      for (let i = 0; i < n; i++) {
+        const l = buf[srcOff + i] * 4;
+        const d = dstOff + i * 4;
+        display[d]     = lut[l];
+        display[d + 1] = lut[l + 1];
+        display[d + 2] = lut[l + 2];
+        display[d + 3] = 255;
+      }
     }
-
     const img = Skia.Image.MakeImage(
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
       Skia.Data.fromBytes(display),
@@ -204,230 +263,371 @@ export default function WaterfallView({
     );
     if (img) setWfImage(img);
 
-    // ── 4. Build smooth spectrum path ────────────────────────────────────────
-    const ds   = downsample(bins, Math.min(SPEC_PTS, Math.round(width)));
-    const sm   = smooth(ds, SMOOTH_W);
-    const npts = sm.length;
-    const xScale = width / (npts - 1);
+    // 4. Spectrum + peak paths from normalised [0,1] traces
+    if (specShow && specH > 4) {
+      const spec = frame.spec;
+      const sLen = spec.length;
+      const baseline = wfTop;
+      const sp = Skia.Path.Make();
+      sp.moveTo(0, baseline);
+      for (let px = 0; px < width; px++) {
+        const v = spec[Math.floor((px / width) * sLen)];
+        sp.lineTo(px, baseline - v * specH);
+      }
+      sp.lineTo(width, baseline);
+      sp.close();
+      setSpecPath(sp);
 
-    const specP = Skia.Path.Make();
-    const fillP = Skia.Path.Make();
-
-    // Use quadratic bezier curves for smooth appearance
-    const yOf = (i: number) => {
-      const t = Math.max(0, Math.min(1, (sm[i] - dbMin) / dbRange));
-      return specH * (1 - t * 0.90);
-    };
-
-    let x0 = 0, y0 = yOf(0);
-    specP.moveTo(x0, y0);
-    fillP.moveTo(x0, specH);
-    fillP.lineTo(x0, y0);
-
-    for (let i = 1; i < npts; i++) {
-      const x1  = i * xScale;
-      const y1  = yOf(i);
-      const mx  = (x0 + x1) / 2;
-      specP.quadTo(x0, y0, mx, (y0 + y1) / 2);
-      fillP.quadTo(x0, y0, mx, (y0 + y1) / 2);
-      x0 = x1; y0 = y1;
+      if (peakHold) {
+        const pk = frame.peak;
+        const pp = Skia.Path.Make();
+        for (let px = 0; px < width; px++) {
+          const v = pk[Math.floor((px / width) * sLen)];
+          const y = baseline - v * specH;
+          if (px === 0) pp.moveTo(px, y); else pp.lineTo(px, y);
+        }
+        setPeakPath(pp);
+      } else {
+        setPeakPath(null);
+      }
+    } else {
+      setSpecPath(null);
+      setPeakPath(null);
     }
-    specP.lineTo(width, yOf(npts - 1));
-    fillP.lineTo(width, yOf(npts - 1));
-    fillP.lineTo(width, specH);
-    fillP.close();
 
-    setSpecPath(specP);
-    setFillPath(fillP);
-
-    // ── 5. Build peak hold path ──────────────────────────────────────────────
-    const pkDs  = downsample(peak, Math.min(SPEC_PTS, Math.round(width)));
-    const pkSm  = smooth(pkDs, 2); // lighter smoothing on peak
-    const pkP   = Skia.Path.Make();
-    const pkXSc = width / (pkSm.length - 1);
-
-    let px0 = 0, py0 = specH * (1 - Math.max(0, Math.min(1, (pkSm[0] - dbMin) / dbRange)) * 0.90);
-    pkP.moveTo(px0, py0);
-    for (let i = 1; i < pkSm.length; i++) {
-      const px1 = i * pkXSc;
-      const py1 = specH * (1 - Math.max(0, Math.min(1, (pkSm[i] - dbMin) / dbRange)) * 0.90);
-      const mx  = (px0 + px1) / 2;
-      pkP.quadTo(px0, py0, mx, (py0 + py1) / 2);
-      px0 = px1; py0 = py1;
-    }
-    setPeakPath(pkP);
-
-    // ── 6. Smooth scroll animation ───────────────────────────────────────────
+    // 5. Scroll animation timing
     const now = Date.now();
     if (lastFrameTs.current > 0) {
       const dt = now - lastFrameTs.current;
-      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2; // EMA
+      avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
     }
     lastFrameTs.current = now;
-
-    // Slide new row in over the measured inter-frame period (capped 80–600ms)
-    const duration = Math.max(80, Math.min(600, avgFrameMs.current * 1.1));
+    const duration = Math.max(80, Math.min(FRAME_DUR_MAX, avgFrameMs.current * 1.1));
     scrollFrac.value = 0;
     scrollFrac.value = withTiming(1, { duration, easing: Easing.linear });
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bins, dbMin, dbMax, lut, width, specH, rowH, ensureBuffer]);
+  }, [bins]);
 
-  // ── Tuning cursor ──────────────────────────────────────────────────────────
-  const cursorX = useMemo(() => {
-    if (!bwHz || !width) return width / 2;
-    return ((tuneHz - (centerHz - bwHz / 2)) / bwHz) * width;
-  }, [tuneHz, centerHz, bwHz, width]);
+  // Re-colourise instantly on palette change (no waiting for next data frame)
+  useEffect(() => {
+    const buf = idxBuf.current;
+    const n = lastBinCount.current;
+    if (!buf || !n) return;
+    const display = new Uint8Array(n * ROWS * 4);
+    const head = rowHead.current;
+    for (let r = 0; r < ROWS; r++) {
+      const srcOff = ((head - 1 - r + ROWS * 2) % ROWS) * n;
+      const dstOff = r * n * 4;
+      for (let i = 0; i < n; i++) {
+        const l = buf[srcOff + i] * 4;
+        const d = dstOff + i * 4;
+        display[d] = lut[l]; display[d + 1] = lut[l + 1];
+        display[d + 2] = lut[l + 2]; display[d + 3] = 255;
+      }
+    }
+    const img = Skia.Image.MakeImage(
+      { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
+      Skia.Data.fromBytes(display), n * 4,
+    );
+    if (img) setWfImage(img);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lut]);
 
-  const cursorPath = useMemo(() => {
+  // ── Frequency geometry ──────────────────────────────────────────────────────
+  const visStart = centerHz - bwHz / 2;
+  const pxPerHz  = bwHz > 0 ? width / bwHz : 0;
+  const hzToX    = useCallback((hz: number) => (hz - visStart) * pxPerHz,
+    [visStart, pxPerHz]);
+
+  // ── Band plan segments (visible, region-filtered) ───────────────────────────
+  const bandSegs = useMemo(() => {
+    if (!(bwHz > 0)) return [];
+    const visEnd = visStart + bwHz;
+    const segs: Array<{ x0: number; x1: number; color: string; label: string; key: string }> = [];
+    for (const b of BAND_PLAN) {
+      if (b.regions && !b.regions.includes(ituRegion)) continue;
+      if (b.hi < visStart || b.lo > visEnd) continue;
+      const x0 = Math.max(0, hzToX(b.lo));
+      const x1 = Math.min(width, hzToX(b.hi));
+      const px = x1 - x0;
+      if (px <= 0) continue;
+      const label = px < 28 ? '' : px < 60 ? (b.bandLabel ?? b.name.split(' ')[0]) : b.name;
+      segs.push({ x0, x1, color: bandColor(b), label, key: `${b.lo}-${b.hi}` });
+    }
+    return segs;
+  }, [visStart, bwHz, width, ituRegion, hzToX]);
+
+  // ── Frequency ticks ─────────────────────────────────────────────────────────
+  const ticks = useMemo(() => {
+    if (!(bwHz > 0)) return [];
+    const targetTicks  = Math.max(4, Math.min(8, Math.floor(width / 70)));
+    let spacing = niceTick(bwHz / targetTicks);
+    const minGapPx = 52;
+    while (spacing * pxPerHz < minGapPx) spacing *= 2;
+    const first = Math.ceil(visStart / spacing) * spacing;
+    const out: Array<{ x: number; label: string; showLabel: boolean }> = [];
+    let lastLabelX = -999;
+    for (let f = first; f <= visStart + bwHz; f += spacing) {
+      const x = hzToX(f);
+      const showLabel = x - lastLabelX >= minGapPx;
+      if (showLabel) lastLabelX = x;
+      out.push({ x, label: fmtHz(f), showLabel });
+    }
+    return out;
+  }, [visStart, bwHz, width, pxPerHz, hzToX]);
+
+  // ── dB axis labels (5 stops over spectrum panel) ────────────────────────────
+  const dbLabels = useMemo(() => {
+    if (!specShow || specH < 40) return [];
+    const range = liveRange.dbMax - liveRange.dbMin;
+    const out: Array<{ y: number; label: string }> = [];
+    for (let di = 0; di <= 4; di++) {
+      const frac = di / 4;
+      out.push({
+        y: wfTop - frac * specH,
+        label: Math.round(liveRange.dbMin + frac * range) + 'dB',
+      });
+    }
+    return out;
+  }, [specShow, specH, wfTop, liveRange]);
+
+  // ── Needle + sideband geometry (v1.5) ───────────────────────────────────────
+  const needle = useMemo(() => {
+    if (!(bwHz > 0) || !(tuneHz > 0)) return null;
+    const nX = hzToX(tuneHz);
+    let loX = hzToX(tuneHz + filterLow);
+    let hiX = hzToX(tuneHz + filterHigh);
+    const minSbPx = filterLow === 0 && filterHigh === 0 ? 20 : 4;
+    if (nX - loX < minSbPx) loX = nX - minSbPx;
+    if (hiX - nX < minSbPx) hiX = nX + minSbPx;
+    const scale = Math.max(0.25, Math.min(1.0, pxPerHz * 4000));
+    return { nX, loXc: Math.max(0, loX), hiXc: Math.min(width, hiX), loX, hiX, scale };
+  }, [bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
+
+  // ── Skia paints ─────────────────────────────────────────────────────────────
+  const mkLine = useCallback((x: number, y0: number, y1: number) => {
     const p = Skia.Path.Make();
-    p.moveTo(cursorX, 0);
-    p.lineTo(cursorX, height);
-    return p;
-  }, [cursorX, height]);
-
-  // ── Memoised paints ────────────────────────────────────────────────────────
-  const specLinePaint = useMemo(() => {
-    const p = Skia.Paint();
-    p.setColor(Skia.Color('rgba(255,215,60,0.92)'));
-    p.setStrokeWidth(1.5);
-    p.setStyle(1);
-    p.setAntiAlias(true);
+    p.moveTo(x, y0); p.lineTo(x, y1);
     return p;
   }, []);
 
   const peakPaint = useMemo(() => {
     const p = Skia.Paint();
-    p.setColor(Skia.Color('rgba(255,255,255,0.70)'));
+    p.setColor(Skia.Color(hexRgba(needleColor, 0.85)));
     p.setStrokeWidth(1);
     p.setStyle(1);
     p.setAntiAlias(true);
-    // Subtle glow via mask filter
-    p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 1.5, false));
+    p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 2, false));
     return p;
-  }, []);
+  }, [needleColor]);
 
-  const cursorPaint = useMemo(() => {
+  const edgePaint = useMemo(() => {
     const p = Skia.Paint();
-    p.setColor(Skia.Color('rgba(255,70,70,0.80)'));
-    p.setStrokeWidth(1);
+    p.setColor(Skia.Color(hexRgba(needleColor, 0.35)));
+    p.setStrokeWidth(needle?.scale ?? 1);
     p.setStyle(1);
+    p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 8, false));
     return p;
-  }, []);
+  }, [needleColor, needle?.scale]);
 
-  // ── Gesture tracking refs (Pan needs deltas, not cumulative translation) ──
+  const needlePaints = useMemo(() => {
+    const sc = needle?.scale ?? 1;
+    const mk = (alpha: number, blur: number, w: number) => {
+      const p = Skia.Paint();
+      p.setColor(Skia.Color(alpha >= 1 ? needleColor : hexRgba(needleColor, alpha)));
+      p.setStrokeWidth(w);
+      p.setStyle(1);
+      p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, blur, false));
+      return p;
+    };
+    return [
+      mk(0.35, 28 * sc, 1.5 * sc),  // outer halo
+      mk(0.70, 16 * sc, 0.8 * sc),  // mid glow
+      mk(1.00,  6 * sc, 0.5),       // core filament
+    ];
+  }, [needleColor, needle?.scale]);
+
+  // ── Gestures (tap-to-tune / pan / pinch-zoom) ───────────────────────────────
   const lastPanX = useRef(0);
   const lastPanY = useRef(0);
   const pinchRef = useRef(1);
 
-  // ── Tap → tune to frequency at tap X position ─────────────────────────────
   const tapGesture = useMemo(() =>
-    Gesture.Tap()
-      .runOnJS(true)
-      .maxDuration(300)
-      .onEnd(e => {
-        if (!bwHz || !centerHz) return;
-        const hz = Math.round((centerHz - bwHz / 2) + (e.x / width) * bwHz);
-        onTapTune?.(hz);
-      }),
-    [bwHz, centerHz, width, onTapTune],
-  );
+    Gesture.Tap().runOnJS(true).maxDuration(300).onEnd((e: any) => {
+      if (!bwHz || !centerHz) return;
+      if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
+      onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
+    }), [bwHz, centerHz, visStart, width, onTapTune]);
 
-  // ── Pan → horizontal = spectrum pan, vertical = zoom ─────────────────────
   const panGesture = useMemo(() =>
-    Gesture.Pan()
-      .runOnJS(true)
-      .minDistance(4)
+    Gesture.Pan().runOnJS(true).minDistance(4)
       .onStart(() => { lastPanX.current = 0; lastPanY.current = 0; })
-      .onUpdate(e => {
+      .onUpdate((e: any) => {
         const dx = e.translationX - lastPanX.current;
         const dy = e.translationY - lastPanY.current;
         lastPanX.current = e.translationX;
         lastPanY.current = e.translationY;
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          onPanDelta?.(-dx); // drag right = pan spectrum left = lower freqs on right
-        } else {
-          onZoomDelta?.(dy);
-        }
-      }),
-    [onPanDelta, onZoomDelta],
-  );
+        if (Math.abs(dx) >= Math.abs(dy)) onPanDelta?.(-dx);
+        else onZoomDelta?.(dy);
+      }), [onPanDelta, onZoomDelta]);
 
-  // ── Pinch → zoom spectrum ─────────────────────────────────────────────────
   const pinchGesture = useMemo(() =>
-    Gesture.Pinch()
-      .runOnJS(true)
+    Gesture.Pinch().runOnJS(true)
       .onStart(() => { pinchRef.current = 1; })
-      .onUpdate(e => {
+      .onUpdate((e: any) => {
         const delta = e.scale / pinchRef.current;
         pinchRef.current = e.scale;
         onPinchZoom?.(delta);
-      }),
-    [onPinchZoom],
-  );
+      }), [onPinchZoom]);
 
-  // ── Compose: tap or pan (exclusive), pinch simultaneous ──────────────────
   const gesture = useMemo(() =>
-    Gesture.Simultaneous(
-      Gesture.Exclusive(tapGesture, panGesture),
-      pinchGesture,
-    ),
-    [tapGesture, panGesture, pinchGesture],
-  );
+    Gesture.Simultaneous(Gesture.Exclusive(tapGesture, panGesture), pinchGesture),
+    [tapGesture, panGesture, pinchGesture]);
 
-  // ── Clip rect for waterfall (prevents scroll overshooting) ────────────────
-  const wfClip = useMemo(
-    () => Skia.XYWHRect(0, specH, width, wfH),
-    [specH, width, wfH],
-  );
+  const wfClip = useMemo(() => Skia.XYWHRect(0, wfTop, width, wfH),
+    [wfTop, width, wfH]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <GestureDetector gesture={gesture}>
       <View style={[styles.root, { width, height }]}>
         <Canvas style={{ width, height }}>
 
-          {/* ── Spectrum fill ───────────────────────────────────────────────── */}
-          {fillPath && (
-            <Path path={fillPath} style="fill">
-              <LinearGradient
-                start={vec(0, 0)}
-                end={vec(0, specH)}
-                colors={['rgba(255,200,50,0.22)', 'rgba(255,180,30,0.04)']}
-              />
+          {/* Opaque header backing — WebGL parity rgb(2,2,2) */}
+          <Rect x={0} y={0} width={width} height={wfTop} color="rgb(2,2,2)" />
+
+          {/* ── Band plan strip ── */}
+          {bandSegs.map(s => (
+            <Rect key={s.key} x={s.x0} y={0} width={s.x1 - s.x0} height={BAND_H}
+                  color={s.color} />
+          ))}
+          <Rect x={0} y={BAND_H - 1} width={width} height={1}
+                color="rgba(255,200,80,0.25)" />
+
+          {/* ── Ticker backing + tick marks ── */}
+          <Rect x={0} y={tickTop} width={width} height={TICK_H}
+                color="rgba(0,10,4,0.85)" />
+          {ticks.map((t, i) => (
+            <Rect key={i} x={t.x - 0.5} y={tickTop} width={1} height={5}
+                  color="rgba(0,180,60,0.45)" />
+          ))}
+
+          {/* ── Spectrum: LUT-gradient fill, faint dB reference lines, peak ── */}
+          {specShow && dbLabels.map((d, i) => (
+            <Rect key={i} x={0} y={d.y} width={width} height={0.5}
+                  color="rgba(255,180,0,0.12)" />
+          ))}
+          {specShow && specPath && (
+            <Path path={specPath} style="fill">
+              <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
+                              colors={specGradColors} />
             </Path>
           )}
+          {specShow && peakHold && peakPath && (
+            <Path path={peakPath} paint={peakPaint} />
+          )}
 
-          {/* ── Peak hold line ──────────────────────────────────────────────── */}
-          {peakPath && <Path path={peakPath} paint={peakPaint} />}
-
-          {/* ── Spectrum line ───────────────────────────────────────────────── */}
-          {specPath && <Path path={specPath} paint={specLinePaint} />}
-
-          {/* ── Waterfall (smooth-scrolling, clipped) ───────────────────────── */}
+          {/* ── Waterfall ── */}
           {wfImage && (
             <Group clip={wfClip}>
-              <SkiaImage
-                image={wfImage}
-                x={0}
-                y={specH}
-                width={width}
-                height={wfH}
-                transform={wfTransform}
-                fit="fill"
-              />
+              <SkiaImage image={wfImage} x={0} y={wfTop}
+                         width={width} height={wfRenderH}
+                         transform={wfTransform} fit="fill" />
             </Group>
           )}
 
-          {/* ── Tuning cursor ────────────────────────────────────────────────── */}
-          <Path path={cursorPath} paint={cursorPaint} />
+          {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
+          {needle && needle.nX > needle.loXc && (
+            <Rect x={needle.loXc} y={BAND_H}
+                  width={needle.nX - needle.loXc} height={height - BAND_H}>
+              <LinearGradient
+                start={vec(needle.loXc, 0)} end={vec(needle.nX, 0)}
+                colors={[hexRgba(needleColor, 0.03), hexRgba(needleColor, 0.06),
+                         hexRgba(needleColor, 0.14), hexRgba(needleColor, 0.28)]}
+                positions={[0, 0.15, 0.55, 1]} />
+            </Rect>
+          )}
+          {needle && needle.hiXc > needle.nX && (
+            <Rect x={needle.nX} y={BAND_H}
+                  width={needle.hiXc - needle.nX} height={height - BAND_H}>
+              <LinearGradient
+                start={vec(needle.nX, 0)} end={vec(needle.hiXc, 0)}
+                colors={[hexRgba(needleColor, 0.28), hexRgba(needleColor, 0.14),
+                         hexRgba(needleColor, 0.06), hexRgba(needleColor, 0.03)]}
+                positions={[0, 0.45, 0.85, 1]} />
+            </Rect>
+          )}
+          {needle && needle.loXc > 0 && (
+            <Path path={mkLine(needle.loXc, BAND_H, height)} paint={edgePaint} />
+          )}
+          {needle && needle.hiXc < width && (
+            <Path path={mkLine(needle.hiXc, BAND_H, height)} paint={edgePaint} />
+          )}
+
+          {/* ── LED needle: halo → glow → filament ── */}
+          {needle && needlePaints.map((p, i) => (
+            <Path key={i} path={mkLine(needle.nX, 0, height)} paint={p} />
+          ))}
 
         </Canvas>
+
+        {/* ── Text overlays (RN Text — crisp, uses expo-font faces) ── */}
+
+        {/* Band labels — clipped to segment width, white with dark shadow */}
+        {bandSegs.filter(s => s.label).map(s => (
+          <View key={'bl' + s.key} pointerEvents="none"
+                style={[styles.bandLabelWrap,
+                        { left: s.x0 + 2, width: s.x1 - s.x0 - 4, height: BAND_H }]}>
+            <Text numberOfLines={1}
+                  style={[styles.bandLabel, { fontFamily }]}>{s.label}</Text>
+          </View>
+        ))}
+
+        {/* Ticker labels — green LED glow */}
+        {ticks.filter(t => t.showLabel).map((t, i) => (
+          <Text key={'tk' + i} pointerEvents="none"
+                style={[styles.tickLabel, { fontFamily, left: t.x - 40, top: tickTop + 5 }]}>
+            {t.label}
+          </Text>
+        ))}
+
+        {/* dB axis — amber, left edge of spectrum */}
+        {dbLabels.map((d, i) => (
+          <Text key={'db' + i} pointerEvents="none"
+                style={[styles.dbLabel, { fontFamily, top: d.y - 14 }]}>
+            {d.label}
+          </Text>
+        ))}
+
       </View>
     </GestureDetector>
   );
 }
 
+// ── Styles (typography from v1.5 canvas calls) ───────────────────────────────
+
 const styles = StyleSheet.create({
   root: { overflow: 'hidden', backgroundColor: '#000' },
+  bandLabelWrap: {
+    position: 'absolute', top: 0,
+    alignItems: 'center', justifyContent: 'flex-end',
+    overflow: 'hidden', paddingBottom: 2,
+  },
+  bandLabel: {
+    fontSize: 9, fontWeight: 'bold', color: '#ffffff',
+    textShadowColor: 'rgba(0,0,0,0.9)', textShadowRadius: 3,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  tickLabel: {
+    position: 'absolute', width: 80, textAlign: 'center',
+    fontSize: 11, fontWeight: 'bold', color: '#00aa33',
+    textShadowColor: '#00cc44', textShadowRadius: 5,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  dbLabel: {
+    position: 'absolute', left: 4,
+    fontSize: 11, fontWeight: 'bold', color: 'rgba(255,180,60,0.90)',
+    textShadowColor: 'rgba(0,0,0,0.75)', textShadowRadius: 2.5,
+    textShadowOffset: { width: 0, height: 0 },
+  },
 });

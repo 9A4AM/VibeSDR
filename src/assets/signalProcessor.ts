@@ -1,0 +1,336 @@
+/**
+ * signalProcessor.ts — M9PSY signal compression pipeline + UberSDR auto-range
+ *
+ * Original compression maths by M9PSY (Nathan / MadPsy) from vibeWaterfall.ts v1.5.
+ * Auto-range algorithm extracted verbatim from UberSDR's spectrum-display.js
+ * (updateAutoRange) — the exact algorithm that keeps the web waterfall calibrated.
+ * Ported to TypeScript for VibeSDR v2 by Stuey3D + Claude.
+ *
+ * This module owns ALL FFT-data→display mapping. It receives raw dBFS
+ * Float32Arrays from UberSDRClient (server applies NO smoothing on the
+ * user-spectrum WS) and produces:
+ *   - row:  Uint8Array of 0–255 LUT indices for the waterfall ring buffer
+ *   - spec: Float32Array of normalised [0,1] spectrum trace values
+ *   - peak: Float32Array of normalised [0,1] peak-hold values
+ *   - dbMin/dbMax: the live auto-ranged window (for the dB axis labels)
+ *
+ * Pipeline per frame (order matters — matches v1.5 addFftLine):
+ *   0. Flush detection: settings change OR band change > 40% of visible BW
+ *   1. Resample source bins → processor width (nearest)
+ *   2. Auto-range update (UberSDR algorithm) or manual range passthrough
+ *   3. Temporal EMA in raw dBFS domain (waterfall: alpha=1, i.e. raw —
+ *      server data on this WS is unsmoothed but full-rate; kept as a hook)
+ *   4. Spatial 5-tap weighted smooth [1,2,3,2,1]/9 (waterfall path only)
+ *   5. Spectrum EMA — time-normalised so it looks identical at all FPS,
+ *      rise alpha = 4 × fall alpha (fast attack, slow decay)
+ *   6. Peak hold: per-bin max with 10 dB/s linear decay
+ *   7. Normalise → 0–255, clip threshold 14.97 → 0, re-stretch remainder
+ *   8. Brightness offset + unsharp mask + S-curve contrast (CPU port of the
+ *      v1.5 WebGL fragment shader) → final LUT index
+ */
+
+// ── Constants (M9PSY / v1.5) ─────────────────────────────────────────────────
+
+const CLIP_THRESHOLD       = 14.97; // 0–255 units; bins below → 0 (noise floor clip)
+const PEAK_DECAY_DB_PER_S  = 10;    // peak hold linear decay
+const BAND_FLUSH_FRAC      = 0.4;   // recentre > 40% of visible BW → flush history
+
+// ── Constants (UberSDR spectrum-display.js auto-range) ──────────────────────
+
+const RANGE_MARGIN         = 5;     // dB margin added beyond floor/ceiling
+const NOISE_PERCENTILE     = 0.10;  // 10th percentile = noise floor estimate
+const MIN_HISTORY_MS       = 2000;  // noise-floor smoothing window
+const MAX_HISTORY_MS       = 5000;  // ceiling smoothing window (faster recovery)
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export interface SignalProcessorSettings {
+  /** 0–20 dB symmetric contrast: floor +N, ceiling −N. UberSDR web uses 10. */
+  autoContrast:    number;
+  /** Manual range override (wfCoarse='manual'). When set, auto-range is bypassed. */
+  manualRange:     { minDb: number; maxDb: number } | null;
+  /** −20…+20 dB offset applied to the spectrum trace floor (not waterfall). */
+  specFloor:       number;
+  /** Spectrum peak amplitude scale ×0.1 (10 = 1.0×). */
+  specPeakScale:   number;
+  /** 1–10 spectrum trace EMA smoothing frames (1 = instant). */
+  smoothingFrames: number;
+  /** 5-tap spatial waterfall smooth on/off. */
+  spatialSmooth:   boolean;
+  /** Peak hold on/off. */
+  peakHold:        boolean;
+  /** −20…+20 dB brightness offset (waterfall only). */
+  wfBrightness:    number;
+  /** −10…+10 S-curve contrast (waterfall only). 0 = identity. */
+  wfContrast:      number;
+  /** 0–10 unsharp-mask sharpness (waterfall only). */
+  wfSharpness:     number;
+}
+
+export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
+  autoContrast:    10,      // matches UberSDR web client's fixed autoContrast
+  manualRange:     null,
+  specFloor:       0,
+  specPeakScale:   10,
+  smoothingFrames: 5,
+  spatialSmooth:   true,
+  peakHold:        true,
+  wfBrightness:    0,
+  wfContrast:      0,
+  wfSharpness:     0,
+};
+
+export interface ProcessedFrame {
+  /** LUT indices, length = bin count of this frame. */
+  row:   Uint8Array;
+  /** Normalised [0,1] spectrum trace, same length. */
+  spec:  Float32Array;
+  /** Normalised [0,1] peak hold, same length (zeros when peakHold off). */
+  peak:  Float32Array;
+  /** Live display window after auto-range + contrast. */
+  dbMin: number;
+  dbMax: number;
+}
+
+// ── Processor ────────────────────────────────────────────────────────────────
+
+export class SignalProcessor {
+  private settings: SignalProcessorSettings = { ...DEFAULT_PROCESSOR_SETTINGS };
+
+  // Working buffers (lazily sized to bin count)
+  private dbAvg:      Float32Array | null = null;  // temporal EMA (waterfall)
+  private specSmooth: Float32Array | null = null;  // spectrum EMA (dBFS)
+  private peakLine:   Float32Array | null = null;  // peak hold (dBFS)
+  private tmp:        Float32Array | null = null;  // spatial smooth scratch
+  private normRow:    Float32Array | null = null;  // 0–1 scratch for shader port
+  private outRow:     Uint8Array   | null = null;
+  private outSpec:    Float32Array | null = null;
+  private outPeak:    Float32Array | null = null;
+
+  // Auto-range state (UberSDR algorithm)
+  private minHistory: Array<{ value: number; ts: number }> = [];
+  private maxHistory: Array<{ value: number; ts: number }> = [];
+  private actualMinDb = -120;
+  private actualMaxDb = -20;
+
+  // Frame timing + flush detection
+  private lastFrameMs    = 0;
+  private prevCenterHz   = 0;
+  private settingsVer    = 0;
+  private settingsVerApp = 0;
+
+  /** Patch settings. Range-affecting changes flush history (matches v1.5). */
+  applySettings(patch: Partial<SignalProcessorSettings>) {
+    const rangeKeys: Array<keyof SignalProcessorSettings> =
+      ['autoContrast', 'manualRange', 'wfBrightness', 'wfContrast', 'wfSharpness'];
+    const rangeChanged = rangeKeys.some(
+      k => patch[k] !== undefined && patch[k] !== this.settings[k],
+    );
+    this.settings = { ...this.settings, ...patch };
+    if (patch.peakHold === false) this.peakLine = null;
+    if (rangeChanged) this.settingsVer++;
+  }
+
+  getSettings(): SignalProcessorSettings { return { ...this.settings }; }
+
+  /** Current auto-ranged window (for dB axis labels between frames). */
+  getRange(): { dbMin: number; dbMax: number } {
+    return { dbMin: this.actualMinDb, dbMax: this.actualMaxDb };
+  }
+
+  /** Process one raw dBFS frame. bins length may change between frames. */
+  process(bins: Float32Array, centerHz: number, bwHz: number): ProcessedFrame {
+    const n = bins.length;
+    const s = this.settings;
+    const now = Date.now();
+    const dtSec = this.lastFrameMs
+      ? Math.min(0.5, Math.max(0.01, (now - this.lastFrameMs) / 1000))
+      : 0.1;
+    this.lastFrameMs = now;
+
+    // ── 0a. Resize buffers if bin count changed ─────────────────────────────
+    if (!this.dbAvg || this.dbAvg.length !== n) {
+      this.dbAvg      = new Float32Array(n);
+      this.specSmooth = new Float32Array(n);
+      this.peakLine   = null;
+      this.tmp        = new Float32Array(n);
+      this.normRow    = new Float32Array(n);
+      this.outRow     = new Uint8Array(n);
+      this.outSpec    = new Float32Array(n);
+      this.outPeak    = new Float32Array(n);
+      this.dbAvg.set(bins);       // zero settling delay — prime from real data
+      this.specSmooth.set(bins);
+      this.minHistory = [];
+      this.maxHistory = [];
+    }
+
+    // ── 0b. Flush on settings change ────────────────────────────────────────
+    if (this.settingsVerApp !== this.settingsVer) {
+      this.settingsVerApp = this.settingsVer;
+      this.dbAvg.set(bins);
+      this.minHistory = [];
+      this.maxHistory = [];
+    }
+
+    // ── 0c. Flush on band change (> 40% of visible bandwidth) ───────────────
+    if (centerHz && this.prevCenterHz && bwHz > 0 &&
+        Math.abs(centerHz - this.prevCenterHz) > bwHz * BAND_FLUSH_FRAC) {
+      this.dbAvg.set(bins);
+      this.specSmooth!.set(bins);
+      this.peakLine = null;
+      this.minHistory = [];
+      this.maxHistory = [];
+    }
+    if (centerHz) this.prevCenterHz = centerHz;
+
+    // ── 2. Auto-range (UberSDR updateAutoRange, verbatim port) ──────────────
+    if (s.manualRange) {
+      this.actualMinDb = s.manualRange.minDb;
+      this.actualMaxDb = s.manualRange.maxDb;
+    } else {
+      const values: number[] = [];
+      let absoluteMax = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const db = bins[i];
+        if (isFinite(db)) {
+          values.push(db);
+          if (db > absoluteMax) absoluteMax = db;
+        }
+      }
+      if (values.length > 0) {
+        values.sort((a, b) => a - b);
+        const floorIdx  = Math.floor(values.length * NOISE_PERCENTILE);
+        const targetMin = Math.floor(values[floorIdx] - RANGE_MARGIN);
+        const targetMax = Math.ceil(absoluteMax + RANGE_MARGIN);
+
+        this.minHistory.push({ value: targetMin, ts: now });
+        this.minHistory = this.minHistory.filter(m => now - m.ts <= MIN_HISTORY_MS);
+        this.maxHistory.push({ value: targetMax, ts: now });
+        this.maxHistory = this.maxHistory.filter(m => now - m.ts <= MAX_HISTORY_MS);
+
+        const avgMin = this.minHistory.reduce((a, m) => a + m.value, 0) / this.minHistory.length;
+        const avgMax = this.maxHistory.reduce((a, m) => a + m.value, 0) / this.maxHistory.length;
+
+        this.actualMinDb = avgMin + s.autoContrast;
+        this.actualMaxDb = avgMax - s.autoContrast;
+      }
+    }
+    // Guard: never collapse the window below 10 dB
+    if (this.actualMaxDb - this.actualMinDb < 10) {
+      const mid = (this.actualMaxDb + this.actualMinDb) / 2;
+      this.actualMinDb = mid - 5;
+      this.actualMaxDb = mid + 5;
+    }
+    const dbRange = this.actualMaxDb - this.actualMinDb;
+
+    // ── 3. Temporal EMA in dBFS (waterfall) — alpha 1.0 = raw passthrough ───
+    // (v1.5 used alpha 1.0 because UberSDR's shared channel pre-smooths; the
+    //  private user-spectrum WS is raw, but at 10 Hz raw looks correct. Hook
+    //  retained so a future setting can soften it.)
+    this.dbAvg.set(bins);
+
+    // ── 4. Spatial 5-tap smooth [1,2,3,2,1]/9 (waterfall only) ──────────────
+    const tmp = this.tmp!;
+    const a = this.dbAvg;
+    if (s.spatialSmooth && n >= 5) {
+      tmp[0]     = (a[0] * 3 + a[1] * 2) / 5;
+      tmp[1]     = (a[0] + a[1] * 2 + a[2] * 2) / 5;
+      tmp[n - 1] = (a[n - 2] * 2 + a[n - 1] * 3) / 5;
+      tmp[n - 2] = (a[n - 3] + a[n - 2] * 2 + a[n - 1] * 2) / 5;
+      for (let k = 2; k < n - 2; k++) {
+        tmp[k] = (a[k - 2] + a[k - 1] * 2 + a[k] * 3 + a[k + 1] * 2 + a[k + 2]) / 9;
+      }
+    } else {
+      tmp.set(a);
+    }
+
+    // ── 5. Spectrum EMA — time-normalised, rise 4× faster than fall ─────────
+    const spec = this.specSmooth!;
+    const noSmooth  = s.smoothingFrames <= 1;
+    const tcSec     = noSmooth ? 0 : (s.smoothingFrames - 1) / 20;
+    const fallAlpha = noSmooth ? 1.0
+      : Math.min(0.95, 1.0 - Math.exp(-dtSec / Math.max(0.01, tcSec)));
+    const riseAlpha = noSmooth ? 1.0 : Math.min(0.95, fallAlpha * 4);
+
+    // ── 6. Peak hold seed (only once spec has signal) ────────────────────────
+    if (s.peakHold && !this.peakLine) {
+      let hasSignal = false;
+      for (let i = 0; i < n; i++) if (spec[i] !== 0) { hasSignal = true; break; }
+      if (hasSignal) this.peakLine = new Float32Array(spec);
+    }
+    const pk = this.peakLine;
+
+    // ── 5/6/7 combined per-bin loop (matches v1.5 Pass 3) ───────────────────
+    const norm = this.normRow!;
+    const brightDb = s.wfBrightness; // dB-domain brightness (equivalent to shader u_bright)
+    for (let j = 0; j < n; j++) {
+      // Spectrum EMA
+      const ta = tmp[j] > spec[j] ? riseAlpha : fallAlpha;
+      spec[j] += ta * (tmp[j] - spec[j]);
+      // Peak hold: rise to current, else 10 dB/s decay
+      if (s.peakHold && pk) {
+        const cur = spec[j];
+        pk[j] = cur > pk[j] ? cur : pk[j] - PEAK_DECAY_DB_PER_S * dtSec;
+      }
+      // Waterfall: normalise (+brightness), clip floor, re-stretch
+      const nrm = Math.max(0, Math.min(1, (tmp[j] + brightDb - this.actualMinDb) / dbRange));
+      let mag = nrm * 255;
+      mag = mag < CLIP_THRESHOLD ? 0 : ((mag - CLIP_THRESHOLD) / (255 - CLIP_THRESHOLD)) * 255;
+      norm[j] = mag / 255;
+    }
+
+    // ── 8. Shader port: unsharp mask + S-curve contrast → LUT index ─────────
+    const out = this.outRow!;
+    const sharp = s.wfSharpness * 0.05;          // 0–10 → 0–0.5 (shader u_sharp range)
+    const contrast = Math.max(-1, Math.min(1, s.wfContrast / 10)); // → u_contrast
+    for (let j = 0; j < n; j++) {
+      let c = norm[j];
+      if (sharp > 0) {
+        const l = norm[j > 0 ? j - 1 : j];
+        const r = norm[j < n - 1 ? j + 1 : j];
+        c = c + sharp * (c - (l + r) * 0.5);
+      }
+      const raw = Math.max(0, Math.min(1, c));
+      const sCurve = raw * raw * (3 - 2 * raw); // smoothstep
+      const v = contrast > 0
+        ? raw + (sCurve - raw) * contrast            // mix(raw, s, contrast)
+        : raw + ((raw * 0.5 + 0.25) - raw) * -contrast; // flatten midtones
+      out[j] = Math.max(0, Math.min(255, Math.round(v * 255)));
+    }
+
+    // ── Normalised spectrum / peak outputs ───────────────────────────────────
+    const oSpec = this.outSpec!;
+    const oPeak = this.outPeak!;
+    const sf = dbRange > 0 ? s.specFloor / dbRange : 0;
+    const sp = s.specPeakScale / 10;
+    for (let j = 0; j < n; j++) {
+      const ns = Math.max(0, Math.min(1, (spec[j] - this.actualMinDb) / dbRange));
+      oSpec[j] = Math.max(0, Math.min(1, (ns + sf) * sp));
+      if (s.peakHold && pk) {
+        const np = Math.max(0, Math.min(1, (pk[j] - this.actualMinDb) / dbRange));
+        oPeak[j] = Math.max(0, Math.min(1, (np + sf) * sp));
+      } else {
+        oPeak[j] = 0;
+      }
+    }
+
+    return {
+      row:   out,
+      spec:  oSpec,
+      peak:  oPeak,
+      dbMin: this.actualMinDb,
+      dbMax: this.actualMaxDb,
+    };
+  }
+
+  /** Full reset (reconnect / instance change). */
+  reset() {
+    this.dbAvg = null;
+    this.specSmooth = null;
+    this.peakLine = null;
+    this.minHistory = [];
+    this.maxHistory = [];
+    this.lastFrameMs = 0;
+    this.prevCenterHz = 0;
+  }
+}

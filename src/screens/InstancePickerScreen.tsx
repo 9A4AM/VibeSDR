@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { CommonActions } from '@react-navigation/native';
 import {
   ActivityIndicator,
   Alert,
@@ -105,7 +104,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
 
       if (!cancelled && dEarly) {
         const match = allInst.find(i => i.url === dEarly.url);
-        navigation.dispatch(CommonActions.reset({ index: 1, routes: [{ name: 'InstancePicker' }, { name: 'SDR', params: { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: match?.longitude ?? null } }] }));
+        navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: match?.longitude ?? null });
       }
     }
 
@@ -150,7 +149,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
         return;
       }
       setConnecting(false);
-      navigation.dispatch(CommonActions.reset({ index: 1, routes: [{ name: 'InstancePicker' }, { name: 'SDR', params: { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude } }] }));
+      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude });
     } catch (e: any) {
       setConnecting(false);
       Alert.alert('Connection Error', e.message ?? 'Could not reach server');

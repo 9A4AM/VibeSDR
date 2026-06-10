@@ -36,7 +36,7 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={cancel}
+      onRequestClose={() => {/* intentionally not dismissible via system gesture */}}
     >
       <KeyboardAvoidingView
         style={styles.overlay}
@@ -52,7 +52,7 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
             value={pw}
             onChangeText={setPw}
             secureTextEntry
-            autoFocus
+            autoFocus={false}
             returnKeyType="go"
             onSubmitEditing={submit}
           />

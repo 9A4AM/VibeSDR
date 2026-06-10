@@ -50,8 +50,11 @@ const FLAG_DELTA_F32 = 0x02;
 const FLAG_FULL_U8   = 0x03;
 const FLAG_DELTA_U8  = 0x04;
 
-const U8_MIN_DBFS = -160;
-const U8_MAX_DBFS = 0;
+// binary8 encoding (user_spectrum_websocket.go sendBinary8Spectrum):
+//   uint8 = clamp(dBFS, -256, 0) + 256  →  decode: dBFS = uint8 - 256
+// (0 = -256 dB, 255 = -1 dB). The previous -160..0 linear mapping was WRONG
+// and distorted every dB value entering the waterfall/auto-range/SNR pipeline.
+const U8_DBFS_OFFSET = -256;
 
 // ── Client class ──────────────────────────────────────────────────────────────
 
@@ -147,6 +150,62 @@ export class UberSDRClient {
   resetView() {
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
+  }
+
+  /**
+   * SNR squelch (audio gate) — gates audio when SNR is below threshold.
+   * minSnr ≤ -999 disables (open squelch). Sends set_audio_gate.
+   */
+  setAudioGate(minSnr: number) {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_audio_gate', min_snr: minSnr }));
+  }
+
+  /**
+   * FM/NFM squelch — gates by carrier SNR. squelchDb ≤ -999 = open.
+   * Currently feature-flagged off in UberSDR server (FM_SQUELCH_ENABLED=false).
+   */
+  setSquelch(squelchDb: number) {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_squelch', squelchOpen: squelchDb }));
+  }
+
+  /**
+   * NR mode — cycles client-side NR. Mirrors toggleNR2Quick() in app.js.
+   * 'off' | 'nr' (Wiener engine) | 'nr2' (RLMS engine).
+   * Sent via spectrum WS using set_nr_mode.
+   */
+  setNRMode(mode: 'off' | 'nr' | 'nr2') {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_nr_mode', mode }));
+  }
+
+  /**
+   * Noise blanker on/off. Mirrors toggleNBQuick() in app.js.
+   */
+  setNoiseBlanker(enabled: boolean) {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_nb', enabled }));
+  }
+
+  /**
+   * Server-side DSP (noise reduction insert).
+   * enable=true: send set_dsp with filter name and params.
+   * enable=false: send set_dsp disabled.
+   */
+  setDsp(enabled: boolean, filter?: string, params?: Record<string, number>) {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    if (enabled && filter) {
+      this.spectrumWs.send(JSON.stringify({ type: 'set_dsp', enabled: true, filter, params: params ?? {} }));
+    } else {
+      this.spectrumWs.send(JSON.stringify({ type: 'set_dsp', enabled: false }));
+    }
+  }
+
+  /** Update server DSP params mid-stream without toggling on/off. */
+  setDspParams(params: Record<string, number>) {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.spectrumWs.send(JSON.stringify({ type: 'set_dsp_params', params }));
   }
 
   getStatus(): SDRStatus { return { ...this.status }; }
@@ -310,9 +369,8 @@ export class UberSDRClient {
       this.bins = new Float32Array(u8.length);
       this.status.binCount = u8.length;
     }
-    const scale = (U8_MAX_DBFS - U8_MIN_DBFS) / 255;
     for (let i = 0; i < u8.length; i++) {
-      this.bins[i] = U8_MIN_DBFS + u8[i] * scale;
+      this.bins[i] = u8[i] + U8_DBFS_OFFSET; // dBFS = uint8 - 256
     }
     this._emitSpectrum(frequency);
   }
@@ -321,14 +379,13 @@ export class UberSDRClient {
     const view  = new DataView(body);
     if (body.byteLength < 2) return;
     const changeCount = view.getUint16(0, true);
-    const scale = (U8_MAX_DBFS - U8_MIN_DBFS) / 255;
     let offset = 2;
     for (let i = 0; i < changeCount; i++) {
       if (offset + 3 > body.byteLength) break;
       const idx = view.getUint16(offset, true);
       const val = view.getUint8(offset + 2);
       offset += 3;
-      if (idx < this.bins.length) this.bins[idx] = U8_MIN_DBFS + val * scale;
+      if (idx < this.bins.length) this.bins[idx] = val + U8_DBFS_OFFSET; // dBFS = uint8 - 256
     }
     this._emitSpectrum(frequency);
   }

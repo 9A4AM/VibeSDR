@@ -16,9 +16,10 @@
  */
 
 import React, {
-  useCallback, useEffect, useMemo, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
+  Animated,
   Share,
   StyleSheet,
   Text,
@@ -199,7 +200,8 @@ const pm = StyleSheet.create({
   unit:    { letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2, flexShrink: 0 },
   modeBtn: { borderTopRightRadius: 5, borderBottomRightRadius: 5,
              borderLeftWidth: 1, borderLeftColor: 'rgba(70,60,45,0.45)',
-             alignItems: 'center', justifyContent: 'center', gap: 2, flexShrink: 0 },
+             alignItems: 'center', justifyContent: 'center', gap: 2, flexShrink: 0,
+             minWidth: 84 },
   modeLbl: { fontWeight: 'bold', textShadowColor: 'rgba(255,160,0,0.6)',
              textShadowOffset: { width:0,height:0 }, textShadowRadius: 5 },
   snr:     { fontSize: 9, textAlign: 'center' },
@@ -240,6 +242,47 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
+  // Recording pulse — menu button border cycles red
+  const recPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (isRecording) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(recPulse, { toValue: 1, duration: 2500, useNativeDriver: false }),
+          Animated.timing(recPulse, { toValue: 0, duration: 2500, useNativeDriver: false }),
+        ])
+      ).start();
+    } else {
+      recPulse.stopAnimation();
+      recPulse.setValue(0);
+    }
+  }, [isRecording, recPulse]);
+
+  // Chat unread pulse — chat button border cycles blue
+  const chatPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (chatUnread) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(chatPulse, { toValue: 1, duration: 2500, useNativeDriver: false }),
+          Animated.timing(chatPulse, { toValue: 0, duration: 2500, useNativeDriver: false }),
+        ])
+      ).start();
+    } else {
+      chatPulse.stopAnimation();
+      chatPulse.setValue(0);
+    }
+  }, [chatUnread, chatPulse]);
+
+  const menuBorderColor = recPulse.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [t.btnBorder, 'rgba(255,60,60,1.00)'],
+  });
+  const chatBorderColor = chatPulse.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [t.btnBorder, 'rgba(100,180,255,1.00)'],
+  });
+
   // All dp values go through s.r() — port of applyUiScale()'s r() function
   const SIG_H      = s.r(34);
   const DRUM_H     = s.r(60);
@@ -249,17 +292,16 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const BTN_H      = s.r(36);
   const ICON_SZ    = s.r(20);
   const HBURG_W    = s.r(16);
-  // Freq pill sizing — from skin line 4315: font-size r(17), width r(110) at small; r(26)/r(148) at normal
-  // We use the same formula: base values scaled
-  const FREQ_FONT  = s.r(26);
-  const FREQ_W     = s.r(148);
+  // Freq/mode sizing — read from theme so white mode can increase them
+  const FREQ_FONT  = s.r(t.freqSize);
+  const FREQ_W     = s.r(t.freqWidth);
   const UNIT_FONT  = s.r(11);
-  const MODE_FONT  = s.r(14);
-  const MODE_LS    = s.f(1.5);
-  const SNR_W      = s.r(58);
+  const MODE_FONT  = s.r(t.modeSize);
+  const MODE_LS    = s.f(t.modeLs);
+  const SNR_W      = s.r(t.name === 'white' ? 86 : 78);
   const PILL_PAD_H = s.r(10);
   const PILL_PAD_V = s.r(5);
-  const MODE_PAD_H = s.r(11);
+  const MODE_PAD_H = s.r(10);
   const MODE_PAD_V = s.r(6);
   const PILL_GAP   = s.r(5);
   const BTN_FONT   = s.f(t.btnSize);
@@ -270,7 +312,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       {/* Row 1 — signal bar */}
       <View style={[por.sigFrame, { height: SIG_H }]}
-            onLayout={e => setSigW(e.nativeEvent.layout.width)}>
+            onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} />
         <FreqModePill
           freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
@@ -297,22 +339,26 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         </TouchableOpacity>
 
         {/* MENU */}
-        <TouchableOpacity
-          style={[por.btn, { minHeight: BTN_H, borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
-          onPress={onMenu} activeOpacity={0.75}
-        >
-          <Hamburger color={t.btnText} lineW={HBURG_W} />
-        </TouchableOpacity>
+        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: menuBorderColor, borderWidth: 1 }]}>
+          <TouchableOpacity
+            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+            onPress={onMenu} activeOpacity={0.75}
+          >
+            <Hamburger color={t.btnText} lineW={HBURG_W} />
+          </TouchableOpacity>
+        </Animated.View>
 
         {/* CHAT */}
-        <TouchableOpacity
-          style={[por.btn, { minHeight: BTN_H, borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder }]}
-          onPress={onChat} activeOpacity={0.75}
-        >
-          <Canvas style={{ width: ICON_SZ, height: ICON_SZ }}>
-            <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
-          </Canvas>
-        </TouchableOpacity>
+        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1 }]}>
+          <TouchableOpacity
+            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+            onPress={onChat} activeOpacity={0.75}
+          >
+            <Canvas style={{ width: ICON_SZ, height: ICON_SZ }}>
+              <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
+            </Canvas>
+          </TouchableOpacity>
+        </Animated.View>
 
         {/* SHARE */}
         <TouchableOpacity
@@ -372,12 +418,13 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const SIG_H     = s.r(48);
   const GAP       = s.r(6);
   const BTN_W     = s.r(56);
-  const FREQ_FONT = s.r(16);   // from skin line 4359: r(16) in landscape
-  const FREQ_W    = s.r(110);  // from skin line 4359: r(110) in landscape
+  // Landscape sizes are smaller than portrait but still scale with theme
+  const FREQ_FONT = s.r(t.name === 'white' ? 20 : 16);
+  const FREQ_W    = s.r(t.name === 'white' ? 132 : 110);
   const UNIT_FONT = s.r(8);
-  const MODE_FONT = s.r(11);
-  const MODE_LS   = s.f(1.0);
-  const SNR_W     = s.r(52);
+  const MODE_FONT = s.r(t.name === 'white' ? 13 : 11);
+  const MODE_LS   = s.f(t.modeLs > 1.5 ? 1.2 : 1.0);
+  const SNR_W     = s.r(t.name === 'white' ? 86 : 78);
   const PILL_PAD_H = s.r(5);
   const PILL_PAD_V = s.r(3);
   const MODE_PAD_H = s.r(7);
@@ -422,7 +469,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* Signal bar + pill (flex:2) */}
       <View style={{ flex: 2, justifyContent: 'center' }}
-            onLayout={e => setSigW(e.nativeEvent.layout.width)}>
+            onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} />
           <FreqModePill
@@ -526,13 +573,16 @@ export default function ControlsBar({
         paddingTop: PAD_TOP,
         paddingHorizontal: PAD_H,
         paddingBottom: Math.max(bottomInset, s.r(10)),
-        borderTopLeftRadius: RADIUS,
-        borderTopRightRadius: RADIUS,
+        borderRadius: RADIUS,
       },
     ]}>
-      <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
-      <View style={[root.border, { borderTopLeftRadius: RADIUS, borderTopRightRadius: RADIUS,
-                                    borderColor: t.barBorder }]}
+      {/* High-intensity blur so waterfall colour bleeds through the pill */}
+      <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+      {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
+      <View style={[StyleSheet.absoluteFill, root.tint, { borderRadius: RADIUS }]}
+            pointerEvents="none" />
+      {/* Border ring */}
+      <View style={[root.border, { borderRadius: RADIUS, borderColor: t.barBorder }]}
             pointerEvents="none" />
       {s.isLandscape
         ? <LandscapeBar {...shared} />
@@ -551,9 +601,13 @@ const root = StyleSheet.create({
     shadowRadius: 12,
     elevation: 12,
   },
+  // Semi-transparent tint: waterfall colours show through but content is legible
+  tint: {
+    backgroundColor: 'rgba(8,6,2,0.55)',
+    inset: 1,              // keeps tint inside the border ring visually
+  },
   border: {
     ...StyleSheet.absoluteFill,
     borderWidth: 1,
-    borderBottomWidth: 0,
   },
 });

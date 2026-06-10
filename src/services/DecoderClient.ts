@@ -1,0 +1,318 @@
+/**
+ * DecoderClient.ts — native port of the skin's confirmed-working decoder wiring
+ * (Scalable_Mobile_UI v6.3.1 initLsvDecoder, verified against the UberSDR Go
+ * source: dxcluster_websocket.go + audio_extension_manager.go).
+ *
+ * HOW IT WORKS (this is the skin's mechanism, not client-side DSP):
+ *   The decoders are UberSDR SERVER audio extensions. The client opens the
+ *   DX-cluster WebSocket — /ws/dxcluster?user_session_id={uuid} — using the
+ *   SAME session uuid as the audio stream (the extension taps that session's
+ *   demodulated audio server-side), sends:
+ *       { type: 'audio_extension_attach', extension_name, params }
+ *   and receives binary frames in the per-extension protocols below. On stop:
+ *       { type: 'audio_extension_detach' }
+ *   The server allows ONE active extension per session — attaching a new one
+ *   tears down the previous automatically.
+ *
+ * Extension names + params (skin DECODERS registry, verbatim):
+ *   rtty   → 'fsk'    { center_frequency:1000, shift, baud_rate, inverted,
+ *                       framing: enc==='CCIR476' ? '4/7' : '5N1.5', encoding }
+ *   navtex → 'navtex' { center_frequency:500, shift:170, baud_rate:100,
+ *                       inverted:false, framing:'4/7', encoding:'CCIR476' }
+ *   wefax  → 'wefax'  { lpm, carrier:1900, deviation:400, image_width:1809,
+ *                       bandwidth:1, use_phasing:true, auto_stop:true, auto_start:true }
+ *   sstv   → 'sstv'   {}
+ *   morse  → 'morse'  {}
+ *   whisper→ 'whisper'{ language }
+ *
+ * Binary protocols (all multi-byte ints BIG-endian, per the skin parsers):
+ *   RTTY/NAVTEX: 0x01 text  — u32 len @9, utf8 @13
+ *                0x03 state — u8 @1: 0 no-signal, 1/2 sync, 3 decoding (rtty)
+ *                0x02 sync  — (navtex)
+ *   WEFAX:       0x01 line  — u32 lineNo @1, u32 width @5, pixels u8[] @9
+ *                0x02 START, 0x03 transmission complete
+ *   SSTV:        0x07 imageStart — u32 w @1, u32 h @5
+ *                0x01 line — u32 lineNo @1, u32 width @5, rgb? u8[] @9
+ *                0x02 mode — u16 len @1, name @3
+ *                0x03 status — u8 code @1, u16 len @2, text @4
+ *                0x04 sync · 0x05 image complete
+ *   MORSE:       0x10 decoded — u8 conf @1 (0 high…3 poor), f32 pitch @6,
+ *                f32 wpm @10, u32 len @14, utf8 @18
+ *                0x11 tracking — f32 pitch @1, f32 wpm @5
+ *                0x12 error — u32 len @1, utf8 @5
+ *   WHISPER:     0x02 segments — u32 jsonLen @9, JSON @13:
+ *                [{ completed, text }, …] — append completed segment text
+ */
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper';
+
+export interface RttySettings {
+  shift:    number;            // 170 | 200 | 425 | 450 | 850
+  baud:     number;            // 45.45 | 50 | 75 | 100
+  encoding: 'ITA2' | 'ASCII' | 'CCIR476';
+  inverted: boolean;
+}
+
+/** Skin RPRESETS, verbatim. */
+export const RTTY_PRESETS: Record<string, RttySettings> = {
+  ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
+  weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
+  'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
+};
+
+export type MorseQuality = 'all' | 'low' | 'medium' | 'high';
+
+export interface DecoderCallbacks {
+  onText:       (text: string) => void;
+  onStatus:     (status: string) => void;
+  /** 'idle' | 'sync' | 'rx' | 'active' — drives the decoder panel dot. */
+  onDot:        (dot: 'idle' | 'sync' | 'rx' | 'active') => void;
+  /** Image decoders (WEFAX/SSTV) — one scanline of pixel data. */
+  onImageLine?: (lineNo: number, width: number, pixels: Uint8Array) => void;
+  onImageStart?:(width: number, height: number) => void;
+  onImageDone?: () => void;
+  onError?:     (msg: string) => void;
+}
+
+// ── Client ───────────────────────────────────────────────────────────────────
+
+export class DecoderClient {
+  private baseUrl: string;
+  private uuid:    string;
+  private ws:      WebSocket | null = null;
+  private cb:      DecoderCallbacks;
+  private active:  DecoderName | null = null;
+  private destroyed = false;
+  private retries   = 0;
+
+  // Per-decoder user settings
+  rttySettings:  RttySettings = { ...RTTY_PRESETS.ham };
+  wefaxLpm       = 120;
+  whisperLang    = 'auto';
+  morseQuality: MorseQuality = 'all';
+
+  constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.uuid    = uuid;
+    this.cb      = callbacks;
+  }
+
+  /** Start a decoder. Replaces any running one (server enforces one/session). */
+  start(name: DecoderName) {
+    this.active = name;
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this._attach();
+    } else {
+      this._open();
+    }
+  }
+
+  /** Stop decoding; keeps the WS warm for quick decoder switches. */
+  stop() {
+    this.active = null;
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      try { this.ws.send(JSON.stringify({ type: 'audio_extension_detach' })); } catch {}
+    }
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.stop();
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  // ── Connection ─────────────────────────────────────────────────────────────
+
+  private _open() {
+    if (this.destroyed) return;
+    const url = this.baseUrl.replace(/^http/, 'ws')
+      + `/ws/dxcluster?user_session_id=${this.uuid}`;
+    const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.retries = 0;
+      if (this.active) this._attach();
+    };
+    ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        this._handleBin(new Uint8Array(e.data));
+      }
+      // JSON traffic on this WS (DX spots, attach acks) — acks update status
+      else if (typeof e.data === 'string') {
+        try {
+          const m = JSON.parse(e.data);
+          if (m.type === 'audio_extension_attached') this.cb.onStatus('attached');
+          else if (m.type === 'audio_extension_error' && m.message) {
+            this.cb.onError?.(String(m.message));
+          }
+        } catch {}
+      }
+    };
+    ws.onclose = () => {
+      if (this.destroyed) return;
+      this.ws = null;
+      if (this.active && this.retries < 5) {
+        this.retries++;
+        this.cb.onStatus('waiting for ws…');
+        setTimeout(() => this._open(), 2000);
+      }
+    };
+    ws.onerror = () => { /* onclose handles retry */ };
+  }
+
+  private _attach() {
+    if (!this.ws || !this.active) return;
+    const { extension_name, params } = this._paramsFor(this.active);
+    this.ws.send(JSON.stringify({
+      type: 'audio_extension_attach', extension_name, params,
+    }));
+    this.cb.onStatus('attached');
+    this.cb.onDot('idle');
+  }
+
+  /** Skin DECODERS getParams, verbatim. */
+  private _paramsFor(name: DecoderName): { extension_name: string; params: Record<string, unknown> } {
+    switch (name) {
+      case 'rtty': {
+        const S = this.rttySettings;
+        return { extension_name: 'fsk', params: {
+          center_frequency: 1000, shift: S.shift, baud_rate: S.baud,
+          inverted: S.inverted,
+          framing: S.encoding === 'CCIR476' ? '4/7' : '5N1.5',
+          encoding: S.encoding,
+        }};
+      }
+      case 'navtex':
+        return { extension_name: 'navtex', params: {
+          center_frequency: 500, shift: 170, baud_rate: 100,
+          inverted: false, framing: '4/7', encoding: 'CCIR476',
+        }};
+      case 'wefax':
+        return { extension_name: 'wefax', params: {
+          lpm: this.wefaxLpm, carrier: 1900, deviation: 400,
+          image_width: 1809, bandwidth: 1,
+          use_phasing: true, auto_stop: true, auto_start: true,
+        }};
+      case 'sstv':    return { extension_name: 'sstv',    params: {} };
+      case 'morse':   return { extension_name: 'morse',   params: {} };
+      case 'whisper': return { extension_name: 'whisper', params: { language: this.whisperLang } };
+    }
+  }
+
+  // ── Binary frame routing (skin handleBin parsers, verbatim) ────────────────
+
+  private _handleBin(u8: Uint8Array) {
+    const name = this.active;
+    if (!name || u8.length === 0) return;
+    const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const t = u8[0];
+
+    if (name === 'rtty' || name === 'navtex') {
+      if (t === 0x01) {
+        if (u8.length < 13) return;
+        const tl = v.getUint32(9, false);
+        if (tl <= 0 || u8.length < 13 + tl) return;
+        this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
+        this.cb.onDot('active');
+      } else if (name === 'rtty' && t === 0x03) {
+        if (u8.length < 2) return;
+        const s = u8[1];
+        this.cb.onStatus(['no signal', 'sync 1', 'sync 2', 'decoding'][s] ?? 'state ' + s);
+        this.cb.onDot(s === 3 ? 'active' : s >= 1 ? 'sync' : 'idle');
+      } else if (name === 'navtex' && t === 0x02) {
+        this.cb.onDot('sync');
+      }
+
+    } else if (name === 'wefax') {
+      if (t === 0x01) {
+        if (u8.length < 9) return;
+        const ln = v.getUint32(1, false);
+        const w  = v.getUint32(5, false);
+        this.cb.onImageLine?.(ln, w, u8.subarray(9));
+        this.cb.onDot('rx');
+      } else if (t === 0x02) { this.cb.onStatus('START received'); this.cb.onDot('sync'); }
+      else if (t === 0x03) {
+        this.cb.onStatus('transmission complete');
+        this.cb.onDot('active');
+        this.cb.onImageDone?.();
+      }
+
+    } else if (name === 'sstv') {
+      if (t === 0x07) {
+        const w = v.getUint32(1, false), h = v.getUint32(5, false);
+        this.cb.onImageStart?.(w, h); this.cb.onDot('sync');
+      } else if (t === 0x01) {
+        const ln = v.getUint32(1, false), w = v.getUint32(5, false);
+        this.cb.onImageLine?.(ln, w, u8.subarray(9));
+        this.cb.onDot('rx');
+      } else if (t === 0x02) {
+        const ml = v.getUint16(1, false);
+        this.cb.onStatus('mode: ' + utf8(u8.subarray(3, 3 + ml)));
+      } else if (t === 0x03) {
+        const sl = v.getUint16(2, false);
+        this.cb.onStatus(utf8(u8.subarray(4, 4 + sl)));
+      } else if (t === 0x05) {
+        this.cb.onStatus('image complete'); this.cb.onDot('active'); this.cb.onImageDone?.();
+      } else if (t === 0x04) { this.cb.onDot('sync'); this.cb.onStatus('sync detected'); }
+
+    } else if (name === 'morse') {
+      if (t === 0x10) {
+        if (u8.length < 18) return;
+        const conf  = u8[1];
+        const pitch = v.getFloat32(6, false);
+        const wpm   = v.getFloat32(10, false);
+        const tlen  = v.getUint32(14, false);
+        if (u8.length < 18 + tlen) return;
+        const confName = (['high', 'medium', 'low', 'poor'][conf] ?? 'poor') as
+          'high' | 'medium' | 'low' | 'poor';
+        const rank    = { high: 3, medium: 2, low: 1, poor: 0 }[confName];
+        const minRank = { all: 0, low: 1, medium: 2, high: 3 }[this.morseQuality];
+        if (rank >= minRank) this.cb.onText(utf8(u8.subarray(18, 18 + tlen)));
+        this.cb.onDot('active');
+        this.cb.onStatus(`${Math.round(pitch)}Hz · ${wpm.toFixed(1)} WPM · ${confName}`);
+      } else if (t === 0x11) {
+        if (u8.length < 9) return;
+        this.cb.onStatus(`${Math.round(v.getFloat32(1, false))}Hz · ${v.getFloat32(5, false).toFixed(1)} WPM`);
+        this.cb.onDot('sync');
+      } else if (t === 0x12) {
+        if (u8.length < 5) return;
+        const ml = v.getUint32(1, false);
+        this.cb.onStatus('error: ' + utf8(u8.subarray(5, 5 + ml)));
+        this.cb.onDot('idle');
+      }
+
+    } else if (name === 'whisper') {
+      if (t === 0x02) {
+        if (u8.length < 13) return;
+        const jlen = v.getUint32(9, false);
+        if (u8.length < 13 + jlen) return;
+        try {
+          const segs = JSON.parse(utf8(u8.subarray(13, 13 + jlen)));
+          if (Array.isArray(segs)) {
+            for (const seg of segs) {
+              if (seg?.completed && seg.text) this.cb.onText(seg.text + '\n');
+            }
+            this.cb.onDot('active');
+          }
+        } catch {}
+      }
+    }
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function utf8(u8: Uint8Array): string {
+  // TextDecoder exists in Hermes ≥ RN 0.74; fall back to manual decode
+  try { return new TextDecoder('utf-8').decode(u8); }
+  catch {
+    let s = '';
+    for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+    return s;
+  }
+}

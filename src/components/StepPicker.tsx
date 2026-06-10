@@ -1,10 +1,19 @@
+/**
+ * StepPicker — bottom-sheet tuning step selector.
+ * Theme-aware: uses ThemeContext for font/colour tokens.
+ */
+
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Colors, Fonts } from '../constants/theme';
+import {
+  Modal, StyleSheet, Text, TouchableOpacity,
+  TouchableWithoutFeedback, View,
+} from 'react-native';
 import { STEPS_HZ } from '../services/sdrTypes';
+import { useTheme } from '../contexts/ThemeContext';
 
 function stepLabel(hz: number): string {
-  if (hz >= 1000) return (hz / 1000) + ' kHz';
+  if (hz >= 1_000_000) return (hz / 1_000_000) + ' MHz';
+  if (hz >= 1_000)     return (hz / 1_000) + ' kHz';
   return hz + ' Hz';
 }
 
@@ -16,62 +25,76 @@ interface StepPickerProps {
 }
 
 export default function StepPicker({ visible, currentStep, onSelect, onClose }: StepPickerProps) {
+  const { theme: t } = useTheme();
+  const isWhite = t.name === 'white';
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.picker} pointerEvents="box-none">
-        {STEPS_HZ.map(hz => (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+      <View style={StyleSheet.absoluteFill}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={st.backdrop} />
+        </TouchableWithoutFeedback>
+        <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
+          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
+            TUNING STEP
+          </Text>
+          <View style={st.grid}>
+            {STEPS_HZ.map(hz => (
+              <TouchableOpacity
+                key={hz}
+                style={[
+                  st.btn,
+                  { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
+                    paddingVertical: isWhite ? 14 : 12 },
+                  hz === currentStep && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                ]}
+                onPress={() => { onSelect(hz); onClose(); }}
+                hitSlop={4} activeOpacity={0.75}
+              >
+                <Text style={[
+                  st.btnText,
+                  { fontFamily: t.font, fontSize: isWhite ? 15 : 14,
+                    color: isWhite ? 'rgba(255,255,255,0.55)' : 'rgba(150,100,30,0.70)' },
+                  hz === currentStep && { color: t.btnActiveText },
+                ]}>
+                  {stepLabel(hz)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <TouchableOpacity
-            key={hz}
-            style={[styles.item, hz === currentStep && styles.itemActive]}
-            onPress={() => { onSelect(hz); onClose(); }}
+            style={[st.closeBtn, { borderColor: t.btnBorder }]}
+            onPress={onClose} activeOpacity={0.75}
           >
-            <Text style={[styles.itemText, hz === currentStep && styles.itemTextActive]}>
-              {stepLabel(hz)}
+            <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>
+              CLOSE
             </Text>
           </TouchableOpacity>
-        ))}
+        </View>
       </View>
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+const st = StyleSheet.create({
+  backdrop:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.52)' },
+  sheet: {
+    backgroundColor: 'rgba(8,6,1,0.97)',
+    borderTopWidth: 1,
+    borderTopLeftRadius: 14, borderTopRightRadius: 14,
+    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40,
   },
-  picker: {
-    position:    'absolute',
-    bottom:      160,
-    left:        20,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    borderWidth:  1,
-    borderColor:  'rgba(255,160,0,0.25)',
-    borderRadius: 8,
-    padding:      5,
-    gap:          3,
+  sheetLabel:    { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
+  grid:          { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  btn: {
+    width: '22%', flexGrow: 1, backgroundColor: 'transparent',
+    borderWidth: 1, borderRadius: 3,
+    paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center',
   },
-  item: {
-    backgroundColor: 'transparent',
-    borderWidth:     1,
-    borderColor:     'rgba(80,50,0,0.4)',
-    borderRadius:    4,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+  btnText:       { textAlign: 'center' },
+  closeBtn: {
+    alignSelf: 'center', marginTop: 14, backgroundColor: 'transparent',
+    borderWidth: 1, borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,
   },
-  itemActive: {
-    backgroundColor: 'rgba(20,10,0,0.9)',
-    borderColor:     'rgba(160,90,0,0.65)',
-  },
-  itemText: {
-    fontFamily:    Fonts.mono,
-    fontSize:      11,
-    color:         'rgba(150,100,30,0.85)',
-    letterSpacing: 0.5,
-    textAlign:     'center',
-  },
-  itemTextActive: {
-    color: Colors.amber,
-  },
+  closeBtnText:  { fontSize: 11, textAlign: 'center' },
 });

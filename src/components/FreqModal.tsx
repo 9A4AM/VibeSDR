@@ -1,19 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+  Keyboard, KeyboardAvoidingView, Modal, Platform,
+  Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors, Fonts } from '../constants/theme';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
+import { useTheme } from '../contexts/ThemeContext';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -39,13 +31,14 @@ function fromDisplay(val: string, unit: Unit): number {
 }
 
 export default function FreqModal({ visible, currentHz, onConfirm, onClose }: FreqModalProps) {
+  const { theme: t } = useTheme();
+  const isWhite = t.name === 'white';
   const [unit, setUnit]   = useState<Unit>('khz');
   const [value, setValue] = useState('');
   const inputRef          = useRef<TextInput>(null);
 
-  // Load persisted unit once on mount
   useEffect(() => {
-    AsyncStorage.getItem('lsv_fq_unit').then(u => {
+    AsyncStorage.getItem('lsv_fq_unit').then((u: string | null) => {
       if (u === 'hz' || u === 'khz' || u === 'mhz') setUnit(u as Unit);
     }).catch(() => {});
   }, []);
@@ -67,29 +60,31 @@ export default function FreqModal({ visible, currentHz, onConfirm, onClose }: Fr
 
   const confirm = () => {
     const hz = fromDisplay(value, unit);
-    if (hz >= MIN_FREQ_HZ && hz <= MAX_FREQ_HZ) {
-      onConfirm(hz);
-      onClose();
-    }
+    if (hz >= MIN_FREQ_HZ && hz <= MAX_FREQ_HZ) { onConfirm(hz); onClose(); }
     Keyboard.dismiss();
   };
 
-  const unitLabel = unit === 'hz' ? 'Hz' : unit === 'khz' ? 'kHz' : 'MHz';
+  const dimText  = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(150,100,30,0.65)';
+  const unitText = isWhite ? '#b0b8c8' : '#886600';
+  const bdrDim   = isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)';
+  const bdrBrt   = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(160,90,0,0.60)';
+  const btnPadY  = isWhite ? 12 : 10;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+      <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.center}
-        pointerEvents="box-none"
+        style={st.center} pointerEvents="box-none"
       >
-        <View style={styles.modal}>
-          <Text style={styles.title}>FREQUENCY</Text>
-          <View style={styles.inputRow}>
+        <View style={[st.modal, { borderColor: t.barBorder }]}>
+          <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>
+            FREQUENCY
+          </Text>
+          <View style={[st.inputRow, { borderBottomColor: t.barBorder }]}>
             <TextInput
               ref={inputRef}
-              style={styles.input}
+              style={[st.input, { color: t.freqColor, fontFamily: t.font }]}
               value={value}
               onChangeText={setValue}
               keyboardType="decimal-pad"
@@ -99,27 +94,47 @@ export default function FreqModal({ visible, currentHz, onConfirm, onClose }: Fr
               onSubmitEditing={confirm}
               returnKeyType="done"
             />
-            <Text style={styles.unitLabel}>{unitLabel}</Text>
+            <Text style={[st.unitLabel, { color: unitText, fontFamily: t.font }]}>
+              {unit === 'hz' ? 'Hz' : unit === 'khz' ? 'kHz' : 'MHz'}
+            </Text>
           </View>
-          <View style={styles.units}>
+          <View style={st.units}>
             {(['hz', 'khz', 'mhz'] as Unit[]).map(u => (
               <TouchableOpacity
                 key={u}
-                style={[styles.unitBtn, unit === u && styles.unitBtnActive]}
+                style={[
+                  st.unitBtn,
+                  { borderColor: bdrDim, paddingVertical: btnPadY },
+                  unit === u && { borderColor: bdrBrt, backgroundColor: t.btnActiveBg },
+                ]}
                 onPress={() => switchUnit(u)}
               >
-                <Text style={[styles.unitBtnText, unit === u && styles.unitBtnTextActive]}>
+                <Text style={[
+                  st.unitBtnText,
+                  { fontFamily: t.font, color: dimText },
+                  unit === u && { color: t.btnActiveText },
+                ]}>
                   {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-              <Text style={styles.cancelText}>CANCEL</Text>
+          <View style={st.actions}>
+            <TouchableOpacity
+              style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
+              onPress={onClose}
+            >
+              <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: dimText }}>
+                CANCEL
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.tuneBtn} onPress={confirm}>
-              <Text style={styles.tuneText}>TUNE ▶</Text>
+            <TouchableOpacity
+              style={[st.tuneBtn, { borderColor: bdrBrt, paddingVertical: btnPadY }]}
+              onPress={confirm}
+            >
+              <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: t.freqColor, fontWeight: 'bold' }}>
+                TUNE ▶
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -128,115 +143,18 @@ export default function FreqModal({ visible, currentHz, onConfirm, onClose }: Fr
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.58)',
-  },
-  center: {
-    ...StyleSheet.absoluteFill,
-    justifyContent: 'flex-start',
-    alignItems:     'center',
-    paddingTop:     44,
-  },
-  modal: {
-    backgroundColor: 'rgba(8,6,1,0.97)',
-    borderWidth:     1,
-    borderColor:     'rgba(255,160,0,0.38)',
-    borderRadius:    12,
-    padding:         20,
-    width:           '90%',
-    maxWidth:        360,
-  },
-  title: {
-    textAlign:     'center',
-    fontFamily:    'Courier',
-    fontSize:      10,
-    letterSpacing: 3,
-    color:         Colors.textDim,
-    marginBottom:  14,
-  },
-  inputRow: {
-    flexDirection:   'row',
-    alignItems:      'flex-end',
-    gap:             6,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,160,0,0.30)',
-    paddingBottom:   6,
-    marginBottom:    8,
-  },
-  input: {
-    flex:           1,
-    fontFamily:     'Courier',
-    fontSize:       32,
-    letterSpacing:  3,
-    color:          Colors.amber,
-    padding:        4,
-    backgroundColor: 'transparent',
-  },
-  unitLabel: {
-    fontFamily:    'Courier',
-    fontSize:      11,
-    letterSpacing: 2,
-    color:         Colors.unit,
-    paddingBottom: 6,
-  },
-  units: {
-    flexDirection:  'row',
-    gap:            6,
-    marginBottom:   16,
-  },
-  unitBtn: {
-    flex:            1,
-    borderWidth:     1,
-    borderColor:     'rgba(80,50,0,0.4)',
-    borderRadius:    3,
-    paddingVertical: 6,
-    alignItems:      'center',
-    backgroundColor: 'transparent',
-  },
-  unitBtnActive: {
-    backgroundColor: 'rgba(20,10,0,0.8)',
-    borderColor:     'rgba(160,90,0,0.6)',
-  },
-  unitBtnText: {
-    fontFamily: Fonts.mono,
-    fontSize:   11,
-    color:      Colors.textDim,
-  },
-  unitBtnTextActive: {
-    color: Colors.amber,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap:           10,
-  },
-  cancelBtn: {
-    flex:            1,
-    borderWidth:     1,
-    borderColor:     'rgba(80,50,0,0.4)',
-    borderRadius:    3,
-    paddingVertical: 10,
-    alignItems:      'center',
-  },
-  cancelText: {
-    fontFamily: Fonts.mono,
-    fontSize:   12,
-    color:      Colors.textDim,
-  },
-  tuneBtn: {
-    flex:            2,
-    backgroundColor: 'rgba(20,10,0,0.8)',
-    borderWidth:     1,
-    borderColor:     Colors.borderBright,
-    borderRadius:    3,
-    paddingVertical: 10,
-    alignItems:      'center',
-  },
-  tuneText: {
-    fontFamily: Fonts.mono,
-    fontSize:   12,
-    color:      Colors.amber,
-    fontWeight: 'bold',
-  },
+const st = StyleSheet.create({
+  backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
+  center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 44 },
+  modal:        { backgroundColor: 'rgba(8,6,1,0.97)', borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
+  title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
+  inputRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 6, borderBottomWidth: 1, paddingBottom: 6, marginBottom: 8 },
+  input:        { flex: 1, fontSize: 32, letterSpacing: 3, padding: 4, backgroundColor: 'transparent' },
+  unitLabel:    { fontSize: 11, letterSpacing: 2, paddingBottom: 6 },
+  units:        { flexDirection: 'row', gap: 6, marginBottom: 16 },
+  unitBtn:      { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center', backgroundColor: 'transparent' },
+  unitBtnText:  { fontSize: 11 },
+  actions:      { flexDirection: 'row', gap: 10 },
+  cancelBtn:    { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center' },
+  tuneBtn:      { flex: 2, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderRadius: 3, alignItems: 'center' },
 });
