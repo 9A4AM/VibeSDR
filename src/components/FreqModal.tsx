@@ -14,6 +14,9 @@ interface FreqModalProps {
   currentHz: number;
   onConfirm: (hz: number) => void;
   onClose:   () => void;
+  /** Controlled unit — selection here also drives the main frequency display. */
+  unit?:     Unit;
+  onUnit?:   (u: Unit) => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -30,18 +33,23 @@ function fromDisplay(val: string, unit: Unit): number {
   return Math.round(n * 1e6);
 }
 
-export default function FreqModal({ visible, currentHz, onConfirm, onClose }: FreqModalProps) {
+export default function FreqModal({
+  visible, currentHz, onConfirm, onClose,
+  unit: unitProp, onUnit,
+}: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
-  const [unit, setUnit]   = useState<Unit>('khz');
+  const [unitState, setUnitState] = useState<Unit>('khz');
+  const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
   const inputRef          = useRef<TextInput>(null);
 
   useEffect(() => {
+    if (unitProp !== undefined) return; // controlled by SDRScreen
     AsyncStorage.getItem('lsv_fq_unit').then((u: string | null) => {
-      if (u === 'hz' || u === 'khz' || u === 'mhz') setUnit(u as Unit);
+      if (u === 'hz' || u === 'khz' || u === 'mhz') setUnitState(u as Unit);
     }).catch(() => {});
-  }, []);
+  }, [unitProp]);
 
   useEffect(() => {
     if (visible) {
@@ -53,7 +61,8 @@ export default function FreqModal({ visible, currentHz, onConfirm, onClose }: Fr
 
   const switchUnit = (u: Unit) => {
     const hz = fromDisplay(value, unit);
-    setUnit(u);
+    setUnitState(u);
+    onUnit?.(u);
     AsyncStorage.setItem('lsv_fq_unit', u).catch(() => {});
     if (hz > 0) setValue(toDisplay(hz, u));
   };

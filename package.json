@@ -15,6 +15,7 @@
     "expo-haptics": "~56.0.3",
     "expo-keep-awake": "^56.0.3",
     "expo-status-bar": "~56.0.4",
+    "pako": "^2.1.0",
     "react": "19.2.3",
     "react-native": "0.85.3",
     "react-native-gesture-handler": "~2.31.1",
@@ -26,6 +27,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@types/pako": "^2.0.4",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "^56.0.14",
     "typescript": "~6.0.3"

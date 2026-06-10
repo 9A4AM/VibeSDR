@@ -42,11 +42,17 @@ import { STEPS, type SDRMode } from '../services/sdrTypes';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function formatHz(hz: number): string {
-  return hz >= 1_000_000 ? (hz / 1_000_000).toFixed(3) : (hz / 1_000).toFixed(3);
+export type FreqUnit = 'hz' | 'khz' | 'mhz';
+
+// Display follows the user's chosen unit (FreqModal selection) and always
+// shows full Hz resolution — never silently truncates digits.
+function formatHz(hz: number, unit: FreqUnit): string {
+  if (unit === 'hz')  return Math.round(hz).toLocaleString('en-US');
+  if (unit === 'mhz') return (hz / 1e6).toFixed(6);
+  return (hz / 1_000).toFixed(3);
 }
-function freqUnit(hz: number): string {
-  return hz >= 1_000_000 ? 'MHz' : 'kHz';
+function freqUnitLabel(unit: FreqUnit): string {
+  return unit === 'hz' ? 'Hz' : unit === 'mhz' ? 'MHz' : 'kHz';
 }
 function formatStep(s: number): string {
   return s >= 1_000_000 ? s / 1_000_000 + 'M'
@@ -120,6 +126,7 @@ export interface ControlsBarProps {
   onChat?:       () => void;
   onFreqTap?:    () => void;
   onModeTap?:    () => void;
+  freqUnit?:     FreqUnit;
   instanceHost?: string;
   isRecording?:  boolean;
   recSeconds?:   number;
@@ -527,12 +534,13 @@ export default function ControlsBar({
   onMenu, onChat, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
   isRecording = false, recSeconds = 0, chatUnread = false,
+  freqUnit = 'khz',
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
 
-  const freqStr   = useMemo(() => formatHz(frequency),  [frequency]);
-  const unit      = useMemo(() => freqUnit(frequency),   [frequency]);
+  const freqStr   = useMemo(() => formatHz(frequency, freqUnit), [frequency, freqUnit]);
+  const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
   const snrText   = useMemo(() => snrToText(snrDb),      [snrDb]);
   const clock     = useClock();

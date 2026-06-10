@@ -34,10 +34,13 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
 import { UberSDRClient, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
-import { DecoderClient }                               from '../services/DecoderClient';
+import { DecoderClient, RTTY_PRESETS,
+         type RttySettings, type MorseQuality,
+         type SpotRow, type SpotsKind }                from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { MIN_HZ, MAX_HZ, STEPS }                       from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
+import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance }                          from '../services/defaultInstance';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
@@ -57,6 +60,7 @@ import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const LSV_PX_STEP = 22;
+const BW_ZOOM_OCTAVE_PX = 40;   // drum px per 2× waterfall zoom
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -150,6 +154,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [menuOpen,      setMenuOpen]      = useState(false);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
+
+  // Frequency display unit — chosen in FreqModal, drives the main readout too.
+  const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_fq_unit').then((u: string | null) => {
+      if (u === 'hz' || u === 'khz' || u === 'mhz') setFreqUnit(u);
+    }).catch(() => {});
+  }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
 
   // ── Signal / SNR ──────────────────────────────────────────────────────────
@@ -256,10 +268,23 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
+      onSpot: (s) => {
+        if (s.kind !== spotsKindRef.current) return;
+        setSpots((prev: SpotRow[]) => [s, ...prev].slice(0, 200));
+      },
     });
     decoderClient.current = dc;
     return () => { dc.destroy(); decoderClient.current = null; };
   }, [baseUrl, sessionUuid]);
+
+  // Selected decoder mode — persists across stop/start (skin _mode vs _on)
+  const [selDecoder, setSelDecoder] =
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null>(null);
+
+  // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders
+  const [spotsKind, setSpotsKind] = useState<SpotsKind | null>(null);
+  const [spots,     setSpots]     = useState<SpotRow[]>([]);
+  const spotsKindRef = useRef<SpotsKind | null>(null);
 
   const openDecoder = useCallback((type: DecoderType) => {
     setActiveDecoder(type);
@@ -267,7 +292,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoderText('');
     setDecoderStatus('listening…');
     setDecoding(false);
-    setMenuOpen(false);
     decoderImageRef.current?.reset();
     if (!type) return;
     if (type === 'ft8') {
@@ -287,6 +311,72 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     setDecoderText('');
     setDecoderStatus('listening…');
+  }, []);
+
+  const stopSpots = useCallback(() => {
+    decoderClient.current?.stopSpots();
+    spotsKindRef.current = null;
+    setSpotsKind(null);
+  }, []);
+
+  // Menu decoder toggle — skin semantics: same mode running → stop (selection
+  // kept, settings stay visible); otherwise select + start. Menu stays open.
+  // Spots and audio decoders share the panel — starting one stops the other.
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => {
+    if (activeDecRef.current === m) {
+      closeDecoder();
+      setSelDecoder(m); // closeDecoder clears running state; keep selection
+    } else {
+      stopSpots();
+      setSelDecoder(m);
+      openDecoder(m);
+    }
+  }, [closeDecoder, openDecoder, stopSpots]);
+
+  // Spots toggle (menu Server Extensions DIGITAL/CW — skin lsvSpots)
+  const onSpotsToggle = useCallback((k: SpotsKind) => {
+    if (spotsKindRef.current === k) {
+      stopSpots();
+    } else {
+      closeDecoder();
+      setSpots([]);
+      spotsKindRef.current = k;
+      setSpotsKind(k);
+      decoderClient.current?.startSpots(k);
+    }
+  }, [closeDecoder, stopSpots]);
+
+  // RTTY settings — applying requires a re-attach (server reads params at attach)
+  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.ham });
+  const onRttySettings = useCallback((s: RttySettings) => {
+    setRttySettings(s);
+    const dc = decoderClient.current;
+    if (!dc) return;
+    dc.rttySettings = { ...s };
+    if (activeDecRef.current === 'rtty') {
+      setDecoderStatus('re-attaching…');
+      dc.start('rtty');
+    }
+  }, []);
+
+  // Morse quality — client-side filter in DecoderClient, no re-attach needed
+  const [morseQuality, setMorseQuality] = useState<MorseQuality>('all');
+  const onMorseQuality = useCallback((q: MorseQuality) => {
+    setMorseQuality(q);
+    if (decoderClient.current) decoderClient.current.morseQuality = q;
+  }, []);
+
+  // WEFAX LPM — same re-attach rule
+  const [wefaxLpm, setWefaxLpm] = useState(120);
+  const onWefaxLpm = useCallback((lpm: number) => {
+    setWefaxLpm(lpm);
+    const dc = decoderClient.current;
+    if (!dc) return;
+    dc.wefaxLpm = lpm;
+    if (activeDecRef.current === 'wefax') {
+      setDecoderStatus('re-attaching…');
+      dc.start('wefax');
+    }
   }, []);
 
   // ── Display style — wired to ThemeContext so the whole app re-renders ────────
@@ -396,12 +486,22 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── BW drum ───────────────────────────────────────────────────────────────
 
+  // Gesture accumulator: drum ticks arrive as small px deltas (rounding them
+  // per-event gives factor 1 = no-op), and the server snaps binBandwidth to a
+  // ladder (small factors snap back to the same step). So compound the whole
+  // gesture from the bandwidth captured at gesture start.
+  const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
     const s = c.getStatus();
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
-    const factor = Math.pow(0.85, Math.round(pxDelta / 25));
-    c.zoom(s.centerHz, Math.max(1, s.binBandwidth * factor));
+    const a = bwZoomAcc.current;
+    const now = Date.now();
+    if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.px = 0; }
+    a.t = now;
+    a.px += pxDelta;
+    // 40px of drum travel per zoom octave (2×) — tune BW_ZOOM_OCTAVE_PX to taste
+    c.zoom(s.centerHz, Math.max(0.5, a.base * Math.pow(0.5, a.px / BW_ZOOM_OCTAVE_PX)));
   }, []);
 
   const onZoomIn = useCallback(() => {
@@ -430,17 +530,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.pan(s.centerHz + Math.round((dxPx / screenW) * s.bwHz));
   }, [screenW]);
 
-  const onWfZoomDelta = useCallback((dyPx: number) => {
+  // Same gesture-accumulator pattern as the BW drum (ladder snap-back).
+  const wfZoomAcc = useRef({ base: 0, f: 1, t: 0 });
+  const wfZoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
     const s = c.getStatus(); if (!s.binBandwidth || !s.centerHz) return;
-    c.zoom(s.centerHz, Math.max(1, s.binBandwidth * Math.pow(0.985, dyPx)));
+    const a = wfZoomAcc.current;
+    const now = Date.now();
+    if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.f = 1; }
+    a.t = now;
+    a.f *= factor;
+    c.zoom(s.centerHz, Math.max(0.5, a.base * a.f));
   }, []);
 
+  const onWfZoomDelta = useCallback((dyPx: number) => {
+    wfZoomBy(Math.pow(0.985, dyPx));
+  }, [wfZoomBy]);
+
   const onWfPinchZoom = useCallback((scaleDelta: number) => {
-    const c = client.current; if (!c) return;
-    const s = c.getStatus(); if (!s.binBandwidth || !s.centerHz) return;
-    c.zoom(s.centerHz, Math.max(1, s.binBandwidth / scaleDelta));
-  }, []);
+    wfZoomBy(1 / scaleDelta);
+  }, [wfZoomBy]);
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
@@ -511,7 +620,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
-      {/* Waterfall — fills full screen */}
+      {/* Waterfall — fills screen below the status bar / Dynamic Island so the
+          band plan strip is never hidden under the notch */}
+      <View style={{ marginTop: insets.top }}>
       <WaterfallView
         bins={bins}
         binCount={status.binCount}
@@ -525,7 +636,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfCoarse={wfCoarse}
         colormap={colormap}
         width={screenW}
-        height={screenH}
+        height={screenH - insets.top}
         ituRegion={1}
         onPanDelta={onWfPanDelta}
         onZoomDelta={onWfZoomDelta}
@@ -545,6 +656,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         needleColor={vfoNeedle}
         specFrac={specFrac}
       />
+      </View>
 
       {/* Spec ratio overlay — floats above pill */}
       <SpecRatioOverlay
@@ -562,8 +674,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         decoderStatus={decoderStatus}
         decoding={decoding}
         bottomOffset={pillBottom + 8}
-        onSwitch={openDecoder}
+        onClear={() => setDecoderText('')}
         onClose={closeDecoder}
+        morseQuality={morseQuality}
+        onMorseQuality={onMorseQuality}
+        spotsKind={spotsKind}
+        spots={spots}
+        onTuneHz={onTuneHz}
         imageRef={decoderImageRef}
         onImageStatus={setDecoderStatus}
       />
@@ -599,6 +716,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onChat={openChat}
           onFreqTap={() => setFreqModalOpen(true)}
           onModeTap={() => setModeSelOpen(true)}
+          freqUnit={freqUnit}
         />
       </View>
 
@@ -628,7 +746,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
         onSetDefault={onSetDefault}
-        onDecoder={(t) => { openDecoder(t); setMenuOpen(false); }}
+        decMode={selDecoder}
+        decOn={activeDecoder !== null && activeDecoder === selDecoder}
+        onDecToggle={onDecToggle}
+        spotsKind={spotsKind}
+        onSpotsToggle={onSpotsToggle}
+        rttySettings={rttySettings}
+        onRttySettings={onRttySettings}
+        wefaxLpm={wefaxLpm}
+        onWefaxLpm={onWefaxLpm}
         onNb={onNb}
         onRec={toggleRecording}
         onSignalMode={setSignalMode}
@@ -694,6 +820,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         currentHz={status.frequency}
         onConfirm={onTuneHz}
         onClose={() => setFreqModalOpen(false)}
+        unit={freqUnit}
+        onUnit={setFreqUnit}
       />
 
       {/* Chat drawer */}

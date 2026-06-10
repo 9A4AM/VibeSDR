@@ -22,6 +22,7 @@ import {
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
 import { COLORMAP_NAMES } from '../assets/colormapUtils';
+import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,17 @@ export interface MenuSheetProps {
   onZoomIn?:    () => void;
   onZoomOut?:   () => void;
   onSetDefault?: () => void;
-  onDecoder?:   (type: 'rtty'|'navtex'|'wefax'|'sstv'|'morse') => void;
+  /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
+  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null;
+  decOn?:          boolean;
+  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => void;
+  /** Digital/CW spots feeds (skin lsvSpots). */
+  spotsKind?:      'digi'|'cw'|null;
+  onSpotsToggle?:  (k: 'digi'|'cw') => void;
+  rttySettings?:   RttySettings;
+  onRttySettings?: (s: RttySettings) => void;
+  wefaxLpm?:       number;
+  onWefaxLpm?:     (lpm: number) => void;
   nb?:          boolean;
   onNb?:        (on: boolean) => void;
   recording?:   boolean;
@@ -139,7 +150,6 @@ const C = {
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.min(SCREEN_H * 0.88, 700);
 
-type DecoderKey = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'digspots' | 'cwspots' | 'whisper' | null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -220,127 +230,43 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
   );
 }
 
-// ── Decoder panels ────────────────────────────────────────────────────────────
+// ── Decoder settings (skin v6.3.2 lsv-mp-dec-settings-panel, REAL wiring) ─────
+// RTTY: preset/shift/baud/encoding/invert; WEFAX: LPM. Settings live in the
+// menu (not the decoder panel); changing one while running re-attaches.
 
-function RTTYPanel() {
-  const [preset, setPreset] = useState('HAM');
-  const [shift,  setShift]  = useState('170');
-  const [baud,   setBaud]   = useState('45.45');
-  const [frame,  setFrame]  = useState('5N1.5');
-  const [enc,    setEnc]    = useState('ITA2');
-  const [inv,    setInv]    = useState(false);
-  const seg = (opts: string[], cur: string, set: (v: string) => void) => (
-    <OptRow>{opts.map(o => <SegBtn key={o} label={o} active={cur===o} onPress={() => set(o)} />)}</OptRow>
-  );
+function RttySettingsRows({ s, onChange }:
+  { s: RttySettings; onChange: (s: RttySettings) => void }) {
+  const presetKey = Object.entries(RTTY_PRESETS).find(([, p]) =>
+    p.shift === s.shift && p.baud === s.baud &&
+    p.encoding === s.encoding && p.inverted === s.inverted)?.[0] ?? '';
   return (
     <>
       <SubLabel label="Preset" />
-      {seg(['HAM','WX','NAVTEX','SITOR-B'], preset, setPreset)}
-      <SubLabel label="Shift (Hz)" />
-      {seg(['170','200','425','450','850'], shift, setShift)}
-      <SubLabel label="Baud Rate" />
-      {seg(['45.45','50','75','100','300'], baud, setBaud)}
-      <SubLabel label="Framing" />
-      {seg(['5N1','5N1.5','5N2','7N1','8N1','4/7'], frame, setFrame)}
-      <SubLabel label="Encoding" />
-      {seg(['ITA2','ASCII','CCIR476'], enc, setEnc)}
-      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv((p: boolean) => !p)} /></OptRow>
-    </>
-  );
-}
-
-function NAVTEXPanel() {
-  const [qt,     setQt]     = useState('518 kHz');
-  const [shift,  setShift]  = useState('170');
-  const [baud,   setBaud]   = useState('100');
-  const [center, setCenter] = useState(500);
-  const [inv,    setInv]    = useState(false);
-  return (
-    <>
-      <SubLabel label="Quick Tune" />
-      <OptRow>{['518 kHz','490 kHz','4.210 MHz'].map(o => <SegBtn key={o} label={o} active={qt===o} onPress={() => setQt(o)} />)}</OptRow>
-      <SubLabel label="Center (Hz)" />
-      <View style={styles.sliderWrap}>
-        <Slider style={{flex:1}} minimumValue={100} maximumValue={3000} step={10} value={center}
-          onValueChange={setCenter} minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-        <Text style={styles.sliderVal}>{center} Hz</Text>
-      </View>
-      <SubLabel label="Shift (Hz)" />
-      <OptRow>{['170','200','425'].map(o => <SegBtn key={o} label={o} active={shift===o} onPress={() => setShift(o)} />)}</OptRow>
-      <SubLabel label="Baud" />
-      <OptRow>{['100','50'].map(o => <SegBtn key={o} label={o} active={baud===o} onPress={() => setBaud(o)} />)}</OptRow>
-      <OptRow><Btn label={inv ? 'INVERT: ON' : 'INVERT: OFF'} active={inv} onPress={() => setInv((p: boolean) => !p)} /></OptRow>
-    </>
-  );
-}
-
-function WEFAXPanel() {
-  const [qt,        setQt]        = useState<string|null>(null);
-  const [lpm,       setLpm]       = useState('120');
-  const [bw,        setBw]        = useState('MIDDLE');
-  const [phasing,   setPhasing]   = useState(true);
-  const [autoStop,  setAutoStop]  = useState(true);
-  const [autoStart, setAutoStart] = useState(true);
-  return (
-    <>
-      <SubLabel label="Quick Tune" />
-      <OptRow>{['DDH47 DE','GYA UK','NMG US','JMH JP'].map(o => <SegBtn key={o} label={o} active={qt===o} onPress={() => setQt(o)} />)}</OptRow>
-      <SubLabel label="LPM" />
-      <OptRow>{['60','90','120','240'].map(o => <SegBtn key={o} label={o} active={lpm===o} onPress={() => setLpm(o)} />)}</OptRow>
-      <SubLabel label="Bandwidth" />
-      <OptRow>{['NARROW','MIDDLE','WIDE'].map(o => <SegBtn key={o} label={o} active={bw===o} onPress={() => setBw(o)} />)}</OptRow>
       <OptRow>
-        <Btn label="USE PHASING" active={phasing}   onPress={() => setPhasing((p: boolean) => !p)} />
-        <Btn label="AUTO-STOP"   active={autoStop}  onPress={() => setAutoStop((p: boolean) => !p)} />
-        <Btn label="AUTO-START"  active={autoStart} onPress={() => setAutoStart((p: boolean) => !p)} />
+        {([['ham','HAM'],['weather','WX'],['sitor-b','SITOR-B']] as const).map(([k, l]) => (
+          <SegBtn key={k} label={l} active={presetKey === k}
+                  onPress={() => onChange({ ...RTTY_PRESETS[k] })} />
+        ))}
       </OptRow>
-    </>
-  );
-}
-
-function SSTVPanel() {
-  const QT = ['14.230 MHz','14.233 MHz','21.340 MHz','28.680 MHz'];
-  const [qt,       setQt]       = useState<string|null>(null);
-  const [autoSave, setAutoSave] = useState(false);
-  return (
-    <>
-      <SubLabel label="Quick Tune" />
-      <OptRow>{QT.map(o => <SegBtn key={o} label={o} active={qt===o} onPress={() => setQt(o)} />)}</OptRow>
-      <OptRow><Btn label="AUTO-SAVE" active={autoSave} onPress={() => setAutoSave((p: boolean) => !p)} /></OptRow>
-      <SubLabel label="Mode auto-detected from VIS code · 47 modes supported" small />
-    </>
-  );
-}
-
-function MORSEPanel() {
-  const [qual,  setQual]  = useState('ALL');
-  const [pitch, setPitch] = useState(0);
-  return (
-    <>
-      <SubLabel label="Min Quality" />
-      <OptRow>{['ALL','LOW+','MED+','HIGH'].map(o => <SegBtn key={o} label={o} active={qual===o} onPress={() => setQual(o)} />)}</OptRow>
-      <SubLabel label="Pitch Lock (Hz)" />
-      <View style={styles.sliderWrap}>
-        <Slider style={{flex:1}} minimumValue={0} maximumValue={2000} step={10} value={pitch}
-          onValueChange={setPitch} minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-        <Text style={styles.sliderVal}>{pitch === 0 ? 'AUTO' : pitch + ' Hz'}</Text>
-      </View>
-      <SubLabel label="Speed auto-detected · shown live in decoder panel" small />
-    </>
-  );
-}
-
-function WhisperPanel() {
-  const [lang,  setLang]  = useState('AUTO');
-  const [lines, setLines] = useState('50');
-  const [ts,    setTs]    = useState(false);
-  return (
-    <>
-      <SubLabel label="Language" />
-      <OptRow>{['AUTO','EN','DE','FR','ES','IT'].map(o => <SegBtn key={o} label={o} active={lang===o} onPress={() => setLang(o)} />)}</OptRow>
-      <SubLabel label="Line Limit" />
-      <OptRow>{['10','20','50','100','∞'].map(o => <SegBtn key={o} label={o} active={lines===o} onPress={() => setLines(o)} />)}</OptRow>
-      <OptRow><Btn label="TIMESTAMPS" active={ts} onPress={() => setTs((p: boolean) => !p)} /></OptRow>
+      <SubLabel label="Shift (Hz)" />
+      <OptRow>{[170, 200, 425, 450, 850].map(v => (
+        <SegBtn key={v} label={String(v)} active={s.shift === v}
+                onPress={() => onChange({ ...s, shift: v })} />
+      ))}</OptRow>
+      <SubLabel label="Baud" />
+      <OptRow>{[45.45, 50, 75, 100].map(v => (
+        <SegBtn key={v} label={String(v)} active={s.baud === v}
+                onPress={() => onChange({ ...s, baud: v })} />
+      ))}</OptRow>
+      <SubLabel label="Encoding" />
+      <OptRow>{(['ITA2', 'ASCII', 'CCIR476'] as const).map(v => (
+        <SegBtn key={v} label={v} active={s.encoding === v}
+                onPress={() => onChange({ ...s, encoding: v })} />
+      ))}</OptRow>
+      <OptRow>
+        <Btn label={s.inverted ? 'INVERT: ON' : 'INVERT: OFF'} active={s.inverted}
+             onPress={() => onChange({ ...s, inverted: !s.inverted })} />
+      </OptRow>
     </>
   );
 }
@@ -362,7 +288,11 @@ export default function MenuSheet({
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   onClose, onBack, onReconnect, onResetSettings, onDisplaySettings,
-  onZoomIn, onZoomOut, onSetDefault, onDecoder,
+  onZoomIn, onZoomOut, onSetDefault,
+  decMode = null, decOn = false, onDecToggle,
+  spotsKind = null, onSpotsToggle,
+  rttySettings, onRttySettings,
+  wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ff8800', onVfoNeedle,
   wfCoarse = 'auto', onWfCoarse,
   autoContrast = 10, onAutoContrast,
@@ -382,7 +312,6 @@ export default function MenuSheet({
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
-  const [activeDecoder,    setActiveDecoder]    = useState<DecoderKey>(null);
 
   // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
   const [nrMode, setNrMode] = useState<'off'|'nr'|'nr2'|'serv'>(
@@ -422,9 +351,6 @@ export default function MenuSheet({
   }, [visible, backdropOp, translateY]);
 
   if (!visible) return null;
-
-  const toggleDecoder = (key: DecoderKey) =>
-    setActiveDecoder((prev: DecoderKey) => prev === key ? null : key);
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
@@ -696,30 +622,48 @@ export default function MenuSheet({
               <Btn label="⊟ CW"       onPress={() => {}} />
             </BtnRow>
 
-            {/* ── CLIENT DECODERS ────────────────────────────────── */}
+            {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
+                   settings for the selected mode appear underneath ── */}
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).map(k => (
                 <Btn key={k} label={k.toUpperCase()}
-                  onPress={() => { onDecoder?.(k); onClose(); }} />
+                  active={decMode === k && decOn}
+                  style={decMode === k && !decOn ? styles.btnSelected : undefined}
+                  onPress={() => onDecToggle?.(k)} />
               ))}
             </BtnRow>
-
-            {/* ── SERVER EXTENSIONS ──────────────────────────────── */}
-            <SectionLabel label="SERVER EXTENSIONS" />
-            <BtnRow>
-              {(['digspots','cwspots','whisper'] as const).map(k => (
-                <Btn key={k}
-                  label={k==='digspots' ? 'DIGITAL SPOTS' : k==='cwspots' ? 'CW SPOTS' : 'STT'}
-                  active={activeDecoder === k} onPress={() => toggleDecoder(k)} />
-              ))}
-            </BtnRow>
-            {(activeDecoder === 'digspots' || activeDecoder === 'cwspots') && (
+            {decMode === 'rtty' && rttySettings && onRttySettings && (
               <View style={styles.subPanel}>
-                <SubLabel label="Filters in decoder panel header · swipe to scroll" small />
+                <RttySettingsRows s={rttySettings} onChange={onRttySettings} />
               </View>
             )}
-            {activeDecoder === 'whisper' && <View style={styles.subPanel}><WhisperPanel /></View>}
+            {decMode === 'wefax' && (
+              <View style={styles.subPanel}>
+                <SubLabel label="LPM" />
+                <OptRow>{[60, 120, 240].map(v => (
+                  <SegBtn key={v} label={String(v)} active={wefaxLpm === v}
+                          onPress={() => onWefaxLpm?.(v)} />
+                ))}</OptRow>
+              </View>
+            )}
+
+            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text ── */}
+            <SectionLabel label="SERVER EXTENSIONS" />
+            <BtnRow>
+              <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
+                   onPress={() => onSpotsToggle?.('digi')} />
+              <Btn label="CW SPOTS" active={spotsKind === 'cw'}
+                   onPress={() => onSpotsToggle?.('cw')} />
+              <Btn label="STT" active={decMode === 'whisper' && decOn}
+                   style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
+                   onPress={() => onDecToggle?.('whisper')} />
+            </BtnRow>
+            {spotsKind !== null && (
+              <View style={styles.subPanel}>
+                <SubLabel label="Filters in decoder panel header · tap a spot to tune" small />
+              </View>
+            )}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" />
@@ -808,6 +752,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   btnActive:     { backgroundColor: C.active, borderColor: C.gold },
+  btnSelected:   { borderColor: 'rgba(255,160,0,0.55)' }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
   btnText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11, fontWeight: 'bold', letterSpacing: 0.5 },

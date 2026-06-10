@@ -22,10 +22,11 @@ import {
 } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
+import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'ft8' | null;
+export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -34,24 +35,57 @@ export interface DecoderPanelProps {
   decoderStatus: string;   // 'listening…' | 'decoding…' | custom
   decoding:      boolean;  // true = green dot
   bottomOffset:  number;   // distance from bottom of screen (pillTop - 8)
-  onSwitch:      (type: DecoderType) => void;
+  /** Clear the text output (skin CLR — text decoders only). */
+  onClear?:      () => void;
   onClose:       () => void;
   /** Image canvas (WEFAX/SSTV) — SDRScreen drives lines via this ref. */
   imageRef?:      React.RefObject<DecoderImageHandle | null>;
   /** Canvas status messages ("done — tap SAVE") → SDRScreen decoderStatus. */
   onImageStatus?: (s: string) => void;
+  /** Morse quality filter (skin header dropdown — cycles ALL/LOW+/MED+/HIGH). */
+  morseQuality?:   MorseQuality;
+  onMorseQuality?: (q: MorseQuality) => void;
+  /** Digital/CW spots mode — when set, the panel shows the spots table. */
+  spotsKind?:      SpotsKind | null;
+  spots?:          SpotRow[];
+  onTuneHz?:       (hz: number) => void;
+}
+
+const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
+const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
+  all: 'ALL', low: 'LOW+', medium: 'MED+', high: 'HIGH',
+};
+
+// Spots filters (skin lsv-dec-sf-mode / sf-band / sf-age)
+const SF_MODES = ['ALL', 'FT8', 'FT4', 'WSPR', 'JS8'];
+const SF_BANDS = ['ALL', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
+const SF_AGES: Array<{ label: string; minutes: number }> = [
+  { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
+  { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
+];
+
+function fmtSpotFreq(hz: number): string {
+  return hz ? (hz / 1000).toFixed(1) : '';
+}
+function fmtSpotTime(t: number): string {
+  const d = new Date(t);
+  return String(d.getUTCHours()).padStart(2, '0') + ':' +
+         String(d.getUTCMinutes()).padStart(2, '0');
+}
+function fmtSpotDist(km?: number): string {
+  if (km === undefined || km === null) return '';
+  return km >= 1000 ? (km / 1000).toFixed(1) + 'Mm' : Math.round(km) + 'km';
 }
 
 const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
-  rtty:   'RTTY',
-  navtex: 'NAVTEX',
-  wefax:  'WEFAX',
-  sstv:   'SSTV',
-  morse:  'CW/MORSE',
-  ft8:    'FT8',
+  rtty:    'RTTY',
+  navtex:  'NAVTEX',
+  wefax:   'WEFAX',
+  sstv:    'SSTV',
+  morse:   'CW/MORSE',
+  whisper: 'SPEECH',
+  ft8:     'FT8',
 };
-
-const BUTTONS: DecoderType[] = ['rtty', 'navtex', 'wefax', 'sstv', 'morse', 'ft8'];
 
 const C = {
   bg:       'rgba(10,8,4,0.95)',
@@ -73,10 +107,26 @@ const FONT = 'Nixie One';
 
 export default function DecoderPanel({
   activeDecoder, decoderText, decoderStatus, decoding,
-  bottomOffset, onSwitch, onClose,
+  bottomOffset, onClear, onClose,
   imageRef, onImageStatus,
+  morseQuality = 'all', onMorseQuality,
+  spotsKind = null, spots = [], onTuneHz,
 }: DecoderPanelProps) {
-  const isImageMode = IMAGE_DECODERS.includes(activeDecoder);
+  const isSpotsMode = spotsKind !== null;
+  const isImageMode = !isSpotsMode && IMAGE_DECODERS.includes(activeDecoder);
+
+  // Spots filters — header cyclers (skin sf-mode/sf-band/sf-age)
+  const [sfMode, setSfMode] = useState('ALL');
+  const [sfBand, setSfBand] = useState('ALL');
+  const [sfAge,  setSfAge]  = useState(0);
+  const visibleSpots = React.useMemo(() => {
+    if (!isSpotsMode) return [];
+    const cutoff = sfAge > 0 ? Date.now() - sfAge * 60_000 : 0;
+    return spots.filter(s =>
+      (spotsKind === 'cw' || sfMode === 'ALL' || s.mode === sfMode) &&
+      (sfBand === 'ALL' || s.band === sfBand) &&
+      (cutoff === 0 || s.time >= cutoff));
+  }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -107,8 +157,9 @@ export default function DecoderPanel({
   };
 
   // Appear / disappear
+  const panelOn = !!activeDecoder || isSpotsMode;
   useEffect(() => {
-    if (activeDecoder) {
+    if (panelOn) {
       setMinimised(false);
       Animated.parallel([
         Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
@@ -117,7 +168,7 @@ export default function DecoderPanel({
     } else {
       Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }).start();
     }
-  }, [activeDecoder, opacity, slideY]);
+  }, [panelOn, opacity, slideY]);
 
   // Scroll to bottom when text grows
   useEffect(() => {
@@ -126,9 +177,11 @@ export default function DecoderPanel({
     }
   }, [decoderText, minimised]);
 
-  if (!activeDecoder) return null;
+  if (!panelOn) return null;
 
-  const title = DECODER_LABELS[activeDecoder] ?? activeDecoder.toUpperCase();
+  const title = isSpotsMode
+    ? (spotsKind === 'cw' ? 'CW SPOTS' : 'DIGITAL SPOTS')
+    : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
     <Animated.View
@@ -150,28 +203,74 @@ export default function DecoderPanel({
             {title}
           </Text>
 
-          {/* Decoder type switch buttons — horizontal scroll */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={dp.btnScroll}
-            contentContainerStyle={dp.btnScrollContent}
-          >
-            {BUTTONS.map(b => (
-              <TouchableOpacity
-                key={b}
-                style={[dp.hbtn, { borderColor: dc.btnBdr },
-                  activeDecoder === b && { backgroundColor: dc.btnAct, borderColor: dc.btnActT }]}
-                onPress={(e: any) => { e?.stopPropagation(); onSwitch(b); }}
-                hitSlop={4}
-              >
-                <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font },
-                  activeDecoder === b && { color: dc.btnActT }]}>
-                  {DECODER_LABELS[b!]}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          {/* Status text — directly after title (skin layout) */}
+          <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: t.font }]}
+                numberOfLines={1}>
+            {decoderStatus}
+          </Text>
+
+          {/* Spots filter cyclers (skin sf-mode / sf-band / sf-age dropdowns) */}
+          {isSpotsMode && spotsKind === 'digi' && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                setSfMode(SF_MODES[(SF_MODES.indexOf(sfMode) + 1) % SF_MODES.length]);
+              }}>
+              <Text style={[dp.hbtnTxt, {
+                color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                {sfMode === 'ALL' ? 'MODE' : sfMode}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {isSpotsMode && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                setSfBand(SF_BANDS[(SF_BANDS.indexOf(sfBand) + 1) % SF_BANDS.length]);
+              }}>
+              <Text style={[dp.hbtnTxt, {
+                color: sfBand !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                {sfBand === 'ALL' ? 'BAND' : sfBand}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {isSpotsMode && (
+            <TouchableOpacity hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                const i = SF_AGES.findIndex(a => a.minutes === sfAge);
+                setSfAge(SF_AGES[(i + 1) % SF_AGES.length].minutes);
+              }}>
+              <Text style={[dp.hbtnTxt, {
+                color: sfAge > 0 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                {SF_AGES.find(a => a.minutes === sfAge)?.label ?? 'AGE'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* CLR — text decoders (skin _clearB) */}
+          {!isImageMode && !isSpotsMode && (
+            <TouchableOpacity hitSlop={6}
+              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
+              <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>CLR</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Morse quality filter (skin lsv-dec-sf-quality) */}
+          {activeDecoder === 'morse' && (
+            <TouchableOpacity hitSlop={6}
+              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                const i = MORSE_QUALITIES.indexOf(morseQuality);
+                onMorseQuality?.(MORSE_QUALITIES[(i + 1) % MORSE_QUALITIES.length]);
+              }}>
+              <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>
+                {MORSE_QUALITY_LABELS[morseQuality]}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* PREV/LIVE + SAVE — image decoders (skin _prevB/_saveB) */}
           {isImageMode && hasPrev && (
@@ -196,17 +295,15 @@ export default function DecoderPanel({
             </Text>
           )}
 
-          {/* Status text */}
-          <Text style={[dp.status, { color: dc.status, fontFamily: t.font }]} numberOfLines={1}>
-            {decoderStatus}
-          </Text>
-
-          {/* Close */}
+          {/* Minimise / restore (skin _minB: − / □) */}
           <TouchableOpacity
             hitSlop={8}
-            onPress={(e: any) => { e?.stopPropagation(); onClose(); }}
+            style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            onPress={(e: any) => { e?.stopPropagation(); setMinimised((p: boolean) => !p); }}
           >
-            <Text style={[dp.closeBtn, { color: dc.close }]}>✕</Text>
+            <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
+              {minimised ? '□' : '−'}
+            </Text>
           </TouchableOpacity>
         </TouchableOpacity>
 
@@ -223,7 +320,7 @@ export default function DecoderPanel({
             />
           </View>
         )}
-        {!minimised && !isImageMode && (
+        {!minimised && !isImageMode && !isSpotsMode && (
           <ScrollView
             ref={outputRef}
             style={dp.body}
@@ -233,6 +330,46 @@ export default function DecoderPanel({
             <Text style={[dp.output, { color: dc.output, fontFamily: t.font }]} selectable>
               {decoderText}
             </Text>
+          </ScrollView>
+        )}
+
+        {/* Spots table — newest first; tap frequency to tune (skin parity) */}
+        {!minimised && isSpotsMode && (
+          <ScrollView style={dp.body} showsVerticalScrollIndicator>
+            {visibleSpots.length === 0 && (
+              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: t.font }]}>
+                waiting for spots…
+              </Text>
+            )}
+            {visibleSpots.map((s, i) => (
+              <TouchableOpacity key={`${s.call}-${s.time}-${i}`} style={dp.spotRow}
+                onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
+                <Text style={[dp.spotCell, dp.spotFreq, { fontFamily: t.font }]}>
+                  {fmtSpotFreq(s.freqHz)}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotTime, { fontFamily: t.font }]}>
+                  {fmtSpotTime(s.time)}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotMode, { fontFamily: t.font }]}>
+                  {spotsKind === 'cw' ? (s.wpm ? Math.round(s.wpm) + 'w' : '') : s.mode}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotBand, { fontFamily: t.font }]}>{s.band}</Text>
+                <Text style={[dp.spotCell, dp.spotCall, { color: dc.output, fontFamily: t.font }]}
+                      numberOfLines={1}>
+                  {s.call}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotSnr,
+                  { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: t.font }]}>
+                  {s.snr !== undefined ? s.snr : ''}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotDist, { fontFamily: t.font }]}>
+                  {fmtSpotDist(s.distKm)}
+                </Text>
+                <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: t.font }]} numberOfLines={1}>
+                  {s.country}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </ScrollView>
         )}
 
@@ -274,7 +411,31 @@ const dp = StyleSheet.create({
   hbtnActive:    { backgroundColor: C.btnAct, borderColor: 'rgba(255,160,0,0.55)' },
   hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
   hbtnTxtActive: { color: C.gold },
-  status:   { fontSize: 9, letterSpacing: 1, color: C.muted, flexShrink: 1, overflow: 'hidden' },
+  status:     { fontSize: 9, letterSpacing: 1, color: C.muted, flexShrink: 1, overflow: 'hidden' },
+  statusGrow: { flex: 1 },
+  // Spots table
+  spotRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,160,0,0.08)',
+  },
+  spotEmpty:   { padding: 12, textAlign: 'center' },
+  spotCell:    { fontSize: 10, letterSpacing: 0.4, color: 'rgba(255,160,0,0.60)' },
+  spotFreq:    { width: 52, color: '#ffb833' },
+  spotTime:    { width: 34 },
+  spotMode:    { width: 36 },
+  spotBand:    { width: 32 },
+  spotCall:    { flex: 1.2, fontSize: 11 },
+  spotSnr:     { width: 26, textAlign: 'right' },
+  spotDist:    { width: 46, textAlign: 'right' },
+  spotCountry: { flex: 1, textAlign: 'right' },
+  settingsRow: {
+    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  settingsGap: { width: 6 },
   closeBtn: { color: C.closeCl, fontSize: 16, paddingHorizontal: 2, flexShrink: 0 },
   body:        { maxHeight: 200 },
   bodyContent: { padding: 12 },

@@ -42,6 +42,7 @@ class VibePowerModule: RCTEventEmitter {
   private var currentMode:  String = "usb"
   private var currentBase:  String = ""
   private var currentStep:  Int    = 1_000
+  private var currentUuid:  String = ""
   private var packetCount   = 0
   private let FRAME_SIZE: Int32 = 5760
   private var instanceName: String = ""
@@ -54,6 +55,7 @@ class VibePowerModule: RCTEventEmitter {
     currentBase  = baseUrl
     currentFreq  = frequency
     currentMode  = mode
+    currentUuid  = uuid
     isRunning    = true
     isMuted      = false
     packetCount  = 0
@@ -157,11 +159,14 @@ class VibePowerModule: RCTEventEmitter {
         guard self.isRunning else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
           guard self.isRunning else { return }
+          // MUST reconnect with the SAME session uuid — audio extensions
+          // (decoders) and the spectrum WS are keyed to it server-side. A
+          // fresh UUID here silently orphans them ("no active audio session").
           self.openAudioWs(
             baseUrl: self.currentBase,
             frequency: self.currentFreq,
             mode: self.currentMode,
-            uuid: UUID().uuidString
+            uuid: self.currentUuid
           )
         }
       }

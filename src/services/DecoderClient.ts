@@ -64,6 +64,39 @@ export const RTTY_PRESETS: Record<string, RttySettings> = {
 
 export type MorseQuality = 'all' | 'low' | 'medium' | 'high';
 
+// ── Spots (Digital/CW skimmer feeds — same dxcluster WS) ─────────────────────
+// subscribe_digital_spots / subscribe_cw_spots → server replays its buffer
+// then streams live. Messages: {type:'digital_spot'|'cw_spot', data:{…}}.
+
+export type SpotsKind = 'digi' | 'cw';
+
+export interface SpotRow {
+  kind:    SpotsKind;
+  time:    number;     // epoch ms
+  mode:    string;     // FT8/FT4/WSPR/JS8 — 'CW' for skimmer spots
+  band:    string;     // '40m' etc.
+  call:    string;
+  snr?:    number;
+  wpm?:    number;
+  freqHz:  number;
+  distKm?: number;
+  country: string;
+}
+
+/** Skin _freqToHz: values < 1000 are MHz, otherwise already Hz. */
+function spotFreqHz(f: unknown): number {
+  const n = typeof f === 'number' ? f : parseFloat(String(f ?? 0));
+  if (!n || isNaN(n)) return 0;
+  return n < 1000 ? Math.round(n * 1e6) : Math.round(n);
+}
+
+function spotTime(ts: unknown): number {
+  if (!ts) return Date.now();
+  const d = new Date(ts as string | number);
+  const t = d.getTime();
+  return isNaN(t) ? Date.now() : t;
+}
+
 export interface DecoderCallbacks {
   onText:       (text: string) => void;
   onStatus:     (status: string) => void;
@@ -74,6 +107,8 @@ export interface DecoderCallbacks {
   onImageStart?:(width: number, height: number) => void;
   onImageDone?: () => void;
   onError?:     (msg: string) => void;
+  /** Digital/CW spots stream (after startSpots). */
+  onSpot?:      (spot: SpotRow) => void;
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -117,9 +152,38 @@ export class DecoderClient {
     }
   }
 
+  // ── Spots feed (shares this WS — brief follow-up #3) ───────────────────────
+  private spotsKind: SpotsKind | null = null;
+
+  startSpots(kind: SpotsKind) {
+    this.spotsKind = kind;
+    if (this.ws?.readyState === WebSocket.OPEN) this._subscribeSpots();
+    else this._open();
+  }
+
+  stopSpots() {
+    const kind = this.spotsKind;
+    this.spotsKind = null;
+    if (kind && this.ws?.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify({
+          type: kind === 'digi' ? 'unsubscribe_digital_spots' : 'unsubscribe_cw_spots',
+        }));
+      } catch {}
+    }
+  }
+
+  private _subscribeSpots() {
+    if (!this.ws || !this.spotsKind) return;
+    this.ws.send(JSON.stringify({
+      type: this.spotsKind === 'digi' ? 'subscribe_digital_spots' : 'subscribe_cw_spots',
+    }));
+  }
+
   destroy() {
     this.destroyed = true;
     this.stop();
+    this.stopSpots();
     this.ws?.close();
     this.ws = null;
   }
@@ -137,6 +201,7 @@ export class DecoderClient {
     ws.onopen = () => {
       this.retries = 0;
       if (this.active) this._attach();
+      if (this.spotsKind) this._subscribeSpots();
     };
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {
@@ -147,8 +212,39 @@ export class DecoderClient {
         try {
           const m = JSON.parse(e.data);
           if (m.type === 'audio_extension_attached') this.cb.onStatus('attached');
-          else if (m.type === 'audio_extension_error' && m.message) {
-            this.cb.onError?.(String(m.message));
+          else if (m.type === 'audio_extension_error') {
+            // Server field is `error` (audio_extension_manager.go sendErrorSafe)
+            const msg = String(m.error ?? m.message ?? 'extension error');
+            this.cb.onStatus('error: ' + msg);
+            this.cb.onError?.(msg);
+            this.cb.onDot('idle');
+          } else if (m.type === 'digital_spot' && m.data) {
+            const d = m.data;
+            this.cb.onSpot?.({
+              kind: 'digi',
+              time: spotTime(d.timestamp),
+              mode: String(d.mode ?? '').toUpperCase(),
+              band: String(d.band ?? ''),
+              call: String(d.callsign ?? ''),
+              snr:  typeof d.snr === 'number' ? d.snr : undefined,
+              freqHz: spotFreqHz(d.frequency),
+              distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
+              country: String(d.country ?? ''),
+            });
+          } else if (m.type === 'cw_spot' && m.data) {
+            const d = m.data;
+            this.cb.onSpot?.({
+              kind: 'cw',
+              time: spotTime(d.time),
+              mode: 'CW',
+              band: String(d.band ?? ''),
+              call: String(d.dx_call ?? ''),
+              snr:  typeof d.snr === 'number' ? d.snr : undefined,
+              wpm:  typeof d.wpm === 'number' ? d.wpm : undefined,
+              freqHz: spotFreqHz(d.frequency),
+              distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
+              country: String(d.country ?? ''),
+            });
           }
         } catch {}
       }
@@ -156,7 +252,7 @@ export class DecoderClient {
     ws.onclose = () => {
       if (this.destroyed) return;
       this.ws = null;
-      if (this.active && this.retries < 5) {
+      if ((this.active || this.spotsKind) && this.retries < 5) {
         this.retries++;
         this.cb.onStatus('waiting for ws…');
         setTimeout(() => this._open(), 2000);

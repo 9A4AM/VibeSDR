@@ -16,8 +16,15 @@
  * Architecture:
  *   - SignalProcessor (M9PSY pipeline + UberSDR auto-range) maps raw dBFS bins
  *     → LUT indices; this component never touches dB maths directly.
- *   - Ring buffer stores LUT *indices* (1 byte/bin); colourised at assembly so
- *     palette switches are instant with no reprocessing.
+ *   - Ring buffer stores LUT *indices* (1 byte/bin); the RGBA display buffer is
+ *     persistent and updated incrementally (memmove + colourise ONE new row per
+ *     frame). Palette switches recolourise the whole buffer from the index ring.
+ *   - TWO stacked canvases (power): the bottom one holds only the waterfall
+ *     texture and is the only thing Reanimated redraws at 120Hz ProMotion; the
+ *     top one (spectrum/bands/needle) repaints at the 10Hz data rate.
+ *   - Needle + sideband-edge glows are Gaussian blurs — the most expensive Skia
+ *     primitive — so they are pre-rendered ONCE into offscreen image strips and
+ *     composited as plain textures, never re-blurred per frame.
  *   - Reanimated useDerivedValue drives the scroll translate on the UI thread
  *     at full display rate (120Hz ProMotion) — zero JS work per scroll tick.
  *   - Text (band labels, ticker, dB axis) rendered as absolutely-positioned RN
@@ -34,13 +41,12 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { PixelRatio, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Skia,
   Image as SkiaImage,
   Path,
-  Group,
   Rect,
   LinearGradient,
   BlurStyle,
@@ -200,8 +206,9 @@ export default function WaterfallView({
     return stops.reverse(); // gradient runs top→bottom; hot colour at top
   }, [lut]);
 
-  // ── Ring buffer of LUT indices ──────────────────────────────────────────────
+  // ── Ring buffer of LUT indices + persistent RGBA display buffer ────────────
   const idxBuf       = useRef<Uint8Array | null>(null);
+  const dispBuf      = useRef<Uint8Array | null>(null); // display order, newest row first
   const rowHead      = useRef(0);
   const lastBinCount = useRef(0);
 
@@ -230,35 +237,32 @@ export default function WaterfallView({
       prev.dbMin === frame.dbMin && prev.dbMax === frame.dbMax
         ? prev : { dbMin: frame.dbMin, dbMax: frame.dbMax });
 
-    // 2. Ring buffer write (LUT indices)
-    if (n !== lastBinCount.current || !idxBuf.current) {
-      idxBuf.current = new Uint8Array(n * ROWS);
+    // 2. Ring buffer write (LUT indices — kept only for palette switches/resize)
+    if (n !== lastBinCount.current || !idxBuf.current || !dispBuf.current) {
+      idxBuf.current  = new Uint8Array(n * ROWS);
+      dispBuf.current = new Uint8Array(n * ROWS * 4);
       rowHead.current = 0;
       lastBinCount.current = n;
     }
-    const buf = idxBuf.current;
-    buf.set(frame.row, rowHead.current * n);
+    idxBuf.current.set(frame.row, rowHead.current * n);
     rowHead.current = (rowHead.current + 1) % ROWS;
 
-    // 3. Assemble display image — colourise via current LUT (newest row on top)
-    const display = new Uint8Array(n * ROWS * 4);
-    const head = rowHead.current;
-    for (let r = 0; r < ROWS; r++) {
-      const srcRow = (head - 1 - r + ROWS * 2) % ROWS;
-      const srcOff = srcRow * n;
-      const dstOff = r * n * 4;
-      for (let i = 0; i < n; i++) {
-        const l = buf[srcOff + i] * 4;
-        const d = dstOff + i * 4;
-        display[d]     = lut[l];
-        display[d + 1] = lut[l + 1];
-        display[d + 2] = lut[l + 2];
-        display[d + 3] = 255;
-      }
+    // 3. Incremental display update — shift history down one row (native
+    //    memmove) and colourise ONLY the new row, instead of reassembling all
+    //    ROWS×n pixels every frame.
+    const disp = dispBuf.current;
+    disp.copyWithin(n * 4, 0, n * 4 * (ROWS - 1));
+    for (let i = 0; i < n; i++) {
+      const l = frame.row[i] * 4;
+      const d = i * 4;
+      disp[d]     = lut[l];
+      disp[d + 1] = lut[l + 1];
+      disp[d + 2] = lut[l + 2];
+      disp[d + 3] = 255;
     }
     const img = Skia.Image.MakeImage(
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      Skia.Data.fromBytes(display),
+      Skia.Data.fromBytes(disp),
       n * 4,
     );
     if (img) setWfImage(img);
@@ -308,12 +312,13 @@ export default function WaterfallView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bins]);
 
-  // Re-colourise instantly on palette change (no waiting for next data frame)
+  // Re-colourise instantly on palette change (no waiting for next data frame).
+  // Full rebuild from the index ring — rare, only on user palette switch.
   useEffect(() => {
-    const buf = idxBuf.current;
+    const buf  = idxBuf.current;
+    const disp = dispBuf.current;
     const n = lastBinCount.current;
-    if (!buf || !n) return;
-    const display = new Uint8Array(n * ROWS * 4);
+    if (!buf || !disp || !n) return;
     const head = rowHead.current;
     for (let r = 0; r < ROWS; r++) {
       const srcOff = ((head - 1 - r + ROWS * 2) % ROWS) * n;
@@ -321,13 +326,13 @@ export default function WaterfallView({
       for (let i = 0; i < n; i++) {
         const l = buf[srcOff + i] * 4;
         const d = dstOff + i * 4;
-        display[d] = lut[l]; display[d + 1] = lut[l + 1];
-        display[d + 2] = lut[l + 2]; display[d + 3] = 255;
+        disp[d] = lut[l]; disp[d + 1] = lut[l + 1];
+        disp[d + 2] = lut[l + 2]; disp[d + 3] = 255;
       }
     }
     const img = Skia.Image.MakeImage(
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      Skia.Data.fromBytes(display), n * 4,
+      Skia.Data.fromBytes(disp), n * 4,
     );
     if (img) setWfImage(img);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -401,16 +406,13 @@ export default function WaterfallView({
     if (nX - loX < minSbPx) loX = nX - minSbPx;
     if (hiX - nX < minSbPx) hiX = nX + minSbPx;
     const scale = Math.max(0.25, Math.min(1.0, pxPerHz * 4000));
-    return { nX, loXc: Math.max(0, loX), hiXc: Math.min(width, hiX), loX, hiX, scale };
+    // Quantised scale (0.05 steps) so the pre-rendered glow strips are not
+    // re-blurred on every zoom tick — only on meaningful scale changes.
+    const scaleQ = Math.round(scale * 20) / 20;
+    return { nX, loXc: Math.max(0, loX), hiXc: Math.min(width, hiX), loX, hiX, scale, scaleQ };
   }, [bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
 
   // ── Skia paints ─────────────────────────────────────────────────────────────
-  const mkLine = useCallback((x: number, y0: number, y1: number) => {
-    const p = Skia.Path.Make();
-    p.moveTo(x, y0); p.lineTo(x, y1);
-    return p;
-  }, []);
-
   const peakPaint = useMemo(() => {
     const p = Skia.Paint();
     p.setColor(Skia.Color(hexRgba(needleColor, 0.85)));
@@ -421,31 +423,61 @@ export default function WaterfallView({
     return p;
   }, [needleColor]);
 
-  const edgePaint = useMemo(() => {
-    const p = Skia.Paint();
-    p.setColor(Skia.Color(hexRgba(needleColor, 0.35)));
-    p.setStrokeWidth(needle?.scale ?? 1);
-    p.setStyle(1);
-    p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 8, false));
-    return p;
-  }, [needleColor, needle?.scale]);
+  // ── Pre-rendered glow strips (power) ────────────────────────────────────────
+  // Gaussian blur masks are the most expensive primitive Skia draws. Rendering
+  // the needle (σ 28/16/6) and sideband edges (σ 8) live meant re-blurring
+  // full-height layers on every canvas repaint. Instead they are blurred ONCE
+  // here into offscreen raster strips and composited as plain textures.
+  const dpr = PixelRatio.get();
 
-  const needlePaints = useMemo(() => {
-    const sc = needle?.scale ?? 1;
-    const mk = (alpha: number, blur: number, w: number) => {
+  const needleStrip = useMemo(() => {
+    if (height < 4) return null;
+    const sc = needle?.scaleQ ?? 1;
+    // σ in MakeBlur(…, false) is device px; ±3σ in dp covers the full halo.
+    const halfW = Math.ceil((3 * 28 * sc) / dpr + 2 * sc + 2);
+    const w = halfW * 2;
+    const surface = Skia.Surface.Make(Math.ceil(w * dpr), Math.ceil(height * dpr));
+    if (!surface) return null;
+    const c = surface.getCanvas();
+    c.scale(dpr, dpr);
+    const path = Skia.Path.Make();
+    path.moveTo(halfW, 0); path.lineTo(halfW, height);
+    const layer = (alpha: number, blur: number, sw: number) => {
       const p = Skia.Paint();
       p.setColor(Skia.Color(alpha >= 1 ? needleColor : hexRgba(needleColor, alpha)));
-      p.setStrokeWidth(w);
+      p.setStrokeWidth(sw);
       p.setStyle(1);
+      p.setAntiAlias(true);
       p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, blur, false));
-      return p;
+      c.drawPath(path, p);
     };
-    return [
-      mk(0.35, 28 * sc, 1.5 * sc),  // outer halo
-      mk(0.70, 16 * sc, 0.8 * sc),  // mid glow
-      mk(1.00,  6 * sc, 0.5),       // core filament
-    ];
-  }, [needleColor, needle?.scale]);
+    layer(0.35, 28 * sc, 1.5 * sc);  // outer halo
+    layer(0.70, 16 * sc, 0.8 * sc);  // mid glow
+    layer(1.00,  6 * sc, 0.5);       // core filament
+    return { img: surface.makeImageSnapshot(), halfW, w };
+  }, [needleColor, needle?.scaleQ, height, dpr]);
+
+  const edgeStrip = useMemo(() => {
+    const h = height - BAND_H;
+    if (h < 4) return null;
+    const sc = needle?.scaleQ ?? 1;
+    const halfW = Math.ceil((3 * 8) / dpr + sc + 2);
+    const w = halfW * 2;
+    const surface = Skia.Surface.Make(Math.ceil(w * dpr), Math.ceil(h * dpr));
+    if (!surface) return null;
+    const c = surface.getCanvas();
+    c.scale(dpr, dpr);
+    const path = Skia.Path.Make();
+    path.moveTo(halfW, 0); path.lineTo(halfW, h);
+    const p = Skia.Paint();
+    p.setColor(Skia.Color(hexRgba(needleColor, 0.35)));
+    p.setStrokeWidth(sc);
+    p.setStyle(1);
+    p.setAntiAlias(true);
+    p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 8, false));
+    c.drawPath(path, p);
+    return { img: surface.makeImageSnapshot(), halfW, w, h };
+  }, [needleColor, needle?.scaleQ, height, dpr]);
 
   // ── Gestures (tap-to-tune / pan / pinch-zoom) ───────────────────────────────
   const lastPanX = useRef(0);
@@ -484,14 +516,23 @@ export default function WaterfallView({
     Gesture.Simultaneous(Gesture.Exclusive(tapGesture, panGesture), pinchGesture),
     [tapGesture, panGesture, pinchGesture]);
 
-  const wfClip = useMemo(() => Skia.XYWHRect(0, wfTop, width, wfH),
-    [wfTop, width, wfH]);
-
   // ── Render ──────────────────────────────────────────────────────────────────
+  // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz
+  // Reanimated scroll repaints. Canvas 2 (top): everything else, repainted at
+  // the 10Hz data rate. The canvas bounds clip the over-tall scrolling image.
   return (
     <GestureDetector gesture={gesture}>
       <View style={[styles.root, { width, height }]}>
-        <Canvas style={{ width, height }}>
+
+        <Canvas style={{ position: 'absolute', left: 0, top: wfTop, width, height: wfH }}>
+          {wfImage && (
+            <SkiaImage image={wfImage} x={0} y={0}
+                       width={width} height={wfRenderH}
+                       transform={wfTransform} fit="fill" />
+          )}
+        </Canvas>
+
+        <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
 
           {/* Opaque header backing — WebGL parity rgb(2,2,2) */}
           <Rect x={0} y={0} width={width} height={wfTop} color="rgb(2,2,2)" />
@@ -527,15 +568,6 @@ export default function WaterfallView({
             <Path path={peakPath} paint={peakPaint} />
           )}
 
-          {/* ── Waterfall ── */}
-          {wfImage && (
-            <Group clip={wfClip}>
-              <SkiaImage image={wfImage} x={0} y={wfTop}
-                         width={width} height={wfRenderH}
-                         transform={wfTransform} fit="fill" />
-            </Group>
-          )}
-
           {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
           {needle && needle.nX > needle.loXc && (
             <Rect x={needle.loXc} y={BAND_H}
@@ -557,17 +589,20 @@ export default function WaterfallView({
                 positions={[0, 0.45, 0.85, 1]} />
             </Rect>
           )}
-          {needle && needle.loXc > 0 && (
-            <Path path={mkLine(needle.loXc, BAND_H, height)} paint={edgePaint} />
+          {needle && needle.loXc > 0 && edgeStrip && (
+            <SkiaImage image={edgeStrip.img} x={needle.loXc - edgeStrip.halfW} y={BAND_H}
+                       width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
           )}
-          {needle && needle.hiXc < width && (
-            <Path path={mkLine(needle.hiXc, BAND_H, height)} paint={edgePaint} />
+          {needle && needle.hiXc < width && edgeStrip && (
+            <SkiaImage image={edgeStrip.img} x={needle.hiXc - edgeStrip.halfW} y={BAND_H}
+                       width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
           )}
 
-          {/* ── LED needle: halo → glow → filament ── */}
-          {needle && needlePaints.map((p, i) => (
-            <Path key={i} path={mkLine(needle.nX, 0, height)} paint={p} />
-          ))}
+          {/* ── LED needle: halo → glow → filament (cached strip) ── */}
+          {needle && needleStrip && (
+            <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
+                       width={needleStrip.w} height={height} fit="fill" />
+          )}
 
         </Canvas>
 

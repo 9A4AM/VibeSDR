@@ -16,6 +16,7 @@
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
+import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -137,14 +138,23 @@ export class UberSDRClient {
     VibePowerModule?.sendBandwidth(low, high);
   }
 
+  // Frequency MUST be an integer — server unmarshals into uint64 and rejects
+  // fractional JSON numbers. Centre clamp 10kHz–30MHz per server limits.
+  // binBandwidth clamped so total span never exceeds the 30MHz HF range —
+  // the server ladder passes large values through unchecked and a runaway
+  // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'zoom', frequency, binBandwidth }));
+    const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
+    const n  = this.status.binCount || 1024;
+    const bb = Math.max(0.5, Math.min(binBandwidth, 30_000_000 / n));
+    this.spectrumWs.send(JSON.stringify({ type: 'zoom', frequency: f, binBandwidth: bb }));
   }
 
   pan(frequency: number) {
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'pan', frequency }));
+    const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
+    this.spectrumWs.send(JSON.stringify({ type: 'pan', frequency: f }));
   }
 
   resetView() {
@@ -318,6 +328,19 @@ export class UberSDRClient {
     const view  = new DataView(buf);
     const bytes = new Uint8Array(buf);
 
+    // JSON control messages (type:"config" etc.) arrive as BINARY frames of
+    // gzipped JSON (server writeJSONCompressed) — NOT text frames. The web
+    // client does the same gzip-magic sniff before DecompressionStream.
+    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      try {
+        const msg = JSON.parse(ungzip(bytes, { to: 'string' })) as Record<string, unknown>;
+        this._handleSpectrumMessage(msg);
+      } catch (e) {
+        this.dbg('gzip JSON frame parse failed: ' + String(e));
+      }
+      return;
+    }
+
     if (buf.byteLength < 22) { this.dbg('frame too short: ' + buf.byteLength); return; }
 
     const magic = view.getUint32(0, true);
@@ -390,22 +413,47 @@ export class UberSDRClient {
     this._emitSpectrum(frequency);
   }
 
+  private unwrapped: Float32Array = new Float32Array(0);
+
   private _emitSpectrum(frequency: number) {
     const s = this.status;
     s.centerHz = frequency;
     s.bwHz     = s.binBandwidth * s.binCount;
-    this.callbacks.onSpectrum(this.bins, { ...s });
+
+    // Unwrap FFT bin ordering from radiod (spectrum-display.js parity):
+    // frames arrive as [positive freqs DC→+Nyquist, negative freqs −Nyquist→DC];
+    // display needs [negative, positive]. Without this swap every signal is
+    // drawn half the span away from its true frequency. this.bins stays in
+    // WRAPPED order because delta-frame indices refer to wrapped positions.
+    const n = this.bins.length;
+    const half = n >> 1;
+    if (this.unwrapped.length !== n) this.unwrapped = new Float32Array(n);
+    const out = this.unwrapped;
+    out.set(this.bins.subarray(half, half * 2), 0);
+    out.set(this.bins.subarray(0, half), half);
+
+    this.callbacks.onSpectrum(out, { ...s });
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {
-    if (msg.type === 'status') {
-      if (typeof msg.frequency    === 'number') this.status.centerHz     = msg.frequency;
+    // Server replies with type:"config" — sent on connect and after every
+    // zoom/pan/reset/set_rate (sendStatus in user_spectrum_websocket.go):
+    //   { type:"config", centerFreq, binCount, binBandwidth, totalBandwidth }
+    // This is the ONLY way the client learns binBandwidth (binary frames carry
+    // just the centre frequency) — without it bwHz stays 0 and the entire
+    // frequency→pixel mapping (needle, band plan, gestures) is dead.
+    if (msg.type === 'config') {
+      if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;
       if (typeof msg.binBandwidth === 'number') this.status.binBandwidth = msg.binBandwidth;
       if (typeof msg.binCount     === 'number') {
         this.status.binCount = msg.binCount;
         if (this.bins.length !== msg.binCount) this.bins = new Float32Array(msg.binCount);
       }
-      this.status.bwHz = this.status.binBandwidth * this.status.binCount;
+      this.status.bwHz = typeof msg.totalBandwidth === 'number'
+        ? msg.totalBandwidth
+        : this.status.binBandwidth * this.status.binCount;
+      this.dbg(`config: ${this.status.binCount} bins @ ${this.status.binBandwidth} Hz ` +
+               `centre ${this.status.centerHz} bw ${this.status.bwHz}`);
       this.callbacks.onStatus({ ...this.status });
     }
   }
