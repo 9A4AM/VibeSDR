@@ -95,7 +95,7 @@ const AMBER: ThemeTokens = {
 const WHITE: ThemeTokens = {
   name:           'white',
   font:           'Atkinson Hyperlegible',
-  fontBold:       'Atkinson Hyperlegible Bold',
+  fontBold:       'Atkinson Hyperlegible', // no Bold ttf bundled — weight via fontWeight
   barBg:          'rgba(10,8,4,0.84)',     // same dark background
   barBorder:      'rgba(255,255,255,0.30)',
   barInnerGlow:   'rgba(255,255,255,0.08)',
@@ -132,14 +132,17 @@ interface ThemeContextValue {
   setTheme:  (name: ThemeName) => void;
 }
 
+// WHITE (accessibility skin, Atkinson Hyperlegible) is THE style — amber/Nixie
+// dropped 2026-06-11 for readability on all screens. The AMBER tokens above
+// are kept only as a historical reference; no UI switches to them anymore.
 const ThemeContext = createContext<ThemeContextValue>({
-  theme:    AMBER,
-  themeName:'amber',
+  theme:    WHITE,
+  themeName:'white',
   setTheme: () => {},
 });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [themeName, setThemeName] = useState<ThemeName>('amber');
+  const [themeName, setThemeName] = useState<ThemeName>('white');
   const setTheme = (name: ThemeName) => setThemeName(name);
   return (
     <ThemeContext.Provider value={{ theme: THEMES[themeName as ThemeName], themeName, setTheme }}>

@@ -559,11 +559,11 @@ const mo = StyleSheet.create({
     backgroundColor: '#0a0804',
     borderBottomWidth: 1, borderBottomColor: 'rgba(255,160,0,0.25)',
   },
-  title:   { color: '#ffb833', fontSize: 13, letterSpacing: 2, fontFamily: 'Nixie One' },
+  title:   { color: '#ffb833', fontSize: 13, letterSpacing: 2, fontFamily: 'Atkinson Hyperlegible' },
   backBtn: {
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 5,
     paddingHorizontal: 10, paddingVertical: 4,
   },
-  backTxt: { color: 'rgba(255,160,0,0.8)', fontSize: 11, letterSpacing: 1, fontFamily: 'Nixie One' },
+  backTxt: { color: 'rgba(255,160,0,0.8)', fontSize: 11, letterSpacing: 1, fontFamily: 'Atkinson Hyperlegible' },
   web:     { flex: 1, backgroundColor: '#0a0804' },
 });

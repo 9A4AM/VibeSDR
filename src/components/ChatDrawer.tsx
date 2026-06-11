@@ -69,7 +69,7 @@ const C = {
   handle:   'rgba(255,160,0,0.35)',
 };
 
-const FONT = 'Nixie One';
+const FONT = 'Atkinson Hyperlegible';
 const { height: SCREEN_H } = Dimensions.get('window');
 const DRAWER_H = Math.min(SCREEN_H * 0.55, 480);
 

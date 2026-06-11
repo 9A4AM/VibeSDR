@@ -230,7 +230,7 @@ function Hamburger({ color, lineW }: { color: string; lineW: number }) {
 
 function ShareIcon({ size, color }: { size: number; color: string }) {
   return (
-    <Canvas style={{ width: size, height: size }}>
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
       <Path path={SHARE_LINES} color={color} strokeWidth={1.6} style="stroke" strokeCap="round" />
       <Path path={SHARE_C1}    color={color} strokeWidth={1.6} style="stroke" />
       <Path path={SHARE_C2}    color={color} strokeWidth={1.6} style="stroke" />
@@ -296,7 +296,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const ROW_GAP    = s.r(7);
   const COL_GAP    = s.r(8);
   const BAR_PAD_H  = s.r(12);
-  const BTN_H      = s.r(36);
+  const BTN_H      = s.r(44); // a11y minimum touch target (was 36 — misses)
   const ICON_SZ    = s.r(20);
   const HBURG_W    = s.r(16);
   // Freq/mode sizing — read from theme so white mode can increase them
@@ -338,7 +338,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         {/* STEP */}
         <TouchableOpacity
           style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder }]}
-          onPress={onStep} activeOpacity={0.75}
+          onPress={onStep} activeOpacity={0.75} hitSlop={10}
         >
           <Text style={[por.btnTxt, { color: t.btnText, fontFamily: t.font, fontSize: BTN_FONT }]}>
             {stepLabel}
@@ -348,8 +348,8 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         {/* MENU */}
         <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: menuBorderColor, borderWidth: 1 }]}>
           <TouchableOpacity
-            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-            onPress={onMenu} activeOpacity={0.75}
+            style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
+            onPress={onMenu} activeOpacity={0.75} hitSlop={10}
           >
             <Hamburger color={t.btnText} lineW={HBURG_W} />
           </TouchableOpacity>
@@ -358,10 +358,11 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         {/* CHAT */}
         <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1 }]}>
           <TouchableOpacity
-            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-            onPress={onChat} activeOpacity={0.75}
+            style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
+            onPress={onChat} activeOpacity={0.75} hitSlop={10}
           >
-            <Canvas style={{ width: ICON_SZ, height: ICON_SZ }}>
+            {/* decorative — don't let the Skia view contest the touch */}
+            <Canvas pointerEvents="none" style={{ width: ICON_SZ, height: ICON_SZ }}>
               <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
             </Canvas>
           </TouchableOpacity>
@@ -370,7 +371,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         {/* SHARE */}
         <TouchableOpacity
           style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder }]}
-          onPress={onShare} activeOpacity={0.75}
+          onPress={onShare} activeOpacity={0.75} hitSlop={10}
         >
           <ShareIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
@@ -460,7 +461,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP }}>
-        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75}>
+        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
           <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }]}
                 numberOfLines={2} adjustsFontSizeToFit>
             {stepLabel}
@@ -468,7 +469,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </TouchableOpacity>
         <TouchableOpacity
           style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
-          onPress={onMenu} activeOpacity={0.75}
+          onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
           <Hamburger color={t.btnText} lineW={HBURG_W} />
         </TouchableOpacity>
@@ -495,13 +496,13 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       <View style={{ width: BTN_W, gap: GAP }}>
         <TouchableOpacity
           style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder }]}
-          onPress={onChat} activeOpacity={0.75}
+          onPress={onChat} activeOpacity={0.75} hitSlop={10}
         >
-          <Canvas style={{ width: ICON_SZ, height: ICON_SZ }}>
+          <Canvas pointerEvents="none" style={{ width: ICON_SZ, height: ICON_SZ }}>
             <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
           </Canvas>
         </TouchableOpacity>
-        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onShare} activeOpacity={0.75}>
+        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onShare} activeOpacity={0.75} hitSlop={10}>
           <ShareIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
       </View>

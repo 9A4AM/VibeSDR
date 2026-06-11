@@ -143,18 +143,23 @@ export interface MenuSheetProps {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Accessibility skin (reference body.lsv-a11y) — the single style going
+// forward: white Atkinson Hyperlegible text, larger touch targets, neutral
+// white borders. Gold survives only as the ACTIVE-state accent.
 const C = {
-  bg:           '#0c0b09',
-  border:       'rgba(255,160,0,0.35)',
-  gold:         '#FFB833',
-  goldDim:      '#c8893a',
-  muted:        'rgba(255,184,51,0.40)',
-  btnBg:        'rgba(20,10,0,0.80)',
-  active:       'rgba(255,140,0,0.22)',
+  bg:           'rgba(6,4,2,0.99)',        // a11y #lsv-menu-panel
+  border:       'rgba(255,255,255,0.30)',
+  divider:      'rgba(255,255,255,0.12)',  // a11y section rules
+  gold:         '#ffe566',                 // active text
+  goldDim:      'rgba(255,229,102,0.70)',  // active border
+  muted:        'rgba(255,255,255,0.92)',  // base button/value text — white
+  btnBg:        'rgba(20,18,14,0.85)',
+  active:       'rgba(255,200,0,0.12)',
   danger:       'rgba(160,30,30,0.80)',
   dangerBorder: 'rgba(220,60,60,0.60)',
-  text:         '#FFB833',
-  sectionC:     'rgba(255,160,0,0.50)',
+  text:         '#ffffff',
+  sectionC:     'rgba(180,190,210,0.80)',  // a11y .lsv-mp-section
+  sliderLabel:  'rgba(200,210,225,0.90)',
 };
 
 const { height: SCREEN_H } = Dimensions.get('window');
@@ -391,12 +396,19 @@ export default function MenuSheet({
 
         <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] }]}>
           <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
+          {/* a11y panel is near-opaque (reference bg rgba(6,4,2,0.99)) */}
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
           <View style={styles.handle} />
 
           <ScrollView style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             showsVerticalScrollIndicator={false}>
+
+            {/* Display settings is its OWN view — it REPLACES the main menu
+                content instead of expanding inline over it (inline blended in
+                and was confusing to read). */}
+            {!dispSettingsOpen && (<>
 
             {/* ── NEARBY STATION ─────────────────────────────────── */}
             <SectionLabel label="NEARBY STATION" first />
@@ -427,8 +439,17 @@ export default function MenuSheet({
               <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
+            </>)}
+
             {dispSettingsOpen && (
               <View style={styles.subPanel}>
+
+                {/* Back header — this panel replaces the main menu */}
+                <TouchableOpacity style={styles.backRow}
+                  onPress={() => setDispSettingsOpen(false)} activeOpacity={0.7}>
+                  <Text style={styles.backRowChevron}>‹  BACK</Text>
+                  <Text style={styles.backRowTitle}>DISPLAY SETTINGS</Text>
+                </TouchableOpacity>
 
                 {/* Save row */}
                 <BtnRow>
@@ -605,6 +626,8 @@ export default function MenuSheet({
               </View>
             )}
 
+            {!dispSettingsOpen && (<>
+
             {/* ── AUDIO ──────────────────────────────────────────── */}
             <SectionLabel label="AUDIO" />
             {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT
@@ -761,13 +784,8 @@ export default function MenuSheet({
                 ))}
               </BtnRow>
             </View>
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>DISPLAY STYLE</Text>
-              <BtnRow>
-                <Btn label="AMBER" active={displayStyle==='amber'} onPress={() => onDisplayStyle?.('amber')} />
-                <Btn label="WHITE" active={displayStyle==='white'} onPress={() => onDisplayStyle?.('white')} />
-              </BtnRow>
-            </View>
+            {/* DISPLAY STYLE row removed — accessibility skin (white/Atkinson)
+                is the single style now; amber/Nixie dropped for readability. */}
             <View style={styles.ctrlRow}>
               <Text style={styles.ctrlLabel}>DRUMS</Text>
               <BtnRow>
@@ -790,6 +808,7 @@ export default function MenuSheet({
             </BtnRow>
 
             <View style={{ height: 24 }} />
+            </>)}
           </ScrollView>
 
           <TouchableOpacity style={styles.closeBtn} onPress={onClose} hitSlop={8}>
@@ -818,12 +837,12 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 14, paddingTop: 4 },
 
   sectionBar: {
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,160,0,0.18)',
-    paddingTop: 10, paddingBottom: 4, marginTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
+    paddingTop: 12, paddingBottom: 6, marginTop: 6,
   },
   sectionBarFirst: { borderTopWidth: 0, marginTop: 2 },
   sectionLabel: {
-    color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11,
+    color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     fontWeight: 'bold', letterSpacing: 2,
   },
 
@@ -831,13 +850,14 @@ const styles = StyleSheet.create({
   btnRowCol: { flexDirection: 'column', gap: 6 },
   optRow:    { paddingTop: 2, paddingBottom: 0 },
 
+  // a11y .lsv-mp-btn: 15px text, 11×16 padding
   btn: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
-    borderRadius: 4, paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: 5, paddingHorizontal: 16, paddingVertical: 11,
     alignItems: 'center', justifyContent: 'center',
   },
-  btnActive:     { backgroundColor: C.active, borderColor: C.gold },
-  btnSelected:   { borderColor: 'rgba(255,160,0,0.55)' }, // selected but not running (skin)
+  btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
+  btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
   // Colour map dropdown
@@ -846,7 +866,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
     borderRadius: 4, paddingHorizontal: 12, paddingVertical: 9, marginVertical: 4,
   },
-  dropHeaderText: { color: C.gold, fontFamily: 'Nixie One', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
+  dropHeaderText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   dropChevron:    { color: C.muted, fontSize: 10 },
   dropList: {
     borderWidth: 1, borderColor: C.border, borderRadius: 4,
@@ -857,10 +877,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
   },
   dropItemActive:     { backgroundColor: C.active },
-  dropItemText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 12, letterSpacing: 0.5 },
+  dropItemText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, letterSpacing: 0.5 },
   dropItemTextActive: { color: C.gold, fontWeight: 'bold' },
 
-  btnText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11, fontWeight: 'bold', letterSpacing: 0.5 },
+  btnText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   btnTextActive: { color: C.gold },
   btnTextDanger: { color: '#ff6666' },
 
@@ -872,20 +892,20 @@ const styles = StyleSheet.create({
   },
   vtsArrowText: { color: C.gold, fontSize: 18 },
   vtsInfo:  { flex: 1, alignItems: 'center', gap: 3 },
-  vtsName:  { color: C.text, fontFamily: 'Nixie One', fontSize: 14, letterSpacing: 1 },
-  vtsFreq:  { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1 },
+  vtsName:  { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, letterSpacing: 1 },
+  vtsFreq:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 },
 
   sliderRow:   { paddingVertical: 4, gap: 4 },
-  sliderLabel: { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 72, flexShrink: 0 },
+  sliderLabel: { color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 1, width: 90, flexShrink: 0 },
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
   bwHalfSlider: { flex: 1, height: 32 },
-  bwEdgeVal:    { color: C.gold, fontFamily: 'Nixie One', fontSize: 10, minWidth: 44, textAlign: 'center' },
-  bwLabel:  { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 32 },
+  bwEdgeVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
+  bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
-  bwVal:    { color: C.gold, fontFamily: 'Nixie One', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
   sliderWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  sliderVal:   { color: C.gold, fontFamily: 'Nixie One', fontSize: 11, minWidth: 72, textAlign: 'right' },
+  sliderVal:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, minWidth: 72, textAlign: 'right' },
 
   stepSlider: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   stepSliderBtn: {
@@ -893,22 +913,31 @@ const styles = StyleSheet.create({
     borderRadius: 4, width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
   },
   stepSliderBtnTxt: { color: C.gold, fontSize: 18, fontWeight: 'bold', lineHeight: 22 },
-  stepSliderVal: { color: C.gold, fontFamily: 'Nixie One', fontSize: 12, flex: 1, textAlign: 'center' },
+  stepSliderVal: { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, flex: 1, textAlign: 'center' },
 
   subPanel: {
-    backgroundColor: 'rgba(255,160,0,0.05)', borderRadius: 6,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,160,0,0.15)',
-    padding: 8, marginBottom: 4,
+    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: C.divider,
+    padding: 10, marginBottom: 4,
   },
-  subLabel:      { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, paddingTop: 6, paddingBottom: 2 },
-  subLabelSmall: { fontSize: 9, opacity: 0.5 },
+  subLabel:      { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 1, paddingTop: 8, paddingBottom: 3 },
+  subLabelSmall: { fontSize: 10, opacity: 0.5 },
+
+  // Display-settings back header
+  backRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
+    borderRadius: 5, paddingHorizontal: 14, paddingVertical: 11, marginBottom: 8,
+  },
+  backRowChevron: { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold' },
+  backRowTitle:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 1 },
 
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
-  recTime:  { color: C.gold, fontFamily: 'Nixie One', fontSize: 13 },
+  recTime:  { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
-  ctrlLabel: { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 10, letterSpacing: 1.5 },
+  ctrlLabel: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 },
 
   swatchRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
   swatch:     { width: 32, height: 32, borderRadius: 16, borderWidth: 3, borderColor: 'transparent' },
@@ -916,15 +945,15 @@ const styles = StyleSheet.create({
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
   cmapPillActive:     { backgroundColor: C.active, borderColor: C.gold },
-  cmapPillText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11 },
+  cmapPillText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11 },
   cmapPillTextActive: { color: C.gold },
 
-  instanceUrl: { color: 'rgba(255,184,51,0.30)', fontFamily: 'Nixie One', fontSize: 10, paddingBottom: 4 },
+  instanceUrl: { color: 'rgba(255,255,255,0.40)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 },
 
   closeBtn: {
     margin: 12, alignSelf: 'center', backgroundColor: C.btnBg,
     borderWidth: 1, borderColor: C.border, borderRadius: 6,
     paddingHorizontal: 24, paddingVertical: 8,
   },
-  closeBtnText: { color: C.goldDim, fontFamily: 'Nixie One', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
+  closeBtnText: { color: C.goldDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
 });

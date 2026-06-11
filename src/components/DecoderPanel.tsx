@@ -139,7 +139,7 @@ const C = {
   outputCl: '#ffe566',
   closeCl:  'rgba(255,100,100,0.70)',
 };
-const FONT = 'Nixie One';
+const FONT = 'Atkinson Hyperlegible';
 
 // ── Component ──────────────────────────────────────────────────────────────────
 

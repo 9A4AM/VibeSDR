@@ -36,7 +36,7 @@ export interface SpecRatioOverlayProps {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const FONT  = 'Nixie One';
+const FONT  = 'Atkinson Hyperlegible';
 const GOLD  = '#ffb833';
 const GOLDD = 'rgba(255,160,0,0.40)';
 const MIN   = 0.05;

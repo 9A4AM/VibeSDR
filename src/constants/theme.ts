@@ -76,11 +76,11 @@ export const Fonts = {
   /**
    * Primary font — Nixie One (instrument aesthetic).
    * Must be loaded via expo-font before use:
-   *   useFonts({ 'Nixie One': require('../assets/fonts/NixieOne-Regular.ttf') })
+   *   useFonts({ 'Atkinson Hyperlegible': require('../assets/fonts/NixieOne-Regular.ttf') })
    * Falls back to Courier New until loaded.
    */
-  ui:           'Nixie One',
-  mono:         'Nixie One',
+  ui:           'Atkinson Hyperlegible',
+  mono:         'Atkinson Hyperlegible',
   monoFallback: 'Courier New',
 } as const;
 
