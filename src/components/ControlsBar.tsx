@@ -80,7 +80,12 @@ function sigGradPos(sig: number): number[] {
 // execution ≈ a third of all JS time). The bus lets ONLY the two leaf widgets
 // that display them (SignalCanvas, FreqModePill) subscribe and re-render.
 /** link: 0=disconnected, 1=poor(red), 2=fluctuating(yellow), 3=good(green) */
-export interface MeterValues { level: number; peak: number; snr: number; active: boolean; link: 0|1|2|3 }
+export interface MeterValues {
+  level: number; peak: number; snr: number;
+  /** Peak power in the passband, dBFS — feeds the S-meter / dBFS readouts. */
+  dbfs: number;
+  active: boolean; link: 0|1|2|3;
+}
 export interface MeterBus {
   value: MeterValues;
   subs:  Set<(v: MeterValues) => void>;
@@ -88,7 +93,7 @@ export interface MeterBus {
 }
 export function createMeterBus(): MeterBus {
   const bus: MeterBus = {
-    value: { level: 0, peak: 0, snr: 40, active: false, link: 0 },
+    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0 },
     subs:  new Set(),
     emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
   };
@@ -105,17 +110,21 @@ function useMeters(bus?: MeterBus): MeterValues | null {
   return bus ? v : null;
 }
 
-function snrToText(snrDb: number): string {
-  const dbfs = (snrDb - 30) / 50 * 80 - 127;
-  if (dbfs >= -73) { const ab = Math.round(dbfs + 73); return ab > 0 ? `S9+${ab}` : 'S9'; }
-  if (dbfs >= -79)  return 'S8';
-  if (dbfs >= -85)  return 'S7';
-  if (dbfs >= -91)  return 'S6';
-  if (dbfs >= -97)  return 'S5';
-  if (dbfs >= -103) return 'S4';
-  if (dbfs >= -109) return 'S3';
-  if (dbfs >= -115) return 'S2';
-  return 'S1';
+// Real S-meter from passband dBFS (classic 6dB/S-unit, S9 ≈ −73) — replaces
+// the old synthetic conversion built on upstream's broken +30dB SNR offset.
+function dbfsToSMeter(dbfs: number): string {
+  if (dbfs >= -73) {
+    const over = Math.round(dbfs + 73);
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  const s = Math.max(1, 9 - Math.ceil((-73 - dbfs) / 6));
+  return `S${s}`;
+}
+
+function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): string {
+  if (mode === 'smeter') return dbfsToSMeter(m.dbfs);
+  if (mode === 'dbfs')   return `${Math.round(m.dbfs)}dB`;
+  return isFinite(m.snr) ? `${Math.round(m.snr)}db` : '';
 }
 
 // ── Clock — port of tick() ────────────────────────────────────────────────────
@@ -156,6 +165,8 @@ export interface ControlsBarProps {
   /** Meter bus — values bypass React screen state; only the meter leaves
    *  subscribe. Preferred over the 4 legacy props above. */
   meterBus?:     MeterBus;
+  /** Readout mode for the pill text (menu SIGNAL METER toggles). */
+  signalMode?:   'snr' | 'smeter' | 'dbfs';
   bottomInset:   number;
   onVfoDelta:    (px: number) => void;
   onBwDelta:     (px: number) => void;
@@ -257,12 +268,12 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
 
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
-  modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus,
+  modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
 }: any) {
   const { theme: t } = useTheme();
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
   const m = useMeters(bus);
-  const liveSnrText = m ? (isFinite(m.snr) ? `${Math.round(m.snr)}db` : '') : snrText;
+  const liveSnrText = m ? meterText(meterMode ?? 'snr', m) : snrText;
   const liveActive  = m ? m.active : signalActive;
   return (
     <View style={pm.row}>
@@ -287,7 +298,12 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         <Text style={[pm.modeLbl, { color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font }]}>
           {modeLabel}
         </Text>
-        <Text style={[pm.snr, { color: t.snrColor, fontFamily: t.font, width: snrWidth, opacity: liveActive ? 0.90 : 0.45 }]}>
+        <Text style={[pm.snr, {
+          color: t.snrColor, fontFamily: t.font, width: snrWidth,
+          fontSize: Math.max(11, Math.round(modeFontSize * 0.8)),
+          fontWeight: '700',
+          opacity: liveActive ? 1.0 : 0.65,
+        }]}>
           {liveSnrText}
         </Text>
       </TouchableOpacity>
@@ -349,7 +365,7 @@ function ShareIcon({ size, color }: { size: number; color: string }) {
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
-function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus,
+function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -434,7 +450,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
         <FreqModePill
           freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-          connected={connected} signalActive={signalActive} bus={bus}
+          connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode}
           onFreqTap={onFreqTap} onModeTap={onModeTap}
           freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -530,7 +546,7 @@ const por = StyleSheet.create({
 
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
 
-function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus,
+function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -603,7 +619,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
           <FreqModePill
             freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-            connected={connected} signalActive={signalActive} bus={bus}
+            connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode}
             onFreqTap={onFreqTap} onModeTap={onModeTap}
             freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -651,7 +667,7 @@ const lnd = StyleSheet.create({
 
 function ControlsBar({
   frequency, mode, step, connected, bottomInset,
-  signalLevel, peakLevel, snrDb = 40, signalActive, meterBus,
+  signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -664,7 +680,7 @@ function ControlsBar({
   const freqStr   = useMemo(() => formatHz(frequency, freqUnit), [frequency, freqUnit]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
-  const snrText   = useMemo(() => snrToText(snrDb),      [snrDb]);
+  const snrText   = ''; // legacy fallback — live text comes from the bus + meterText()
   const clock     = useClock();
 
   const cycleStep = useCallback(() => {
@@ -688,7 +704,7 @@ function ControlsBar({
 
   const shared = {
     freqStr, unit, modeLabel: mode.toUpperCase(), snrText,
-    connected, signalActive, bus: meterBus,
+    connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
     onStep: cycleStep, onChat, onMenu, onShare: handleShare,

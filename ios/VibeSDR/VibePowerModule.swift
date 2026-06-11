@@ -19,7 +19,7 @@ class VibePowerModule: RCTEventEmitter {
   // MARK: - RCTEventEmitter
 
   override func supportedEvents() -> [String]! {
-    return ["VibeTuned"]
+    return ["VibeTuned", "VibeMuted"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -190,6 +190,9 @@ class VibePowerModule: RCTEventEmitter {
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
     if muted { playerNode?.pause() } else { playerNode?.play() }
+    // JS shows a MUTED banner — media-control pause (AirPods squeeze) maps to
+    // mute, which is otherwise invisible in the UI.
+    sendEvent(withName: "VibeMuted", body: ["muted": muted])
     DispatchQueue.main.async { self.updateNowPlaying() }
   }
 

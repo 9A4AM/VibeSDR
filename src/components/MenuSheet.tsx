@@ -91,6 +91,10 @@ export interface MenuSheetProps {
   onDisplayStyle?: (s: 'amber' | 'white') => void;
   drumMode?:       'normal' | 'precise';
   onDrumMode?:     (m: 'normal' | 'precise') => void;
+  /** Recentre the spectrum view on the tuned frequency (skin parity). */
+  onCentreVfo?:    () => void;
+  /** Hide the controls bar for a full-screen waterfall (chevron restores). */
+  onHideControls?: () => void;
   hapticsEnabled?: boolean;
   onHaptics?:      (on: boolean) => void;
 
@@ -298,7 +302,7 @@ export default function MenuSheet({
   serverDspEnabled = false, serverDspFilter = 'wiener', serverDspParams = {}, onServerDsp, onServerDspParams,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
-  drumMode = 'normal', onDrumMode,
+  drumMode = 'normal', onDrumMode, onCentreVfo, onHideControls,
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
@@ -432,12 +436,16 @@ export default function MenuSheet({
             <BtnRow>
               <Btn label="− ZOOM" onPress={onZoomOut} />
               <Btn label="+ ZOOM" onPress={onZoomIn} />
+              <Btn label="⌖ VFO"  onPress={onCentreVfo} />
               <Btn label="MIN"    onPress={() => { onDbMin(-130); onDbMax(-40); }} />
               <Btn label="MAX"    onPress={() => { onDbMin(-120); onDbMax(-20); }} />
             </BtnRow>
             <BtnRow>
               <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
+            </BtnRow>
+            <BtnRow>
+              <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />
             </BtnRow>
             </>)}
 

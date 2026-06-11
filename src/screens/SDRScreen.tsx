@@ -26,6 +26,8 @@ import {
   Platform,
   StatusBar,
   StyleSheet,
+  Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -73,6 +75,21 @@ const DRUM_SENS = {
 const VFO_FINE_MULT  = 4;    // sensitivity multiplier at the slow end
 const VFO_VEL_FINE   = 40;   // px/s and below → fully fine
 const VFO_VEL_FAST   = 350;  // px/s and above → full speed
+
+// SNR-bar compression — the skin's sigNorm curve (30/60@0.8/80) shifted down
+// 30dB: upstream UberSDR's S-meter reads radiod's raw audio-stream SNR which
+// FLOORS at ~30dB with no signal (madpsy/ka9q_ubersdr#77); ours comes from
+// spectrum bins (the correct source), so no-signal ≈ 0-5dB. Same shape: 30dB
+// of span to the knee at 0.8 fill, top fifth compressed for 45-55dB monsters.
+const SIG_FLOOR = 5, SIG_KNEE = 35, SIG_KNEE_FILL = 0.8, SIG_CEIL = 55;
+function sigNorm(v: number): number {
+  if (v <= SIG_FLOOR) return 0;
+  if (v >= SIG_CEIL)  return 1;
+  if (v <= SIG_KNEE)
+    return SIG_KNEE_FILL * (v - SIG_FLOOR) / (SIG_KNEE - SIG_FLOOR);
+  return SIG_KNEE_FILL +
+         (1 - SIG_KNEE_FILL) * (v - SIG_KNEE) / (SIG_CEIL - SIG_KNEE);
+}
 
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -125,6 +142,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
   const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
+
+  // Muted via media controls (AirPods squeeze → pause = mute) — native emits
+  // VibeMuted so the UI can show a tap-to-unmute banner.
+  const [isMuted, setIsMuted] = useState(false);
+  const unmute = useCallback(() => {
+    (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(false);
+    setIsMuted(false);
+  }, []);
+
+  // Full-screen waterfall: hide the controls bar, floating chevron restores.
+  const [controlsHidden, setControlsHidden] = useState(false);
+  const onHideControls = useCallback(() => { setControlsHidden(true); setMenuOpen(false); }, []);
+
+  // Centre the spectrum view on the tuned frequency at the current zoom
+  // (reference-skin parity).
+  const onCentreVfo = useCallback(() => {
+    const c = client.current; if (!c) return;
+    const v = c.getView();
+    if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
+  }, []);
 
   // ── Step ──────────────────────────────────────────────────────────────────
 
@@ -207,6 +244,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const meterBus    = useRef(createMeterBus());
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   const [signalMode,   setSignalMode]   = useState<'snr' | 'smeter' | 'dbfs'>('snr');
+  const signalModeRef = useRef<'snr' | 'smeter' | 'dbfs'>('snr');
+  useEffect(() => { signalModeRef.current = signalMode; }, [signalMode]);
 
   // ── Display prefs persistence — every waterfall/spectrum/display setting in
   // one blob, restored on launch, saved debounced (sliders fire per-tick).
@@ -506,7 +545,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       client.current?.syncFrequency(e.frequency, e.mode as SDRMode);
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: e.frequency, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
     });
-    return () => sub.remove();
+    const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
+      setIsMuted(!!e.muted);
+    });
+    return () => { sub.remove(); subMute.remove(); };
   }, []);
 
   // ── Connect ───────────────────────────────────────────────────────────────
@@ -564,13 +606,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           for (let i = 0; i < edgeN; i++) { noiseSum += newBins[i]; noiseCount++; }
           for (let i = len - edgeN; i < len; i++) { noiseSum += newBins[i]; noiseCount++; }
           const noise = noiseCount > 0 ? noiseSum / noiseCount : -130;
-          // Text = honest SNR dB above the noise floor ("NNdb", skin lsvSnrDisp
-          // parity — the old fake S-meter conversion pinned at S9+45). Bar fill
-          // stays the absolute-level mapping (the look from the v2 screenshots
-          // the user approved); skin's 30/60/80 sigNorm knee was calibrated for
-          // the server's broadband SNR stat and leaves a quiet passband empty.
           const snrDb = peak - noise;
-          const norm  = Math.max(0, Math.min(1, (peak + 130) / 90));
+          // Bar source follows the meter mode: SNR uses the skin compression
+          // curve recalibrated for honest spectrum-derived SNR (upstream's
+          // 30-80dB calibration compensated for radiod's broken +30dB audio-
+          // stream floor, madpsy/ka9q_ubersdr#77 — ours doesn't have it);
+          // S-meter/dBFS use the absolute level mapping.
+          const norm = signalModeRef.current === 'snr'
+            ? sigNorm(snrDb)
+            : Math.max(0, Math.min(1, (peak + 130) / 90));
           // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
           // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
           const sm = meterSmooth.current;
@@ -579,8 +623,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
           meterBus.current.emit({
-            level: sm.level, peak: sm.peak, snr: snrDb, active: snrDb > 6,
-            link: meterBus.current.value.link,
+            level: sm.level, peak: sm.peak, snr: snrDb, dbfs: peak,
+            active: snrDb > 6, link: meterBus.current.value.link,
           });
         }
       },
@@ -990,8 +1034,25 @@ export default function SDRScreen({ route, navigation }: Props) {
         onImageStatus={setDecoderStatus}
       />
 
+      {/* Muted banner — media-control pause (AirPods) maps to mute */}
+      {isMuted && (
+        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          onPress={unmute} activeOpacity={0.85}>
+          <Text style={styles.mutedBannerText}>🔇 MUTED — TAP TO UNMUTE</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Restore chevron when controls are hidden (full-screen waterfall) */}
+      {controlsHidden && (
+        <TouchableOpacity
+          style={[styles.restoreBtn, { bottom: bottomInset + 10 }]}
+          onPress={() => setControlsHidden(false)} activeOpacity={0.8} hitSlop={12}>
+          <Text style={styles.restoreBtnText}>▲</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Controls pill — absolute overlay, margin 8px each side */}
-      <View
+      {!controlsHidden && <View
         style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
         onLayout={(e: any) => {
           // Track pill top so decoder panel can anchor above it
@@ -1007,6 +1068,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           bottomInset={0}
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
+          signalMode={signalMode}
           isRecording={isRecording}
           recSeconds={recSeconds}
           chatUnread={chatUnread}
@@ -1020,7 +1082,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
         />
-      </View>
+      </View>}
 
       {/* Menu sheet */}
       <MenuSheet
@@ -1095,6 +1157,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         drumMode={drumMode}             onDrumMode={onDrumMode}
+        onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
@@ -1165,6 +1228,23 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  mutedBanner: {
+    position: 'absolute', alignSelf: 'center', zIndex: 60,
+    backgroundColor: 'rgba(20,6,4,0.92)', borderWidth: 1,
+    borderColor: 'rgba(220,60,60,0.8)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8,
+  },
+  mutedBannerText: {
+    color: '#ff7a7a', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 13, fontWeight: '700', letterSpacing: 0.5,
+  },
+  restoreBtn: {
+    position: 'absolute', alignSelf: 'center', zIndex: 60,
+    backgroundColor: 'rgba(10,10,10,0.55)', borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.30)', borderRadius: 16,
+    paddingHorizontal: 18, paddingVertical: 4,
+  },
+  restoreBtnText: { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   root: {
     flex: 1,
     backgroundColor: '#000',
