@@ -133,7 +133,10 @@ export default function DrumWheel({
     if (backlog > 0.1) vel.current *= Math.pow(Math.max(0.2, 1 - backlog), dt * 60);
     if (Math.abs(vel.current) < Math.max(MIN_VEL, 1)) {
       vel.current = 0;
-      if (pending.current) { sendDelta(pending.current); pending.current = 0; }
+      // Flush only a meaningful remainder — a dying sub-step flush rounded up
+      // to a whole step and knocked the tune off its landing.
+      if (Math.abs(pending.current) >= LSV_PX_STEP * 0.6) sendDelta(pending.current);
+      pending.current = 0;
       rafId.current = null;
       return;
     }
@@ -149,7 +152,10 @@ export default function DrumWheel({
   }, [type, sendDelta]);
 
   const startInertia = useCallback(() => {
-    if (Math.abs(vel.current) < MIN_VEL) return;
+    // Flick gate: real flicks release at hundreds of px/s; anything under
+    // ~50 px/s is deliberate positioning and must NOT coast (MIN_VEL=0.8 let
+    // gentle releases tick the tune off the signal).
+    if (Math.abs(vel.current) < 50) return;
     vel.current = Math.max(-MAX_VEL, Math.min(MAX_VEL, vel.current));
     if (rafId.current) cancelAnimationFrame(rafId.current);
     rafTS.current = performance.now();
@@ -185,6 +191,10 @@ export default function DrumWheel({
     })
     .onEnd(() => {
       touching.current = false;
+      // Stale-flick guard: velocity only updates on MOVE events, so "land on
+      // a signal, hold still, lift" replayed the pre-stop velocity as inertia
+      // and ticked the tune one more step. Held still ⇒ no flick.
+      if (performance.now() - lastT.current > 80) vel.current = 0;
       if (pending.current) { sendDelta(pending.current); pending.current = 0; }
       startInertia();
     })

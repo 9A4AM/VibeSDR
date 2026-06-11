@@ -33,7 +33,7 @@ import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
-import { UberSDRClient, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
+import { UberSDRClient, MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind }                from '../services/DecoderClient';
@@ -583,10 +583,50 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
     });
     client.current = c;
-    c.connect(status.frequency, status.mode);
-    return () => { destroyed.current = true; c.destroy(); client.current = null; };
+    // QoL: restore the last frequency/mode used on THIS instance before
+    // connecting (the hardcoded default landed on the 20m FT8 squeal every
+    // launch). Falls back to the default tune on first visit / bad data.
+    let cancelled = false;
+    AsyncStorage.getItem('lsv_last_tune:' + baseUrl).then((j: string | null) => {
+      if (cancelled || destroyed.current) return;
+      let f = status.frequency;
+      let m: SDRMode = status.mode;
+      if (j) {
+        try {
+          const p = JSON.parse(j) as { frequency?: unknown; mode?: unknown };
+          if (typeof p.frequency === 'number' && p.frequency >= MIN_HZ && p.frequency <= MAX_HZ) {
+            f = Math.round(p.frequency);
+          }
+          if (typeof p.mode === 'string' && p.mode in MODE_BANDWIDTHS) m = p.mode as SDRMode;
+        } catch {}
+      }
+      const bw = MODE_BANDWIDTHS[m];
+      setStatus((prev: SDRStatus) => ({
+        ...prev, frequency: f, mode: m,
+        ...(bw ? { bandwidthLow: bw[0], bandwidthHigh: bw[1] } : {}),
+      }));
+      lastTuneLoaded.current = true;
+      c.connect(f, m);
+    }).catch(() => {
+      if (cancelled || destroyed.current) return;
+      lastTuneLoaded.current = true;
+      c.connect(status.frequency, status.mode);
+    });
+    return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
+
+  // Persist the tune (debounced — the drum changes frequency rapidly) so the
+  // next visit to this instance resumes where you left off.
+  const lastTuneLoaded = useRef(false);
+  useEffect(() => {
+    if (!lastTuneLoaded.current || !status.frequency) return;
+    const t = setTimeout(() => {
+      AsyncStorage.setItem('lsv_last_tune:' + baseUrl,
+        JSON.stringify({ frequency: status.frequency, mode: status.mode })).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [status.frequency, status.mode, baseUrl]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state: string) => {

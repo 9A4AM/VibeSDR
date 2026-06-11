@@ -186,7 +186,11 @@ export class UberSDRClient {
   zoom(frequency: number, binBandwidth: number) {
     const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
     const n  = this.status.binCount || 1024;
-    const bb = Math.max(0.5, Math.min(binBandwidth, 30_000_000 / n));
+    // Max-zoom floor: 2 Hz/bin ≈ 2 kHz span @1024 bins — one SSB channel.
+    // The server happily goes to 0.5 Hz/bin and even shrinks binCount for
+    // deeper zoom, but past ~2 kHz the spectrum is flat noise and the view
+    // "keeps zooming" with nothing visibly changing.
+    const bb = Math.max(2, Math.min(binBandwidth, 30_000_000 / n));
     this.view.centerHz     = f;
     this.view.binBandwidth = bb;
     this._sendView(f, bb);
