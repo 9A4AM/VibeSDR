@@ -179,24 +179,41 @@ export interface WaterfallViewProps {
 const WF_SKSL = `
 uniform shader wf;
 uniform shader lut;
-uniform float uHead;     // ring write position (rows)
-uniform float uShift;    // sub-pixel slide offset (screen px)
-uniform float uRows;     // ring rows (256)
+uniform float uHeadF;    // ABSOLUTE frame counter (next write index)
+uniform float uFrac;     // 0..1 progress through the current frame interval
+uniform float uN;        // lines per data frame (1/2/3 = native/20fps/30fps)
+uniform float uQuant;    // 1 = crisp whole-line steps (settled), 0 = continuous (boost)
+uniform float uRows;     // ring rows (256 frames)
 uniform float uTexW;     // bins
 uniform float uDrawW;    // draw width (screen px)
 uniform float uDrawH;    // draw height incl. overscan row (screen px)
 uniform float uSharp;    // unsharp amount (0..~1.2)
 uniform float uContrast; // -1..1 S-curve mix
 
+// Temporal interpolation (phase 2): the ring holds RAW frames; intermediate
+// lines are synthesized here by blending adjacent frames at fractional depth
+// — identical maths to the old JS line ticker, per-pixel, for free.
+// Line algebra: with frame K = uHeadF-1 newest, lines (K-1)*uN+1..K*uN blend
+// frame[K-1]->frame[K]; revealed lines this interval R = uFrac*uN; absolute
+// line at display row L is A = (uHeadF-2)*uN + R - L; its source frames are
+// f = floor(A/uN) and f+1 blended by frac(A/uN).
 half4 main(float2 xy) {
-  float yy  = xy.y + uShift;
-  float row = floor(yy / uDrawH * uRows);
-  float ty  = mod(uHead - 1.0 - row + 2.0 * uRows, uRows) + 0.5;
-  float tx  = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
-  float c   = wf.eval(float2(tx, ty)).r;
+  float Lc = xy.y / uDrawH * uRows;            // continuous display line
+  float L  = uQuant > 0.5 ? floor(Lc) : Lc;    // whole-pixel rows when settled
+  float R  = uFrac * uN;
+  if (uQuant > 0.5) { R = floor(R + 0.0001); }
+  float A  = (uHeadF - 2.0) * uN + R - L;
+  float fI = floor(A / uN);
+  float t  = A / uN - fI;
+  float r1 = mod(fI, uRows) + 0.5;
+  float r2 = mod(fI + 1.0, uRows) + 0.5;
+  float tx = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
+  float c  = mix(wf.eval(float2(tx, r1)).r, wf.eval(float2(tx, r2)).r, t);
   if (uSharp > 0.0) {
-    float l = wf.eval(float2(max(tx - 1.0, 0.5), ty)).r;
-    float r = wf.eval(float2(min(tx + 1.0, uTexW - 0.5), ty)).r;
+    float xl = max(tx - 1.0, 0.5);
+    float xr = min(tx + 1.0, uTexW - 0.5);
+    float l = mix(wf.eval(float2(xl, r1)).r, wf.eval(float2(xl, r2)).r, t);
+    float r = mix(wf.eval(float2(xr, r1)).r, wf.eval(float2(xr, r2)).r, t);
     c = c + uSharp * (c - (l + r) * 0.5);
   }
   float raw = clamp(c, 0.0, 1.0);
@@ -299,16 +316,18 @@ export default function WaterfallView({
   // display-order mapping via uHead). Each push = one row write + a 256KB
   // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
   const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
-  const rowHead      = useRef(0);
   const lastBinCount = useRef(0);
   const [texReady, setTexReady] = useState(false);
   const texReadyRef  = useRef(false);
 
   // Shader uniforms driven from the UI thread (no React render per change)
-  const uHead       = useSharedValue(0);
+  const uHead       = useSharedValue(0); // ABSOLUTE frame counter (next write)
   const uTexW       = useSharedValue(1024);
   const uSharpSv    = useSharedValue(0);
   const uContrastSv = useSharedValue(0);
+  const uNSv        = useSharedValue(2); // lines per data frame
+  const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
+  const frameCount  = useRef(0);
 
   // Palette = a 256×1 LUT texture; switching recolours ALL history instantly.
   const lutImage = useMemo(() => {
@@ -371,15 +390,17 @@ export default function WaterfallView({
   const avgFrameMs  = useRef(150);
 
   const wfUniforms = useDerivedValue(() => ({
-    uHead:     uHead.value,
-    uShift:    (1 - scrollFrac.value) * rowH,
+    uHeadF:    uHead.value,
+    uFrac:     scrollFrac.value,
+    uN:        uNSv.value,
+    uQuant:    uQuantSv.value,
     uRows:     ROWS,
     uTexW:     uTexW.value,
     uDrawW:    width,
     uDrawH:    wfRenderH,
     uSharp:    uSharpSv.value,
     uContrast: uContrastSv.value,
-  }), [width, wfRenderH, rowH]);
+  }), [width, wfRenderH]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
   // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
@@ -454,12 +475,12 @@ export default function WaterfallView({
     const n = row.length;
     if (n !== lastBinCount.current || !idxBuf.current) {
       idxBuf.current  = new Uint8Array(n * ROWS);
-      rowHead.current = 0;
+      frameCount.current = 0;
       lastBinCount.current = n;
       uTexW.value = n;
     }
-    idxBuf.current.set(row, rowHead.current * n);
-    rowHead.current = (rowHead.current + 1) % ROWS;
+    idxBuf.current.set(row, (frameCount.current % ROWS) * n);
+    frameCount.current += 1;
 
     const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
@@ -469,7 +490,7 @@ export default function WaterfallView({
     );
     if (img) {
       swapWfImage(img, data); // UI-thread swap + retire old pair (~256KB now)
-      uHead.value = rowHead.current;
+      uHead.value = frameCount.current;
       if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
     } else {
       data.dispose();
@@ -477,67 +498,36 @@ export default function WaterfallView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
 
-  // pushLine = pushRow + per-push scroll treatment. The line pipeline runs at
-  // the SAME rate boosted or settled — only the transform differs (vsync
-  // mini-slide vs whole-pixel snap). Deciding slide-vs-snap per PUSH (reading
-  // the interact ref live) keeps the fill rate constant across touch
-  // transitions; the old per-frame switch dropped to 1 line/frame on boost
-  // entry and killed the ticker mid-emission — visible slowdown + stuck
-  // judder at both edges of every touch.
-  const pushLine = useCallback((row: Uint8Array) => {
-    pushRow(row);
-    const boosted = smoothTune &&
-      Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
-    if (boosted) {
-      // Slide spans one push interval — continuous motion at panel rate.
-      const dur = Math.max(30, Math.min(150, avgFrameMs.current / ROWS_PER_FRAME));
-      scrollFrac.value = 0;
-      scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
-    } else {
-      scrollFrac.value = 1; // whole-pixel landing, display idles
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pushRow, smoothTune, ROWS_PER_FRAME]);
+  // (pushLine and the per-line slide/snap switching are gone — phase 2 moves
+  // line synthesis into the shader; pushRow runs once per data frame and the
+  // reveal stepper / boost withTiming drive uFrac.)
 
-  const pushLineRef = useRef(pushLine);
-  pushLineRef.current = pushLine; // ticker always sees current palette + boost state
+  // ── Reveal stepper (phase 2) ─────────────────────────────────────────────
+  // The shader synthesizes intermediate lines from adjacent RAW frames; JS
+  // only advances the reveal fraction. Settled = discrete whole-line steps
+  // (one shared-value write per line, display idles between); boost = vsync
+  // withTiming for the continuous glide. All the old lerp buffers, row pools
+  // and per-line texture pushes are GONE.
+  const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const prevRow    = useRef<Uint8Array | null>(null); // last data row (lerp source)
-  const lerpBuf    = useRef<Uint8Array | null>(null);
-  const rowPool    = useRef<[Uint8Array | null, Uint8Array | null]>([null, null]);
-  const rowPoolIdx = useRef(0);
-  const lineTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopLineTicker = useCallback(() => {
-    if (lineTimer.current) { clearInterval(lineTimer.current); lineTimer.current = null; }
+  const stopRevealStepper = useCallback(() => {
+    if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; }
   }, []);
 
-  // Emit n lines morphing prev→cur across the measured data interval
-  // (LUT-index lerp — the index ramp is monotonic in intensity, so blends are
-  // valid colours). Duplicating instead of interpolating leaves hard 3/6-row
-  // bands that read as broken signal traces. The final line is the exact new
-  // data row; self-stops after it, so the display idles between frames.
-  const startLineInterp = useCallback((from: Uint8Array, to: Uint8Array, n: number, intervalMs: number) => {
-    stopLineTicker();
-    if (!lerpBuf.current || lerpBuf.current.length !== to.length) {
-      lerpBuf.current = new Uint8Array(to.length);
-    }
-    const buf = lerpBuf.current;
+  const startRevealStepper = useCallback((n: number, intervalMs: number) => {
+    stopRevealStepper();
+    scrollFrac.value = 0;
+    if (n <= 1) { scrollFrac.value = 1; return; } // native: one whole-line step
     let k = 0;
-    const emit = () => {
+    revealTimer.current = setInterval(() => {
       k++;
-      if (k >= n) { pushLineRef.current(to); stopLineTicker(); return; }
-      const w = k / n;
-      for (let i = 0; i < to.length; i++) buf[i] = (from[i] + (to[i] - from[i]) * w) | 0;
-      pushLineRef.current(buf); // pushRow copies synchronously — buf reuse is safe
-    };
-    emit(); // first interpolated line lands with the frame
-    if (lineTimer.current === null && k < n) {
-      lineTimer.current = setInterval(emit, Math.max(16, intervalMs / n));
-    }
-  }, [stopLineTicker]);
+      scrollFrac.value = Math.min(1, k / n);
+      if (k >= n) stopRevealStepper();
+    }, Math.max(16, intervalMs / n));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopRevealStepper]);
 
-  useEffect(() => stopLineTicker, [stopLineTicker]); // clear on unmount
+  useEffect(() => stopRevealStepper, [stopRevealStepper]); // clear on unmount
 
   // ── Frame processing (imperative hot path — NO React state per frame) ──────
   // Frames arrive through frameSink, a ref the parent fills from onSpectrum.
@@ -572,27 +562,22 @@ export default function WaterfallView({
     const boost = cfg.smoothTune &&
       now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
 
-    // 3. Waterfall lines — runs IDENTICALLY boosted or settled (constant fill
-    //    rate; pushLine decides slide-vs-snap per push). NATIVE: the raw data
-    //    row once per frame. fps modes: n lines morphing prev→cur across the
-    //    frame interval (10×2 / 10×3 lines per second).
-    //    Row copies ping-pong between two pooled buffers (GC pressure — the
-    //    processor reuses frame.row, so a snapshot is still required).
-    let cur = rowPool.current[rowPoolIdx.current];
-    if (!cur || cur.length !== frame.row.length) {
-      cur = new Uint8Array(frame.row.length);
-      rowPool.current[rowPoolIdx.current] = cur;
-    }
-    cur.set(frame.row);
-    rowPoolIdx.current ^= 1;
-    const from = prevRow.current;
-    if (cfg.rowsPerFrame > 1 && from && from.length === cur.length) {
-      startLineInterp(from, cur, cfg.rowsPerFrame, avgFrameMs.current);
+    // 3. Waterfall (phase 2): ONE raw frame row into the ring — the shader
+    //    synthesizes the line-rate look (uN lines/frame, temporal blend of
+    //    adjacent frames) and the reveal. JS just advances the fraction.
+    pushRow(frame.row); // copies synchronously — no snapshot needed
+    uNSv.value     = cfg.rowsPerFrame;
+    uQuantSv.value = boost ? 0 : 1;
+    const dur = Math.max(50, Math.min(1000, avgFrameMs.current));
+    if (boost) {
+      // Continuous reveal at panel rate (120Hz glide + temporal morph).
+      stopRevealStepper();
+      scrollFrac.value = 0;
+      scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
     } else {
-      stopLineTicker();
-      pushLineRef.current(cur);
+      // Discrete whole-line steps — display idles between them.
+      startRevealStepper(cfg.rowsPerFrame, dur);
     }
-    prevRow.current = cur;
 
     // 4. Spectrum + peak paths from normalised [0,1] traces
     if (cfg.specShow && cfg.specH > 4) {
@@ -649,8 +634,6 @@ export default function WaterfallView({
       swapPath(peakPath, Skia.Path.Make());
     }
 
-    // (Scroll transform is handled per push inside pushLine — slide when
-    // boosted, whole-pixel snap when settled.)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
