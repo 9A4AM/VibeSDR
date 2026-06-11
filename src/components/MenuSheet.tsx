@@ -18,7 +18,9 @@ import {
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
 import { COLORMAP_NAMES } from '../assets/colormapUtils';
@@ -130,8 +132,12 @@ export interface MenuSheetProps {
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
-  frameRate?:         'native' | '20fps' | '60fps';
-  onFrameRate?:       (v: 'native' | '20fps' | '60fps') => void;
+  frameRate?:         'native' | '20fps' | '30fps';
+  onFrameRate?:       (v: 'native' | '20fps' | '30fps') => void;
+  smoothTune?:        boolean;
+  onSmoothTune?:      (v: boolean) => void;
+  idleSlow?:          boolean;
+  onIdleSlow?:        (v: boolean) => void;
   onSpecRatio?:       () => void;
 }
 
@@ -309,11 +315,29 @@ export default function MenuSheet({
   specFloor = 0, onSpecFloor,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '60fps', onFrameRate,
+  frameRate = '20fps', onFrameRate,
+  smoothTune = true, onSmoothTune, idleSlow = true, onIdleSlow,
   onSpecRatio,
 }: MenuSheetProps) {
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
+  const [cmapOpen, setCmapOpen] = useState(false);
+
+  // Responsive sheet geometry — SHEET_H is a module constant measured in
+  // PORTRAIT, so in landscape a bottom-anchored 700pt sheet pokes past the top
+  // of the screen (unscrollable) and full-bleed width runs under the Dynamic
+  // Island. Recompute per orientation and inset-clear in landscape.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const sheetInsets = useSafeAreaInsets();
+  const isLandscape = winW > winH;
+  const sheetH = Math.min(winH * 0.88, 700);
+  const sheetW = isLandscape
+    ? Math.min(520, winW - sheetInsets.left - sheetInsets.right - 24)
+    : undefined;
+  const sheetGeom = isLandscape
+    ? { height: sheetH, width: sheetW, left: (winW - (sheetW ?? winW)) / 2,
+        right: undefined, borderTopLeftRadius: 16, borderTopRightRadius: 16 }
+    : { height: sheetH };
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
   const [bwSync,           setBwSync]           = useState(false);
@@ -358,17 +382,20 @@ export default function MenuSheet({
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <View style={StyleSheet.absoluteFill}>
         <TouchableWithoutFeedback onPress={onClose}>
           <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>
 
-        <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+        <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] }]}>
           <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.handle} />
 
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}
+          <ScrollView style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent,
+              { paddingBottom: sheetInsets.bottom + 16 }]}
             showsVerticalScrollIndicator={false}>
 
             {/* ── NEARBY STATION ─────────────────────────────────── */}
@@ -417,20 +444,30 @@ export default function MenuSheet({
                     onPress={() => onSpecRatio?.()} />
                 </BtnRow>
 
-                {/* Colour Map — picker-style row */}
+                {/* Colour Map — dropdown over the FULL palette list. (The old
+                    pill strip hardcoded names like 'sonar'/'green' that never
+                    existed in the tables → silent gqrx fallback.) */}
                 <SubLabel label="Colour Map" />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.cmapStrip}>
-                  {(['sonar','gqrx','green','inferno','plasma','viridis'] as const).map(name => (
-                    <TouchableOpacity key={name}
-                      style={[styles.cmapPill, name === colormap && styles.cmapPillActive]}
-                      onPress={() => onColormap(name)} hitSlop={4}>
-                      <Text style={[styles.cmapPillText, name === colormap && styles.cmapPillTextActive]}>
-                        {name.charAt(0).toUpperCase()+name.slice(1)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                <TouchableOpacity style={styles.dropHeader}
+                  onPress={() => setCmapOpen((o: boolean) => !o)} activeOpacity={0.7}>
+                  <Text style={styles.dropHeaderText}>
+                    {colormap === 'gqrx' ? 'GQRX' : colormap.charAt(0).toUpperCase() + colormap.slice(1)}
+                  </Text>
+                  <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
+                </TouchableOpacity>
+                {cmapOpen && (
+                  <View style={styles.dropList}>
+                    {COLORMAP_NAMES.map(name => (
+                      <TouchableOpacity key={name}
+                        style={[styles.dropItem, name === colormap && styles.dropItemActive]}
+                        onPress={() => { onColormap(name); setCmapOpen(false); }}>
+                        <Text style={[styles.dropItemText, name === colormap && styles.dropItemTextActive]}>
+                          {name === 'gqrx' ? 'GQRX' : name.charAt(0).toUpperCase() + name.slice(1)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
 
                 {/* VFO Needle Colour — colour swatches */}
                 <SubLabel label="VFO Needle Colour" />
@@ -463,6 +500,27 @@ export default function MenuSheet({
                       minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                     <Text style={styles.sliderVal}>{autoContrast}</Text>
                   </View>
+                )}
+                {wfCoarse === 'manual' && (
+                  <>
+                    {/* Manual dB window — floor/ceiling kept ≥5dB apart */}
+                    <View style={styles.sliderWrap}>
+                      <Text style={styles.sliderLabel}>Floor</Text>
+                      <Slider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
+                        value={Math.min(dbMin, dbMax - 5)}
+                        onValueChange={(v: number) => onDbMin?.(Math.min(v, dbMax - 5))}
+                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                      <Text style={styles.sliderVal}>{dbMin} dB</Text>
+                    </View>
+                    <View style={styles.sliderWrap}>
+                      <Text style={styles.sliderLabel}>Ceiling</Text>
+                      <Slider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
+                        value={Math.max(dbMax, dbMin + 5)}
+                        onValueChange={(v: number) => onDbMax?.(Math.max(v, dbMin + 5))}
+                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                      <Text style={styles.sliderVal}>{dbMax} dB</Text>
+                    </View>
+                  </>
                 )}
 
                 {/* Waterfall — Fine */}
@@ -526,10 +584,22 @@ export default function MenuSheet({
 
                 {/* Frame Interpolation */}
                 <SubLabel label="Frame Interpolation" />
+                {/* NATIVE = data rate (~10 lines/s, discrete rows); 20/30 =
+                    temporally interpolated 2×/3× line rate. Smooth-tune boost
+                    overrides to panel-native refresh while touching. */}
                 <BtnRow>
                   <Btn label="NATIVE" active={frameRate==='native'} onPress={() => onFrameRate?.('native')} />
                   <Btn label="20fps"  active={frameRate==='20fps'}  onPress={() => onFrameRate?.('20fps')} />
-                  <Btn label="60fps"  active={frameRate==='60fps'}  onPress={() => onFrameRate?.('60fps')} />
+                  <Btn label="30fps"  active={frameRate==='30fps'}  onPress={() => onFrameRate?.('30fps')} />
+                </BtnRow>
+
+                {/* Power saving — SMOOTH TUNE: 120Hz only while interacting,
+                    discrete rows + eased spectrum when settled. IDLE SAVER:
+                    ⅓ server frame rate after 30s without touch. */}
+                <SubLabel label="Power Saving" />
+                <BtnRow>
+                  <Btn label="SMOOTH TUNE" active={smoothTune} onPress={() => onSmoothTune?.(!smoothTune)} />
+                  <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
 
               </View>
@@ -770,6 +840,26 @@ const styles = StyleSheet.create({
   btnSelected:   { borderColor: 'rgba(255,160,0,0.55)' }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
+  // Colour map dropdown
+  dropHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
+    borderRadius: 4, paddingHorizontal: 12, paddingVertical: 9, marginVertical: 4,
+  },
+  dropHeaderText: { color: C.gold, fontFamily: 'Nixie One', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
+  dropChevron:    { color: C.muted, fontSize: 10 },
+  dropList: {
+    borderWidth: 1, borderColor: C.border, borderRadius: 4,
+    marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  dropItem: {
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
+  },
+  dropItemActive:     { backgroundColor: C.active },
+  dropItemText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 12, letterSpacing: 0.5 },
+  dropItemTextActive: { color: C.gold, fontWeight: 'bold' },
+
   btnText:       { color: C.muted, fontFamily: 'Nixie One', fontSize: 11, fontWeight: 'bold', letterSpacing: 0.5 },
   btnTextActive: { color: C.gold },
   btnTextDanger: { color: '#ff6666' },

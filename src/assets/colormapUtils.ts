@@ -1,7 +1,7 @@
 // Colour map utilities — converts packed hex strings and stop arrays
 // into Uint8Array LUTs (256 × RGBA) for use in Skia shaders.
 
-import { COLORMAPS_256, COLORMAPS_STOPS } from './colormaps';
+import { COLORMAPS_256, COLORMAPS_STOPS, COLORMAPS_POS } from './colormaps';
 
 // ── Build 256-entry RGBA LUT from packed 6-char hex string ──────────────────
 function lut256(packed: string): Uint8Array {
@@ -40,15 +40,50 @@ function lutStops(stops: string[]): Uint8Array {
   return lut;
 }
 
+// ── Build 256-entry RGBA LUT from positioned stops [index 0-255, hex] ───────
+function lutPos(stops: Array<[number, string]>): Uint8Array {
+  const lut = new Uint8Array(256 * 4);
+  const parseHex = (hex: string): [number, number, number] => {
+    const h = hex.replace('#', '');
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  };
+  let seg = 0;
+  for (let i = 0; i < 256; i++) {
+    while (seg < stops.length - 2 && i > stops[seg + 1][0]) seg++;
+    const [p0, c0] = stops[seg];
+    const [p1, c1] = stops[seg + 1];
+    const f = p1 > p0 ? Math.max(0, Math.min(1, (i - p0) / (p1 - p0))) : 0;
+    const [r0, g0, b0] = parseHex(c0);
+    const [r1, g1, b1] = parseHex(c1);
+    lut[i * 4 + 0] = Math.round(r0 + (r1 - r0) * f);
+    lut[i * 4 + 1] = Math.round(g0 + (g1 - g0) * f);
+    lut[i * 4 + 2] = Math.round(b0 + (b1 - b0) * f);
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+}
+
+// Back-compat: the old picker passed names that never existed in the tables
+// ('sonar', 'green' — they silently fell back to gqrx), and 'Sonar' was
+// renamed 'Sonar Green' for v1 parity. Resolve them so persisted prefs work.
+const NAME_ALIASES: Record<string, string> = {
+  'Sonar': 'Sonar Green',
+  'sonar': 'Sonar Green',
+  'green': 'Classic Green',
+};
+
 // ── Cache ────────────────────────────────────────────────────────────────────
 const _cache = new Map<string, Uint8Array>();
 
-export function getColorLUT(name: string): Uint8Array {
+export function getColorLUT(rawName: string): Uint8Array {
+  const name = NAME_ALIASES[rawName] ?? rawName;
   if (_cache.has(name)) return _cache.get(name)!;
 
   let lut: Uint8Array;
   if (name in COLORMAPS_256) {
     lut = lut256(COLORMAPS_256[name]);
+  } else if (name in COLORMAPS_POS) {
+    lut = lutPos(COLORMAPS_POS[name]);
   } else if (name in COLORMAPS_STOPS) {
     lut = lutStops(COLORMAPS_STOPS[name]);
   } else {
@@ -62,8 +97,11 @@ export function getColorLUT(name: string): Uint8Array {
 
 export const COLORMAP_NAMES = [
   'gqrx', 'inferno', 'turbo', 'plasma', 'viridis', 'magma',
-  'Classic', 'Classic Green', 'Electric', 'Greyscale',
-  'Night Vision', 'Sonar', 'Sonar Orange',
+  'Classic', 'Classic Green', 'Teejeez', 'Ha7ilm', 'Zoran',
+  'Kiwi', 'CuteSDR', 'SdrDx', 'Kiwi Linear',
+  'Electric', 'Jet', 'WebSDR', 'Vivid', 'Temper', 'Smoke',
+  'Greyscale', 'Black Hot',
+  'Night Vision', 'Sonar Green', 'Sonar Orange',
 ];
 
 // Map dBFS value to LUT index (0-255)

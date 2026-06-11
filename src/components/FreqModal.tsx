@@ -80,7 +80,8 @@ export default function FreqModal({
   const btnPadY  = isWhite ? 12 : 10;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

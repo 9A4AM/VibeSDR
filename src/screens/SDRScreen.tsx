@@ -60,8 +60,19 @@ import MapOverlay, { type MapKind } from '../components/MapOverlay';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const LSV_PX_STEP = 22;
-const BW_ZOOM_OCTAVE_PX = 40;   // drum px per 2× waterfall zoom
+// Drum sensitivity (skin SENS_TABLE parity): px of travel per tune step /
+// zoom octave. PRECISE doubles travel for everything (22→44, 40→77 ≈ skin's
+// zoom 30→58 ratio).
+const DRUM_SENS = {
+  normal:  { vfo: 22, zoomOctave: 40 },
+  precise: { vfo: 44, zoomOctave: 77 },
+};
+// Velocity-adaptive VFO (beyond skin): a slow deliberate thumb gets up to
+// FINE_MULT× more travel per step (fine tuning), a fast spin stays at 1×.
+// Mapped continuously, so decelerating onto a signal gains precision mid-drag.
+const VFO_FINE_MULT  = 4;    // sensitivity multiplier at the slow end
+const VFO_VEL_FINE   = 40;   // px/s and below → fully fine
+const VFO_VEL_FAST   = 350;  // px/s and above → full speed
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -140,7 +151,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
-  const [frameRate,     setFrameRate]     = useState<'native'|'20fps'|'60fps'>('60fps');
+  const [frameRate,     setFrameRate]     = useState<'native'|'20fps'|'30fps'>('20fps');
+  // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
+  // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
+  const [smoothTune,    setSmoothTune]    = useState(true);
+  // Idle saver: after 30s without touch, ask the server for ⅓ frame rate
+  // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
+  // all slow with the data; any touch restores full rate instantly.
+  const [idleSlow,      setIdleSlow]      = useState(true);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ff8800');
   // SNR squelch (audio gate) — value ≤ -999 = open/disabled
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
@@ -165,6 +183,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.getItem('lsv_fq_unit').then((u: string | null) => {
       if (u === 'hz' || u === 'khz' || u === 'mhz') setFreqUnit(u);
     }).catch(() => {});
+    AsyncStorage.getItem('lsv_smooth_tune').then((v: string | null) => {
+      if (v !== null) setSmoothTune(v === '1');
+    }).catch(() => {});
+    AsyncStorage.getItem('lsv_idle_slow').then((v: string | null) => {
+      if (v !== null) setIdleSlow(v === '1');
+    }).catch(() => {});
+    AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
+      if (v === 'native' || v === '20fps' || v === '30fps') setFrameRate(v);
+    }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
 
@@ -175,6 +202,51 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [snrDb,        setSnrDb]        = useState(40);
   const [signalActive, setSignalActive] = useState(false);
   const [signalMode,   setSignalMode]   = useState<'snr' | 'smeter' | 'dbfs'>('snr');
+
+  // ── Display prefs persistence — every waterfall/spectrum/display setting in
+  // one blob, restored on launch, saved debounced (sliders fire per-tick).
+  const prefsLoaded = useRef(false);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_display_prefs').then((j: string | null) => {
+      if (j) {
+        try {
+          const p = JSON.parse(j) as Record<string, unknown>;
+          const num  = (k: string, set: (v: number) => void)  => { const v = p[k]; if (typeof v === 'number' && isFinite(v)) set(v); };
+          const bool = (k: string, set: (v: boolean) => void) => { const v = p[k]; if (typeof v === 'boolean') set(v); };
+          num('dbMin', setDbMin);                 num('dbMax', setDbMax);
+          num('specSmoothing', setSpecSmoothing); num('specFloor', setSpecFloor);
+          num('specPeakScale', setSpecPeakScale); num('wfBrightness', setWfBrightness);
+          num('wfContrast', setWfContrast);       num('wfSharpness', setWfSharpness);
+          num('autoContrast', setAutoContrast);   num('step', setStep);
+          num('specRatioPortrait', setSpecRatioPortrait);
+          num('specRatioLandscape', setSpecRatioLandscape);
+          bool('specShow', setSpecShow);          bool('peakHold', setPeakHold);
+          bool('spatialSmooth', setSpatialSmooth);
+          if (p.wfCoarse === 'auto' || p.wfCoarse === 'manual') setWfCoarse(p.wfCoarse);
+          if (p.signalMode === 'snr' || p.signalMode === 'smeter' || p.signalMode === 'dbfs') setSignalMode(p.signalMode);
+          if (typeof p.colormap === 'string')  setColormap(p.colormap);
+          if (typeof p.vfoNeedle === 'string') setVfoNeedle(p.vfoNeedle);
+        } catch {}
+      }
+      prefsLoaded.current = true;
+    }).catch(() => { prefsLoaded.current = true; });
+  }, []);
+
+  useEffect(() => {
+    if (!prefsLoaded.current) return; // don't clobber the blob with defaults pre-load
+    const t = setTimeout(() => {
+      AsyncStorage.setItem('lsv_display_prefs', JSON.stringify({
+        dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
+        specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
+        autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
+        specRatioPortrait, specRatioLandscape,
+      })).catch(() => {});
+    }, 500);
+    return () => clearTimeout(t);
+  }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
+      specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
+      specRatioPortrait, specRatioLandscape]);
 
   // ── Recording ─────────────────────────────────────────────────────────────
 
@@ -495,18 +567,104 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, []);
 
+  // ── Smooth tune / idle saver ──────────────────────────────────────────────
+  // Touches on RNGH surfaces (waterfall, drums) bypass the JS responder chain,
+  // so interaction is marked BOTH in the root capture handler (catches all
+  // Pressable UI) and at the top of each gesture callback below.
+  const IDLE_SLOW_MS = 30_000;
+  const IDLE_DIVISOR = 3; // skin default-waterfall parity
+
+  const lastInteractRef = useRef(Date.now());
+  const idleActiveRef   = useRef(false);
+
+  const markInteract = useCallback(() => {
+    lastInteractRef.current = Date.now();
+    if (idleActiveRef.current) {
+      idleActiveRef.current = false;
+      client.current?.setRate(1); // wake: full data rate immediately
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!idleSlow) {
+      if (idleActiveRef.current) {
+        idleActiveRef.current = false;
+        client.current?.setRate(1);
+      }
+      return;
+    }
+    idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
+    const t = setInterval(() => {
+      if (!idleActiveRef.current &&
+          Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
+        idleActiveRef.current = true;
+        client.current?.setRate(IDLE_DIVISOR);
+      }
+    }, 5000);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idleSlow, baseUrl]); // baseUrl: new client starts at divisor 1
+
+  const onSmoothTune = useCallback((v: boolean) => {
+    setSmoothTune(v);
+    AsyncStorage.setItem('lsv_smooth_tune', v ? '1' : '0').catch(() => {});
+  }, []);
+
+  const onIdleSlow = useCallback((v: boolean) => {
+    setIdleSlow(v);
+    AsyncStorage.setItem('lsv_idle_slow', v ? '1' : '0').catch(() => {});
+  }, []);
+
+  const onFrameRate = useCallback((v: 'native'|'20fps'|'30fps') => {
+    setFrameRate(v);
+    AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
+  }, []);
+
+  // ── Drum sensitivity (NORMAL / PRECISE) ──────────────────────────────────
+  const [drumMode, setDrumMode] = useState<'normal'|'precise'>('normal');
+  const drumModeRef = useRef<'normal'|'precise'>('normal');
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_drum_sens').then((v: string | null) => {
+      if (v === 'normal' || v === 'precise') { setDrumMode(v); drumModeRef.current = v; }
+    }).catch(() => {});
+  }, []);
+  const onDrumMode = useCallback((m: 'normal'|'precise') => {
+    setDrumMode(m);
+    drumModeRef.current = m;
+    AsyncStorage.setItem('lsv_drum_sens', m).catch(() => {});
+  }, []);
+
   // ── VFO drum ──────────────────────────────────────────────────────────────
   // Skin-parity step tuning (vSendDelta + vDown from Scalable_Mobile_UI v6.3.1):
-  //   - pending accumulates in Hz: px × step / LSV_PX_STEP
+  //   - pending accumulates in Hz: px × step / pxPerStep (velocity-adaptive)
   //   - tunes ONLY in whole steps: steps = round(pending / step)
   //   - baseline snaps to the step grid, so frequency always lands on a
   //     multiple of the step rate (7,153,000 — never 7,153,437)
   const vfoPendingHz = useRef(0);
+  const vfoVel = useRef({ t: 0, v: 0 }); // EMA thumb speed, px/s
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
+    markInteract();
     const s = stepRef.current;
-    vfoPendingHz.current += (pxDelta * s) / LSV_PX_STEP;
+    // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
+    // 0 so a fresh slow touch starts fully fine; a fast flick's EMA catches
+    // up within 2–3 events. The fine↔fast blend is continuous, so easing off
+    // mid-spin onto a signal tightens the rate immediately.
+    const now = Date.now();
+    const gap = now - vfoVel.current.t;
+    vfoVel.current.t = now;
+    if (gap > 300) {
+      vfoVel.current.v = 0;
+    } else {
+      const inst = Math.abs(pxDelta) / (Math.max(8, gap) / 1000);
+      vfoVel.current.v = vfoVel.current.v * 0.7 + inst * 0.3;
+    }
+    const k = Math.max(0, Math.min(1,
+      (vfoVel.current.v - VFO_VEL_FINE) / (VFO_VEL_FAST - VFO_VEL_FINE)));
+    const pxPerStep = DRUM_SENS[drumModeRef.current].vfo
+      * (VFO_FINE_MULT - (VFO_FINE_MULT - 1) * k);
+    vfoPendingHz.current += (pxDelta * s) / pxPerStep;
     const steps = Math.round(vfoPendingHz.current / s);
     if (!steps) return;
     vfoPendingHz.current -= steps * s;
@@ -527,26 +685,28 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    const s = c.getStatus();
+    markInteract();
+    const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
     const a = bwZoomAcc.current;
     const now = Date.now();
     if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.px = 0; }
     a.t = now;
     a.px += pxDelta;
-    // 40px of drum travel per zoom octave (2×) — tune BW_ZOOM_OCTAVE_PX to taste
-    c.zoom(s.centerHz, Math.max(0.5, a.base * Math.pow(0.5, a.px / BW_ZOOM_OCTAVE_PX)));
+    // Drum px per zoom octave (2×) — PRECISE nearly doubles the travel
+    c.zoom(s.centerHz, Math.max(0.5,
+      a.base * Math.pow(0.5, a.px / DRUM_SENS[drumModeRef.current].zoomOctave)));
   }, []);
 
   const onZoomIn = useCallback(() => {
     const c = client.current; if (!c) return;
-    const s = c.getStatus(); if (!s.binBandwidth || !s.centerHz) return;
+    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     c.zoom(s.centerHz, Math.max(1, s.binBandwidth / 2));
   }, []);
 
   const onZoomOut = useCallback(() => {
     const c = client.current; if (!c) return;
-    const s = c.getStatus(); if (!s.binBandwidth || !s.centerHz) return;
+    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     c.zoom(s.centerHz, s.binBandwidth * 2);
   }, []);
 
@@ -560,7 +720,11 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfPanDelta = useCallback((dxPx: number) => {
     const c = client.current; if (!c) return;
-    const s = c.getStatus(); if (!s.bwHz || !s.centerHz) return;
+    markInteract();
+    // Predicted view: pan() updates it synchronously, so successive deltas
+    // compound correctly. Re-basing on getStatus() made every delta in an RTT
+    // window re-apply from the same stale centre (rubber-banding).
+    const s = c.getView(); if (!s.bwHz || !s.centerHz) return;
     c.pan(s.centerHz + Math.round((dxPx / screenW) * s.bwHz));
   }, [screenW]);
 
@@ -568,7 +732,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const wfZoomAcc = useRef({ base: 0, f: 1, t: 0 });
   const wfZoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
-    const s = c.getStatus(); if (!s.binBandwidth || !s.centerHz) return;
+    markInteract();
+    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
     const now = Date.now();
     if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.f = 1; }
@@ -587,6 +752,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
+    markInteract();
     const clamped = Math.max(MIN_HZ, Math.min(MAX_HZ, hz));
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
@@ -648,6 +814,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onTuneHz = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
+    markInteract();
     const clamped = Math.max(MIN_HZ, Math.min(MAX_HZ, hz));
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
@@ -658,7 +825,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bottomInset = insets.bottom;
 
   return (
-    <View style={styles.root}>
+    <View
+      style={styles.root}
+      // Capture-phase touch sniff (returns false — never steals the touch):
+      // marks interaction for smooth tune / idle saver on any Pressable UI.
+      onStartShouldSetResponderCapture={() => { markInteract(); return false; }}
+    >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
       {/* Waterfall — fills screen below the status bar / Dynamic Island so the
@@ -690,6 +862,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         specPeakScale={specPeakScale}
         peakHold={peakHold}
         spatialSmooth={spatialSmooth}
+        smoothTune={smoothTune}
+        lastInteractAt={lastInteractRef}
         wfBrightness={wfBrightness}
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
@@ -810,7 +984,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(10); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('60fps'); setVfoNeedle('#ff8800');
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800');
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
@@ -830,7 +1004,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         specFloor={specFloor}           onSpecFloor={setSpecFloor}
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
-        frameRate={frameRate}           onFrameRate={setFrameRate}
+        frameRate={frameRate}           onFrameRate={onFrameRate}
+        smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
+        idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
+        drumMode={drumMode}             onDrumMode={onDrumMode}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}

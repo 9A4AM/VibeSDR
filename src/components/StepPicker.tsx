@@ -29,7 +29,8 @@ export default function StepPicker({ visible, currentStep, onSelect, onClose }: 
   const isWhite = t.name === 'white';
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <View style={StyleSheet.absoluteFill}>
         <TouchableWithoutFeedback onPress={onClose}>
           <View style={st.backdrop} />

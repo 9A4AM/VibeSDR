@@ -281,7 +281,9 @@ export class SignalProcessor {
 
     // ── 8. Shader port: unsharp mask + S-curve contrast → LUT index ─────────
     const out = this.outRow!;
-    const sharp = s.wfSharpness * 0.05;          // 0–10 → 0–0.5 (shader u_sharp range)
+    // 0–10 → 0–1.2. Deliberately stronger than the shader's 0–0.5 u_sharp
+    // range — at 0.05/unit the whole slider span was barely perceptible.
+    const sharp = s.wfSharpness * 0.12;
     const contrast = Math.max(-1, Math.min(1, s.wfContrast / 10)); // → u_contrast
     for (let j = 0; j < n; j++) {
       let c = norm[j];

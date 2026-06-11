@@ -16,7 +16,8 @@ export default function ModeSelector({ visible, current, onSelect, onClose }: Mo
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>

@@ -22,7 +22,32 @@ export const COLORMAPS_STOPS: Record<string, string[]> = {
   'Vivid':         ['#000000','#06001c','#090028','#12002c','#230039','#360143','#440154','#472c7a','#3b518b','#2c718e','#21908d','#27ad81','#5cc863','#aadc32','#f6fd25','#fdde17','#fecb31','#FE9029','#F56918','#DC3B07','#CE2D04','#AC1701','#980E01'],
   'Temper':        ['#000000','#05011f','#0f0836','#2f1436','#3d114d','#4e186f','#592a8f','#5e43a5','#5f5eb3','#6276ba','#6b8cbf','#7ba1c2','#95b5c7','#b3c6ce','#d4bcac','#cca389','#c68a6d','#be6f5b','#b25652','#a24050','#8e2c50','#741e4f'],
   'Jet':           ['#00008f','#0000ff','#00ffff','#ffff00','#ff0000','#800000'],
-  'Sonar':         ['#000000','#000800','#001a00','#003300','#005000','#007800','#00aa00','#00cc00','#00ff00','#80ff80','#ccffcc','#efffff'],
+  // 'Sonar Green' = the original 'Sonar' (renamed in v1 9522d5b when the
+  // Amber/Night Vision variants were added — stops unchanged since v1.5).
+  'Sonar Green':   ['#000000','#000800','#001a00','#003300','#005000','#007800','#00aa00','#00cc00','#00ff00','#80ff80','#ccffcc','#efffff'],
+  // Restored from v1 vibeWaterfall (commit 9522d5b — post-v1.5, missed by the
+  // original auto-extraction; the picker listed these but they silently fell
+  // back to gqrx). 'Sonar Orange' = v1's 'Sonar Amber'.
+  'Sonar Orange':  ['#000000','#0d0400','#1a0800','#2e1000','#4a1a00','#6e2800','#9e3c00','#c85000','#e86800','#ff8c20','#ffb860','#fff0cc'],
+  'Night Vision':  ['#000000','#0c0000','#1a0000','#2e0000','#4a0000','#700000','#a00000','#cc0000','#ee1010','#ff4040','#ff8080','#ffcccc'],
+  // OpenWebRX (owrx/waterfall.py) — Teejeez is the classic OWRX default look.
+  // (Eclipse omitted: identical to 'Classic'.)
+  'Teejeez':       ['#000000','#0000FF','#00FFFF','#00FF00','#FFFF00','#FF0000','#FF00FF','#FFFFFF'],
+  'Ha7ilm':        ['#000000','#2E6893','#69A5D0','#214B69','#9DC4E0','#FFF775','#FF8A8A','#B20000'],
+  'Zoran':         ['#000000','#000965','#00E0FF','#2EFF00','#FFEC00','#FF0000'],
+  // GQRX inverted-grey
+  'Black Hot':     ['#FFFFFF','#000000'],
+  // KiwiSDR 'linear' (green→magenta ramp)
+  'Kiwi Linear':   ['#00FF00','#FF00FF'],
+};
+
+// ── Positioned stops [0-255 index, colour] ──────────────────────────────────
+// Procedural ramps from KiwiSDR openwebrx.js (wf colormap switch), transcribed
+// at their exact breakpoints — equal spacing would distort them.
+export const COLORMAPS_POS: Record<string, Array<[number, string]>> = {
+  'Kiwi':    [[0,'#000000'],[31,'#0000ff'],[71,'#00ffff'],[95,'#00ff00'],[115,'#ffff00'],[183,'#ff0000'],[255,'#ff0080']],
+  'CuteSDR': [[0,'#000000'],[43,'#0000ff'],[87,'#00ffff'],[120,'#00ff00'],[154,'#ffff00'],[217,'#ff0000'],[255,'#ff0080']],
+  'SdrDx':   [[0,'#000000'],[20,'#000080'],[60,'#0000ff'],[150,'#ffff00'],[180,'#ff0000'],[210,'#ffffff'],[255,'#ffffff']],
 };
 
 export type BandEntry = [number, number, number, string]; // [freqLow, freqHigh, regionMask, label]

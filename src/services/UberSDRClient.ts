@@ -65,6 +65,14 @@ const FLAG_DELTA_U8  = 0x04;
 // and distorted every dB value entering the waterfall/auto-range/SNR pipeline.
 const U8_DBFS_OFFSET = -256;
 
+// View-prediction tuning (anti-thrash — see view/getView below):
+// coalesce zoom/pan sends to ≤1 per VIEW_SEND_MS (a fast drum gesture fires at
+// 60–120Hz; every request triggers a config echo, so unthrottled gestures flood
+// the link), and treat the view as "in flight" until VIEW_SETTLE_MS of send
+// quiet, after which the server's acked state is adopted in one step.
+const VIEW_SEND_MS   = 50;
+const VIEW_SETTLE_MS = 300;
+
 // ── Client class ──────────────────────────────────────────────────────────────
 
 export class UberSDRClient {
@@ -87,6 +95,23 @@ export class UberSDRClient {
     centerHz:       0,
     bwHz:           0,
   };
+
+  // ── View prediction (anti-thrash) ───────────────────────────────────────
+  // The server echoes a config after EVERY zoom/pan (sendStatus fires even for
+  // no-ops). During a fast gesture many requests are in flight at once and the
+  // echoes replay every intermediate state one RTT late — applied directly to
+  // the UI they thrash the band plan/needle (the "multi-colour flash"), and
+  // gestures that re-base on this stale acked state compute wrong targets, so
+  // the view can land at an old zoom/tune. Fix: keep a *predicted* view that
+  // updates synchronously on every send. Gestures read getView(), frames are
+  // rendered under the predicted geometry while in flight, and the acked truth
+  // (server snaps binBandwidth to a ladder, so its answer always wins) is
+  // adopted in one clean step once sends go quiet.
+  private view = { centerHz: 0, binBandwidth: 0 };
+  private pendingView: { frequency: number; binBandwidth: number } | null = null;
+  private lastSendAt   = 0;
+  private sendTimer:   ReturnType<typeof setTimeout> | null = null;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(baseUrl: string, uuid: string, callbacks: SDRCallbacks) {
     this.baseUrl   = baseUrl.replace(/\/+$/, '');
@@ -119,14 +144,13 @@ export class UberSDRClient {
     if (frequency) this.status.frequency = frequency;
     if (mode)      this.status.mode = mode;
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
-    // Re-centre spectrum on new frequency so waterfall follows the VFO
-    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      this.spectrumWs.send(JSON.stringify({
-        type:         'zoom',
-        frequency,
-        binBandwidth: this.status.binBandwidth || 100,
-      }));
-    }
+    // Re-centre spectrum on new frequency so waterfall follows the VFO.
+    // Goes through the coalesced view sender — a fast VFO drum spin fires per
+    // step, and per-step recentres flood the link with config echoes. (Audio
+    // tune above stays per-event via native, so tuning feel is unaffected.)
+    const bb = this.view.binBandwidth || this.status.binBandwidth;
+    if (bb) this.zoom(frequency, bb);
+    else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
   }
 
   /** Update internal state only — used when native already sent the tune (e.g. lock screen skip). */
@@ -157,23 +181,85 @@ export class UberSDRClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
     const n  = this.status.binCount || 1024;
     const bb = Math.max(0.5, Math.min(binBandwidth, 30_000_000 / n));
-    this.spectrumWs.send(JSON.stringify({ type: 'zoom', frequency: f, binBandwidth: bb }));
+    this.view.centerHz     = f;
+    this.view.binBandwidth = bb;
+    this._sendView(f, bb);
   }
 
   pan(frequency: number) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
-    this.spectrumWs.send(JSON.stringify({ type: 'pan', frequency: f }));
+    this.view.centerHz = f;
+    this._sendView(f, this.view.binBandwidth || this.status.binBandwidth);
+  }
+
+  /** Coalesced view sender — keeps only the latest target, sends ≤1/VIEW_SEND_MS
+   *  with the final state always delivered (trailing edge). */
+  private _sendView(frequency: number, binBandwidth: number) {
+    this.pendingView = { frequency, binBandwidth };
+    const wait = this.lastSendAt + VIEW_SEND_MS - Date.now();
+    if (wait <= 0) { this._flushView(); return; }
+    if (!this.sendTimer) {
+      this.sendTimer = setTimeout(() => { this.sendTimer = null; this._flushView(); }, wait);
+    }
+  }
+
+  private _flushView() {
+    const p = this.pendingView;
+    if (!p) return;
+    this.pendingView = null;
+    // WS down (reconnecting): drop — onopen re-sends the predicted view.
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    this.lastSendAt = Date.now();
+    // Server treats zoom and pan as one case; binBandwidth ≤ 0 = keep current.
+    const msg: Record<string, unknown> = { type: 'zoom', frequency: p.frequency };
+    if (p.binBandwidth > 0) msg.binBandwidth = p.binBandwidth;
+    this.spectrumWs.send(JSON.stringify(msg));
+    this._armSettle();
+  }
+
+  /** In flight = a send happened < VIEW_SETTLE_MS ago, or one is queued. */
+  private _inFlight(): boolean {
+    return this.settleTimer !== null || this.pendingView !== null;
+  }
+
+  private _armSettle() {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      if (this.destroyed) return;
+      // Quiet — adopt the server's acked state (ladder-snapped) in one step.
+      if (this.status.binBandwidth > 0) {
+        this.view.centerHz     = this.status.centerHz;
+        this.view.binBandwidth = this.status.binBandwidth;
+      }
+      this.callbacks.onStatus({ ...this.status });
+    }, VIEW_SETTLE_MS);
   }
 
   resetView() {
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
   }
+
+  /**
+   * Poll-rate divisor (set_rate, 1–8): the server polls radiod at 1/N rate so
+   * spectrum frames arrive at 1/N — the idle battery saver. Ignored on shared
+   * channels (hardcoded ÷3 server-side). Zoom/pan can migrate the session
+   * shared↔private, which RESETS the divisor — so it is re-sent whenever a
+   * config reports a binBandwidth change and on reconnect (skin app.js
+   * onConfig parity).
+   */
+  setRate(divisor: number) {
+    this.rateDivisor = Math.max(1, Math.min(8, Math.round(divisor)));
+    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+      this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
+    }
+  }
+  private rateDivisor   = 1;
+  private lastRateBinBw = 0;
 
   /**
    * SNR squelch (audio gate) — gates audio when SNR is below threshold.
@@ -233,6 +319,20 @@ export class UberSDRClient {
 
   getStatus(): SDRStatus { return { ...this.status }; }
 
+  /** Geometry for gesture math: predicted while zoom/pan requests are in
+   *  flight, server truth once settled. NEVER re-base a gesture on
+   *  getStatus() — its centerHz/binBandwidth are one RTT stale during
+   *  interaction, which is how fast gestures used to land on old states. */
+  getView(): SDRStatus {
+    const s = { ...this.status };
+    if (this.view.binBandwidth > 0) {
+      s.centerHz     = this.view.centerHz;
+      s.binBandwidth = this.view.binBandwidth;
+      s.bwHz         = this.view.binBandwidth * s.binCount;
+    }
+    return s;
+  }
+
   /** Stop spectrum display (app backgrounded). Native audio continues unaffected. */
   pauseSpectrum() {
     this.spectrumWs?.close();
@@ -249,6 +349,9 @@ export class UberSDRClient {
   destroy() {
     this.destroyed = true;
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
+    if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
+    this.pendingView = null;
     this.spectrumWs?.close();
     this.spectrumWs = null;
   }
@@ -298,11 +401,17 @@ export class UberSDRClient {
       if (this.destroyed) { ws.close(); return; }
       this.dbg('Spectrum WS open');
       this.callbacks.onConnect();
+      // Restore the predicted view (falls back to acked, then tuned freq) —
+      // gestures made while the WS was down land here instead of being lost.
       ws.send(JSON.stringify({
         type:         'zoom',
-        frequency:    this.status.centerHz || this.status.frequency,
-        binBandwidth: this.status.binBandwidth || 100,
+        frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
+        binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
       }));
+      // Fresh server session — re-assert the poll divisor if one is active.
+      if (this.rateDivisor > 1) {
+        ws.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
+      }
     };
 
     ws.onmessage = (e) => {
@@ -445,7 +554,29 @@ export class UberSDRClient {
     out.set(this.bins.subarray(half, half * 2), 0);
     out.set(this.bins.subarray(0, half), half);
 
-    this.callbacks.onSpectrum(out, { ...s });
+    // While zoom/pan is in flight, render frames under the PREDICTED geometry:
+    // the view goes where the finger says instantly and stays put; data from
+    // intermediate states is at most one RTT misplaced. Emitting each frame's
+    // own (intermediate) geometry replays the whole transition as the echoes
+    // arrive — that was the band-plan flash / view-reset glitch.
+    const emit = { ...s };
+    const v = this.view;
+    if (this._inFlight() && v.binBandwidth > 0) {
+      emit.centerHz     = v.centerHz;
+      emit.binBandwidth = v.binBandwidth;
+      emit.bwHz         = v.binBandwidth * s.binCount;
+    } else if (v.binBandwidth > 0 &&
+               (Math.abs(frequency - v.centerHz) > 1 ||
+                Math.abs(s.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6)) {
+      // Deviant frame with no request in flight — same unsolicited-change
+      // treatment as configs: keep showing the stable view, let the settle
+      // timer adopt whatever geometry survives the confirm window.
+      emit.centerHz     = v.centerHz;
+      emit.binBandwidth = v.binBandwidth;
+      emit.bwHz         = v.binBandwidth * s.binCount;
+      this._armSettle();
+    }
+    this.callbacks.onSpectrum(out, emit);
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {
@@ -467,6 +598,38 @@ export class UberSDRClient {
         : this.status.binBandwidth * this.status.binCount;
       this.dbg(`config: ${this.status.binCount} bins @ ${this.status.binBandwidth} Hz ` +
                `centre ${this.status.centerHz} bw ${this.status.bwHz}`);
+      // binBandwidth change ⇒ the session may have migrated shared↔private,
+      // which resets the server-side poll divisor — re-assert ours.
+      if (this.status.binBandwidth !== this.lastRateBinBw) {
+        this.lastRateBinBw = this.status.binBandwidth;
+        if (this.rateDivisor > 1 && this.spectrumWs?.readyState === WebSocket.OPEN) {
+          this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
+        }
+      }
+      // In flight: echoes of intermediate requests. Internal state above must
+      // track them (frames are ordered after their config on the same TCP
+      // stream, so decode geometry stays consistent), but they must NOT drive
+      // the UI — the settle timer adopts the final state once sends go quiet.
+      if (this._inFlight()) return;
+      // UNSOLICITED geometry change (no request of ours in flight): a session
+      // resurrection/reconnect can briefly put the server back at full-span
+      // defaults — emitting that directly flashes the band plan/ticks to
+      // 0–30MHz for a frame (the idle flicker bug). This phone is the only
+      // client of its session, so the server losing our geometry is always a
+      // reset, never another user's tune: keep the UI pinned and RE-ASSERT our
+      // view (idempotent if the server already has it). The settle timer then
+      // adopts whatever the server finally acks.
+      const v = this.view;
+      const unsolicitedChange = v.binBandwidth > 0 &&
+        (Math.abs(this.status.centerHz - v.centerHz) > 1 ||
+         Math.abs(this.status.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6);
+      if (unsolicitedChange) {
+        this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
+        this._sendView(Math.round(v.centerHz), v.binBandwidth);
+        return;
+      }
+      this.view.centerHz     = this.status.centerHz;
+      this.view.binBandwidth = this.status.binBandwidth;
       this.callbacks.onStatus({ ...this.status });
     }
   }

@@ -148,8 +148,14 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
-  frameRate?:      'native' | '20fps' | '60fps';
+  frameRate?:      'native' | '20fps' | '30fps';
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
+  // Smooth tune (variable refresh): 120Hz interpolated scroll while the user
+  // is interacting; once settled the waterfall steps rows discretely (data is
+  // ~10Hz — the slide is pure interpolation) and the spectrum trace eases at
+  // ~30fps, so ProMotion can drop the panel rate and save battery.
+  smoothTune?:     boolean;
+  lastInteractAt?: React.MutableRefObject<number>;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -165,7 +171,8 @@ export default function WaterfallView({
   autoContrast = 10, specSmoothing = 5, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
-  frameRate = '60fps', needleColor = '#ff2020',
+  frameRate = '20fps', needleColor = '#ff2020',
+  smoothTune = true, lastInteractAt,
 }: WaterfallViewProps) {
 
   // ── Vertical layout ─────────────────────────────────────────────────────────
@@ -178,22 +185,46 @@ export default function WaterfallView({
   const wfRenderH = wfH + Math.ceil(wfH / ROWS) + 2; // hide bottom-edge judder
   const rowH      = wfRenderH / ROWS;
 
-  const FRAME_DUR_MAX = frameRate === 'native' ? 80 : frameRate === '20fps' ? 400 : 150;
+  // Waterfall line rate. Settled rows are drawn as WHOLE-PIXEL pushes (no
+  // subpixel translate — razor-sharp lines, and no fractional-pixel shimmer,
+  // the suspected portrait judder source). NATIVE = one row per data frame
+  // (~10 lines/s); 20fps/30fps emit 2/3 lines per data frame, temporally
+  // interpolated prev→cur so traces stay continuous (20/30 lines/s — fills
+  // faster). 60fps existed briefly but 6-way interpolation smeared each data
+  // line across six rows — unusably blurry in portrait; don't bring it back.
+  // The smooth-tune boost overrides all of this with a vsync slide.
+  const ROWS_PER_FRAME = frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+
+  // Smooth tune: gestures count as "interacting" for this long after the last
+  // touch; inside it the slide is boosted to native rate, outside it drops to
+  // the selected fps and the spectrum tween smooths the trace at ~30fps.
+  const SMOOTH_TUNE_TAIL_MS = 1000;
+  const SPEC_TWEEN_MS       = 33;
 
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
   const proc = useRef(new SignalProcessor());
   useEffect(() => {
+    // v1 webgl parity: interpolation blur grows with the display rate, so the
+    // unsharp base scales with the selected fps and the slider is a multiplier
+    // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
+    const sharpBase =
+      frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
+    // Quadratic slider curve: 5 = 1× base, 10 = 4× — the linear curve made
+    // the upper half of the slider nearly imperceptible.
+    const sharpMul = Math.pow(wfSharpness / 5, 2);
     const patch: Partial<SignalProcessorSettings> = {
       autoContrast,
       manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
       specFloor, specPeakScale,
       smoothingFrames: specSmoothing,
       spatialSmooth, peakHold,
-      wfBrightness, wfContrast, wfSharpness,
+      wfBrightness, wfContrast,
+      wfSharpness: Math.min(10, sharpBase * sharpMul),
     };
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
-      specSmoothing, spatialSmooth, peakHold, wfBrightness, wfContrast, wfSharpness]);
+      specSmoothing, spatialSmooth, peakHold, wfBrightness, wfContrast,
+      wfSharpness, frameRate]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
@@ -213,9 +244,15 @@ export default function WaterfallView({
   const lastBinCount = useRef(0);
 
   // ── Display state ───────────────────────────────────────────────────────────
-  const [wfImage,  setWfImage]  = useState<SkImage | null>(null);
-  const [specPath, setSpecPath] = useState<SkPath | null>(null);
-  const [peakPath, setPeakPath] = useState<SkPath | null>(null);
+  // Image + paths are Reanimated shared values, NOT React state: Skia nodes
+  // accept them directly and update on the UI thread. The 30-lines/s
+  // interpolation pushes and the 30fps spectrum tween would otherwise each
+  // trigger a full React re-render per tick — that was the device-heat
+  // regression. React renders stay at the ~10Hz data rate (driven by parent
+  // props); empty path = draw nothing (Path doesn't take null).
+  const wfImage  = useSharedValue<SkImage | null>(null);
+  const specPath = useSharedValue<SkPath>(Skia.Path.Make());
+  const peakPath = useSharedValue<SkPath>(Skia.Path.Make());
   const [liveRange, setLiveRange] = useState({ dbMin: -120, dbMax: -20 });
 
   // ── Smooth scroll (UI thread) ───────────────────────────────────────────────
@@ -225,6 +262,152 @@ export default function WaterfallView({
   ]);
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
+
+  // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
+  // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
+  // path per frame would make the trace a slideshow. Instead the displayed
+  // trace eases toward the latest frame on 33ms ticks and the timer STOPS once
+  // converged, so between frames the display idles.
+  const specToRef   = useRef<Float32Array | null>(null);
+  const specDispRef = useRef<Float32Array | null>(null);
+  const tweenTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Path builder in a ref so the tween tick never closes over stale layout.
+  const buildSpecPathRef = useRef<(spec: Float32Array) => SkPath>(null as never);
+  buildSpecPathRef.current = (spec: Float32Array) => {
+    const sLen = spec.length;
+    const baseline = wfTop;
+    const sp = Skia.Path.Make();
+    sp.moveTo(0, baseline);
+    for (let px = 0; px < width; px++) {
+      const v = spec[Math.floor((px / width) * sLen)];
+      sp.lineTo(px, baseline - v * specH);
+    }
+    sp.lineTo(width, baseline);
+    sp.close();
+    return sp;
+  };
+
+  const stopSpecTween = useCallback(() => {
+    if (tweenTimer.current) { clearInterval(tweenTimer.current); tweenTimer.current = null; }
+  }, []);
+
+  const startSpecTween = useCallback(() => {
+    if (tweenTimer.current) return;
+    tweenTimer.current = setInterval(() => {
+      const to = specToRef.current, disp = specDispRef.current;
+      if (!to || !disp || to.length !== disp.length) { stopSpecTween(); return; }
+      // Time-constant ≈ ⅓ of the measured frame interval — the trace settles
+      // comfortably before the next frame at any poll divisor.
+      const k = 1 - Math.exp(-SPEC_TWEEN_MS / Math.max(40, avgFrameMs.current * 0.35));
+      let maxDelta = 0;
+      for (let i = 0; i < disp.length; i++) {
+        const d = to[i] - disp[i];
+        disp[i] += d * k;
+        const a = Math.abs(d);
+        if (a > maxDelta) maxDelta = a;
+      }
+      specPath.value = buildSpecPathRef.current(disp); // UI-thread — no React render
+      if (maxDelta < 0.002) stopSpecTween(); // converged — let the display idle
+    }, SPEC_TWEEN_MS);
+  }, [stopSpecTween]);
+
+  useEffect(() => stopSpecTween, [stopSpecTween]); // clear on unmount
+
+  // ── Row push + line ticker (whole-pixel waterfall advance) ─────────────────
+  // pushRow advances the waterfall by exactly one pixel row: ring write,
+  // incremental display shift, colourise, new SkImage. The line ticker emits
+  // duplicate pushes of the latest data row between frames so the fps modes
+  // reach 30/60 lines per second.
+  const pushRow = useCallback((row: Uint8Array) => {
+    const n = row.length;
+    if (n !== lastBinCount.current || !idxBuf.current || !dispBuf.current) {
+      idxBuf.current  = new Uint8Array(n * ROWS);
+      dispBuf.current = new Uint8Array(n * ROWS * 4);
+      rowHead.current = 0;
+      lastBinCount.current = n;
+    }
+    idxBuf.current.set(row, rowHead.current * n);
+    rowHead.current = (rowHead.current + 1) % ROWS;
+
+    const disp = dispBuf.current;
+    disp.copyWithin(n * 4, 0, n * 4 * (ROWS - 1));
+    for (let i = 0; i < n; i++) {
+      const l = row[i] * 4;
+      const d = i * 4;
+      disp[d]     = lut[l];
+      disp[d + 1] = lut[l + 1];
+      disp[d + 2] = lut[l + 2];
+      disp[d + 3] = 255;
+    }
+    const img = Skia.Image.MakeImage(
+      { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
+      Skia.Data.fromBytes(disp),
+      n * 4,
+    );
+    if (img) wfImage.value = img; // UI-thread swap — no React render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lut]);
+
+  // pushLine = pushRow + per-push scroll treatment. The line pipeline runs at
+  // the SAME rate boosted or settled — only the transform differs (vsync
+  // mini-slide vs whole-pixel snap). Deciding slide-vs-snap per PUSH (reading
+  // the interact ref live) keeps the fill rate constant across touch
+  // transitions; the old per-frame switch dropped to 1 line/frame on boost
+  // entry and killed the ticker mid-emission — visible slowdown + stuck
+  // judder at both edges of every touch.
+  const pushLine = useCallback((row: Uint8Array) => {
+    pushRow(row);
+    const boosted = smoothTune &&
+      Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    if (boosted) {
+      // Slide spans one push interval — continuous motion at panel rate.
+      const dur = Math.max(30, Math.min(150, avgFrameMs.current / ROWS_PER_FRAME));
+      scrollFrac.value = 0;
+      scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
+    } else {
+      scrollFrac.value = 1; // whole-pixel landing, display idles
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pushRow, smoothTune, ROWS_PER_FRAME]);
+
+  const pushLineRef = useRef(pushLine);
+  pushLineRef.current = pushLine; // ticker always sees current palette + boost state
+
+  const prevRow   = useRef<Uint8Array | null>(null); // last data row (lerp source)
+  const lerpBuf   = useRef<Uint8Array | null>(null);
+  const lineTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopLineTicker = useCallback(() => {
+    if (lineTimer.current) { clearInterval(lineTimer.current); lineTimer.current = null; }
+  }, []);
+
+  // Emit n lines morphing prev→cur across the measured data interval
+  // (LUT-index lerp — the index ramp is monotonic in intensity, so blends are
+  // valid colours). Duplicating instead of interpolating leaves hard 3/6-row
+  // bands that read as broken signal traces. The final line is the exact new
+  // data row; self-stops after it, so the display idles between frames.
+  const startLineInterp = useCallback((from: Uint8Array, to: Uint8Array, n: number, intervalMs: number) => {
+    stopLineTicker();
+    if (!lerpBuf.current || lerpBuf.current.length !== to.length) {
+      lerpBuf.current = new Uint8Array(to.length);
+    }
+    const buf = lerpBuf.current;
+    let k = 0;
+    const emit = () => {
+      k++;
+      if (k >= n) { pushLineRef.current(to); stopLineTicker(); return; }
+      const w = k / n;
+      for (let i = 0; i < to.length; i++) buf[i] = (from[i] + (to[i] - from[i]) * w) | 0;
+      pushLineRef.current(buf); // pushRow copies synchronously — buf reuse is safe
+    };
+    emit(); // first interpolated line lands with the frame
+    if (lineTimer.current === null && k < n) {
+      lineTimer.current = setInterval(emit, Math.max(16, intervalMs / n));
+    }
+  }, [stopLineTicker]);
+
+  useEffect(() => stopLineTicker, [stopLineTicker]); // clear on unmount
 
   // ── Frame processing ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -237,78 +420,77 @@ export default function WaterfallView({
       prev.dbMin === frame.dbMin && prev.dbMax === frame.dbMax
         ? prev : { dbMin: frame.dbMin, dbMax: frame.dbMax });
 
-    // 2. Ring buffer write (LUT indices — kept only for palette switches/resize)
-    if (n !== lastBinCount.current || !idxBuf.current || !dispBuf.current) {
-      idxBuf.current  = new Uint8Array(n * ROWS);
-      dispBuf.current = new Uint8Array(n * ROWS * 4);
-      rowHead.current = 0;
-      lastBinCount.current = n;
-    }
-    idxBuf.current.set(frame.row, rowHead.current * n);
-    rowHead.current = (rowHead.current + 1) % ROWS;
-
-    // 3. Incremental display update — shift history down one row (native
-    //    memmove) and colourise ONLY the new row, instead of reassembling all
-    //    ROWS×n pixels every frame.
-    const disp = dispBuf.current;
-    disp.copyWithin(n * 4, 0, n * 4 * (ROWS - 1));
-    for (let i = 0; i < n; i++) {
-      const l = frame.row[i] * 4;
-      const d = i * 4;
-      disp[d]     = lut[l];
-      disp[d + 1] = lut[l + 1];
-      disp[d + 2] = lut[l + 2];
-      disp[d + 3] = 255;
-    }
-    const img = Skia.Image.MakeImage(
-      { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      Skia.Data.fromBytes(disp),
-      n * 4,
-    );
-    if (img) setWfImage(img);
-
-    // 4. Spectrum + peak paths from normalised [0,1] traces
-    if (specShow && specH > 4) {
-      const spec = frame.spec;
-      const sLen = spec.length;
-      const baseline = wfTop;
-      const sp = Skia.Path.Make();
-      sp.moveTo(0, baseline);
-      for (let px = 0; px < width; px++) {
-        const v = spec[Math.floor((px / width) * sLen)];
-        sp.lineTo(px, baseline - v * specH);
-      }
-      sp.lineTo(width, baseline);
-      sp.close();
-      setSpecPath(sp);
-
-      if (peakHold) {
-        const pk = frame.peak;
-        const pp = Skia.Path.Make();
-        for (let px = 0; px < width; px++) {
-          const v = pk[Math.floor((px / width) * sLen)];
-          const y = baseline - v * specH;
-          if (px === 0) pp.moveTo(px, y); else pp.lineTo(px, y);
-        }
-        setPeakPath(pp);
-      } else {
-        setPeakPath(null);
-      }
-    } else {
-      setSpecPath(null);
-      setPeakPath(null);
-    }
-
-    // 5. Scroll animation timing
+    // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
     if (lastFrameTs.current > 0) {
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
     }
     lastFrameTs.current = now;
-    const duration = Math.max(80, Math.min(FRAME_DUR_MAX, avgFrameMs.current * 1.1));
-    scrollFrac.value = 0;
-    scrollFrac.value = withTiming(1, { duration, easing: Easing.linear });
+    // Boost: native-rate slide + per-frame spectrum while the user interacts.
+    const boost = smoothTune &&
+      now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+
+    // 3. Waterfall lines — runs IDENTICALLY boosted or settled (constant fill
+    //    rate; pushLine decides slide-vs-snap per push). NATIVE: the raw data
+    //    row once per frame. fps modes: n lines morphing prev→cur across the
+    //    frame interval (10×2 / 10×3 lines per second).
+    const cur  = Uint8Array.from(frame.row);
+    const from = prevRow.current;
+    if (ROWS_PER_FRAME > 1 && from && from.length === cur.length) {
+      startLineInterp(from, cur, ROWS_PER_FRAME, avgFrameMs.current);
+    } else {
+      stopLineTicker();
+      pushLine(cur);
+    }
+    prevRow.current = cur;
+
+    // 5. Spectrum + peak paths from normalised [0,1] traces
+    if (specShow && specH > 4) {
+      if (boost) {
+        // Full rate: trace follows every data frame directly.
+        stopSpecTween();
+        specDispRef.current = null;
+        specPath.value = buildSpecPathRef.current(frame.spec);
+      } else {
+        // Settled: retarget the ~30fps tween — the displayed trace eases to
+        // this frame instead of jumping (data is only ~10Hz / ~3Hz idle).
+        if (!specToRef.current || specToRef.current.length !== frame.spec.length) {
+          specToRef.current = Float32Array.from(frame.spec);
+        } else {
+          specToRef.current.set(frame.spec);
+        }
+        if (!specDispRef.current || specDispRef.current.length !== frame.spec.length) {
+          specDispRef.current = Float32Array.from(frame.spec);
+          specPath.value = buildSpecPathRef.current(specDispRef.current);
+        }
+        startSpecTween();
+      }
+
+      if (peakHold) {
+        const pk = frame.peak;
+        const sLen = pk.length;
+        const baseline = wfTop;
+        const pp = Skia.Path.Make();
+        for (let px = 0; px < width; px++) {
+          const v = pk[Math.floor((px / width) * sLen)];
+          const y = baseline - v * specH;
+          if (px === 0) pp.moveTo(px, y); else pp.lineTo(px, y);
+        }
+        peakPath.value = pp;
+      } else {
+        peakPath.value = Skia.Path.Make(); // empty = draw nothing
+      }
+    } else {
+      // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
+      // fall all the way to the data rate.
+      stopSpecTween();
+      specPath.value = Skia.Path.Make();
+      peakPath.value = Skia.Path.Make();
+    }
+
+    // (Scroll transform is handled per push inside pushLine — slide when
+    // boosted, whole-pixel snap when settled.)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bins]);
 
@@ -334,7 +516,7 @@ export default function WaterfallView({
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
       Skia.Data.fromBytes(disp), n * 4,
     );
-    if (img) setWfImage(img);
+    if (img) wfImage.value = img;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lut]);
 
@@ -525,11 +707,11 @@ export default function WaterfallView({
       <View style={[styles.root, { width, height }]}>
 
         <Canvas style={{ position: 'absolute', left: 0, top: wfTop, width, height: wfH }}>
-          {wfImage && (
-            <SkiaImage image={wfImage} x={0} y={0}
-                       width={width} height={wfRenderH}
-                       transform={wfTransform} fit="fill" />
-          )}
+          {/* image is a shared value (nullable — Skia skips draw): line pushes
+              swap it on the UI thread without re-rendering React. */}
+          <SkiaImage image={wfImage} x={0} y={0}
+                     width={width} height={wfRenderH}
+                     transform={wfTransform} fit="fill" />
         </Canvas>
 
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
@@ -558,13 +740,13 @@ export default function WaterfallView({
             <Rect key={i} x={0} y={d.y} width={width} height={0.5}
                   color="rgba(255,180,0,0.12)" />
           ))}
-          {specShow && specPath && (
+          {specShow && (
             <Path path={specPath} style="fill">
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
                               colors={specGradColors} />
             </Path>
           )}
-          {specShow && peakHold && peakPath && (
+          {specShow && peakHold && (
             <Path path={peakPath} paint={peakPaint} />
           )}
 
