@@ -229,9 +229,13 @@ export default function WaterfallView({
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
   const specGradColors = useMemo(() => {
+    // Sample LUT 90→235 (was 15→235): black-based palettes (Sonar etc.) are
+    // near-invisible below ~idx 90, so the fill's baseline starts where the
+    // palette has actually picked up colour — weak signals stay visible while
+    // the trace still inherits the waterfall hue.
     const stops: string[] = [];
     for (let gi = 0; gi <= 8; gi++) {
-      const idx = Math.max(0, Math.min(255, Math.round(15 + (gi / 8) * 220)));
+      const idx = Math.max(0, Math.min(255, Math.round(90 + (gi / 8) * 145)));
       stops.push(`rgba(${lut[idx * 4]},${lut[idx * 4 + 1]},${lut[idx * 4 + 2]},1)`);
     }
     return stops.reverse(); // gradient runs top→bottom; hot colour at top
