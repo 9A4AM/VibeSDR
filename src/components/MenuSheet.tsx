@@ -388,7 +388,7 @@ export default function MenuSheet({
   spotsKind = null, onSpotsToggle, onServerMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
-  vfoNeedle = '#ff8800', onVfoNeedle,
+  vfoNeedle = '#ffffff', onVfoNeedle,
   vfoIntensity = 5, onVfoIntensity,
   vfoFrost = 0, onVfoFrost,
   bgOpacity = 3, onBgOpacity, hasBgImage = false,

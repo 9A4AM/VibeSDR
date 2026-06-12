@@ -921,8 +921,12 @@ function WaterfallView({
   // skips reconciling dozens of Skia nodes.
   const staticOverlayCanvas = useMemo(() => (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
-      {/* Opaque header backing — WebGL parity rgb(2,2,2) */}
-      <Rect x={0} y={0} width={width} height={wfTop} color="rgb(2,2,2)" />
+      {/* Opaque backing for the band/tick strips only — the spectrum graph
+          area stays transparent so the instance backdrop image (an RN Image
+          UNDER this canvas) can show through; without an image the root's
+          #000 shows, indistinguishable from the old rgb(2,2,2) full-height
+          backing (WebGL parity). */}
+      <Rect x={0} y={0} width={width} height={specTop} color="rgb(2,2,2)" />
       {/* ── Band plan strip ── */}
       {bandSegs.map(s => (
         <Rect key={s.key} x={s.x0} y={0} width={s.x1 - s.x0} height={BAND_H}
@@ -943,7 +947,7 @@ function WaterfallView({
               color="rgba(255,180,0,0.12)" />
       ))}
     </Canvas>
-  ), [width, height, wfTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
+  ), [width, height, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz

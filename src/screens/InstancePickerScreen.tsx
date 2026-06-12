@@ -39,6 +39,14 @@ import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../serv
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 
+/** ISO 3166-1 alpha-2 → 🇬🇧-style emoji flag (regional indicators, no assets). */
+function flagEmoji(code: string | null): string {
+  if (!code || code.length !== 2) return '';
+  const cc = code.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return '';
+  return String.fromCodePoint(127397 + cc.charCodeAt(0), 127397 + cc.charCodeAt(1));
+}
+
 type SortMode = 'nearest' | 'snr';
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
 
@@ -335,7 +343,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
               <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
-                {isDefault ? '★ ' : ''}{inst.name}
+                {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
               {inst.version ? (
                 <Text style={{ fontFamily: F, fontSize: fs(11), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>

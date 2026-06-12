@@ -200,7 +200,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [dbMin,         setDbMin]         = useState(-120);
   const [dbMax,         setDbMax]         = useState(-20);
-  const [colormap,      setColormap]      = useState('gqrx');
+  const [colormap,      setColormap]      = useState('Jet');       // production default
   const [nr,            setNr]            = useState(false);
   const [nb,            setNb]            = useState(false);
   // NR cycle: off → nr → nr2. SERV state controlled by server DSP section.
@@ -215,7 +215,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfContrast,    setWfContrast]    = useState(0);
   const [wfSharpness,   setWfSharpness]   = useState(5);
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
-  const [autoContrast,  setAutoContrast]  = useState(10);
+  const [autoContrast,  setAutoContrast]  = useState(5);  // production default (10 too dark)
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
@@ -227,12 +227,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
   const [idleSlow,      setIdleSlow]      = useState(true);
-  const [vfoNeedle,     setVfoNeedle]     = useState('#ff8800');
+  const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
   const [vfoIntensity,  setVfoIntensity]  = useState(5);
   // Frost 0-10 (0 = off): smoked-glass band over the passband
-  const [vfoFrost,      setVfoFrost]      = useState(0);
+  const [vfoFrost,      setVfoFrost]      = useState(5);           // production default
   // Instance spectrum backdrop (/api/spectrum-bg-image) + opacity 0-10
   // (3 = web default 0.30); follows the server's configured opacity until
   // the user moves the slider (or a saved pref exists)
@@ -406,12 +406,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onDispReset = useCallback(() => {
     AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
     prefsTarget.current = 'global';
-    setDbMin(-120); setDbMax(-20); setColormap('gqrx');
+    setDbMin(-120); setDbMax(-20); setColormap('Jet');
     setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
     setSpecPeakScale(10); setPeakHold(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
-    setAutoContrast(10); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
+    setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
+    setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
     Alert.alert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
@@ -2034,13 +2034,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         onBack={onBackToPicker}
         onAdminLink={onAdminLink}
         onResetSettings={() => {
-          setDbMin(-120); setDbMax(-20); setColormap('gqrx');
+          setDbMin(-120); setDbMax(-20); setColormap('Jet');
           setStep(1000);
           setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
-          setAutoContrast(10); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setBgOpacity(3);
+          setAutoContrast(5); setSpatialSmooth(true);
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);

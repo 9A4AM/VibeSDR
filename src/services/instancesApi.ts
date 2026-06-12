@@ -11,6 +11,7 @@ export interface SDRInstance {
   version:       string | null;
   latitude:      number | null;
   longitude:     number | null;
+  countryCode:   string | null;  // ISO 3166-1 alpha-2 (directory country_code)
   distance:      number | null;   // km, populated when user location is known
   bestSnr:       number | null;   // best band-condition SNR across all bands
 }
@@ -120,6 +121,8 @@ export async function fetchInstances(
       version:   item.version           ?? null,
       latitude:  item.latitude          ?? null,
       longitude: item.longitude         ?? null,
+      countryCode: typeof item.country_code === 'string' && item.country_code.length === 2
+        ? item.country_code : null,
       distance:  item.distance          ?? null,
       bestSnr,
     };
