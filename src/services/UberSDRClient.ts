@@ -275,61 +275,10 @@ export class UberSDRClient {
   private rateDivisor   = 1;
   private lastRateBinBw = 0;
 
-  /**
-   * SNR squelch (audio gate) — gates audio when SNR is below threshold.
-   * minSnr ≤ -999 disables (open squelch). Sends set_audio_gate.
-   */
-  setAudioGate(minSnr: number) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'set_audio_gate', min_snr: minSnr }));
-  }
-
-  /**
-   * FM/NFM squelch — gates by carrier SNR. squelchDb ≤ -999 = open.
-   * Currently feature-flagged off in UberSDR server (FM_SQUELCH_ENABLED=false).
-   */
-  setSquelch(squelchDb: number) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'set_squelch', squelchOpen: squelchDb }));
-  }
-
-  /**
-   * NR mode — cycles client-side NR. Mirrors toggleNR2Quick() in app.js.
-   * 'off' | 'nr' (Wiener engine) | 'nr2' (RLMS engine).
-   * Sent via spectrum WS using set_nr_mode.
-   */
-  setNRMode(mode: 'off' | 'nr' | 'nr2') {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'set_nr_mode', mode }));
-  }
-
-  /**
-   * Noise blanker on/off. Mirrors toggleNBQuick() in app.js.
-   */
-  setNoiseBlanker(enabled: boolean) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'set_nb', enabled }));
-  }
-
-  /**
-   * Server-side DSP (noise reduction insert).
-   * enable=true: send set_dsp with filter name and params.
-   * enable=false: send set_dsp disabled.
-   */
-  setDsp(enabled: boolean, filter?: string, params?: Record<string, number>) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    if (enabled && filter) {
-      this.spectrumWs.send(JSON.stringify({ type: 'set_dsp', enabled: true, filter, params: params ?? {} }));
-    } else {
-      this.spectrumWs.send(JSON.stringify({ type: 'set_dsp', enabled: false }));
-    }
-  }
-
-  /** Update server DSP params mid-stream without toggling on/off. */
-  setDspParams(params: Record<string, number>) {
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
-    this.spectrumWs.send(JSON.stringify({ type: 'set_dsp_params', params }));
-  }
+  // NOTE (2026-06-12): set_audio_gate / set_squelch / set_dsp / set_nr_mode
+  // are AUDIO-WS message types — the spectrum WS this client owns doesn't
+  // know them. They now go through VibePowerModule.sendAudioCommand (native
+  // socket); client NR/NR2/NB run natively in VibeDSP.swift.
 
   getStatus(): SDRStatus { return { ...this.status }; }
 

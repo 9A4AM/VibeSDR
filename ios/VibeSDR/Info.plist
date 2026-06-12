@@ -57,6 +57,10 @@
 	<string>VibeSDR uses your location to show distance to each SDR instance and sort by nearest first.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

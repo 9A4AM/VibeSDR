@@ -48,8 +48,8 @@ import { useTheme }                                     from '../contexts/ThemeC
 
 import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
-import MenuSheet       from '../components/MenuSheet';
-import AudioPlayer     from '../components/AudioPlayer';
+import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
+import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import StepPicker      from '../components/StepPicker';
@@ -59,6 +59,7 @@ import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
+import BrowserOverlay from '../components/BrowserOverlay';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -142,9 +143,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
   const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
-  // Bumped by the menu's ⟳ RECONNECT to recycle the client (connect effect dep)
-  const [reconnectNonce, setReconnectNonce] = useState(0);
-
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
   const [isMuted, setIsMuted] = useState(false);
@@ -208,10 +206,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
   // FM squelch — value ≤ -999 = open. Only active on fm/nfm modes.
   const [fmSquelch,     setFmSquelch]     = useState(-999);
-  // Server DSP
+  // Server-side NR (DSP insert) — filter list + param descriptors arrive via
+  // the native audio WS (get_dsp_filters → dsp_filters); params are STRINGS
+  // on the wire (server paramInfo is all string-typed).
   const [serverDspEnabled, setServerDspEnabled] = useState(false);
-  const [serverDspFilter,  setServerDspFilter]  = useState('wiener');
-  const [serverDspParams,  setServerDspParams]  = useState<Record<string,number>>({});
+  const [serverDspFilter,  setServerDspFilter]  = useState('');
+  const [serverDspParams,  setServerDspParams]  = useState<Record<string,string>>({});
+  const [dspFilters,       setDspFilters]       = useState<DspFilterDesc[]>([]);
+  const [dspError,         setDspError]         = useState<string | null>(null);
 
   // ── UI overlay state ──────────────────────────────────────────────────────
 
@@ -220,6 +222,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
+
+  // Admin pages (skin menu Admin section) — in-app browser overlay
+  const [adminPage, setAdminPage] = useState<{ url: string; title: string } | null>(null);
+  const onAdminLink = useCallback((path: string, title: string) => {
+    if (!baseUrl) return;
+    setMenuOpen(false);
+    setAdminPage({ url: baseUrl.replace(/\/+$/, '') + path, title });
+  }, [baseUrl]);
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
@@ -350,17 +360,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const toggleRecording = useCallback(() => {
-    setIsRecording((prev: boolean) => {
-      if (!prev) {
-        setRecSeconds(0);
-        recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
-      } else {
-        if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
-        setRecSeconds(0);
-      }
-      return !prev;
-    });
-  }, []);
+    if (Platform.OS !== 'ios') {
+      Alert.alert('Recording', 'Recording is not yet supported on Android.');
+      return;
+    }
+    if (!isRecording) {
+      VibePowerModule?.startRecording()
+        .then(() => {
+          setRecSeconds(0);
+          recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
+          setIsRecording(true);
+        })
+        .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
+    } else {
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+      setRecSeconds(0);
+      setIsRecording(false);
+      VibePowerModule?.stopRecording()
+        .then((path: string | null) => {
+          // Half-height native share sheet; recording also stays in Documents
+          // (visible in the Files app via UIFileSharingEnabled).
+          if (path) VibePowerModule?.shareRecording(path);
+        })
+        .catch(() => {});
+    }
+  }, [isRecording]);
 
   useEffect(() => () => {
     if (recTimerRef.current) clearInterval(recTimerRef.current);
@@ -611,6 +635,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Media control tune events (iOS lock screen) ───────────────────────────
 
+  const dspSeen = useRef(false);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
@@ -621,7 +646,53 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       setIsMuted(!!e.muted);
     });
-    return () => { sub.remove(); subMute.remove(); };
+    // Server-NR protocol messages arrive as text on the native audio WS
+    const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
+      let msg: { type?: string; info?: Record<string, unknown> };
+      try { msg = JSON.parse(e.text); } catch { return; }
+      if (!msg || typeof msg.type !== 'string') return;
+      const info = (msg.info ?? msg) as Record<string, unknown>;
+      if (msg.type === 'dsp_filters') {
+        dspSeen.current = true;
+        const filters = (info.available ? (info.filters as DspFilterDesc[] | undefined) : []) ?? [];
+        setDspFilters(filters);
+        if (filters.length) {
+          const name = filters.some((f: DspFilterDesc) => f.name === dspFilterRef.current)
+            ? dspFilterRef.current : filters[0].name;
+          setServerDspFilter(name);
+          if (Object.keys(dspParamsRef.current).length === 0) {
+            applyDspParams(dspDefaults(filters.find((f: DspFilterDesc) => f.name === name)));
+          }
+        }
+      } else if (msg.type === 'dsp_status') {
+        setServerDspEnabled(!!info.enabled);
+        if (typeof info.filter === 'string' && info.filter) setServerDspFilter(info.filter);
+        if (info.enabled && info.params && typeof info.params === 'object') {
+          const merged = { ...dspParamsRef.current };
+          for (const [k, v] of Object.entries(info.params as Record<string, unknown>)) {
+            merged[k] = String(v);
+          }
+          applyDspParams(merged);
+        }
+      } else if (msg.type === 'dsp_error') {
+        setDspError(String(info.error ?? 'DSP error'));
+        setTimeout(() => setDspError(null), 4000);
+      }
+    });
+    return () => { sub.remove(); subMute.remove(); subWs.remove(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Discover server-NR filters once the native audio WS is up (it opens on
+  // mount; retries cover slow connects). No dsp_filters reply / available:
+  // false ⇒ section stays hidden.
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const tries = [2000, 6000, 12000].map((ms) => setTimeout(() => {
+      if (!dspSeen.current) sendAudioCmd({ type: 'get_dsp_filters' });
+    }, ms));
+    return () => tries.forEach(clearTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Connect ───────────────────────────────────────────────────────────────
@@ -737,10 +808,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       c.connect(status.frequency, status.mode);
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
-  // reconnectNonce: menu ⟳ RECONNECT recycles the whole client (the old
-  // handler destroyed it and never reconnected — dead radio until relaunch)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, reconnectNonce]);
+  }, [baseUrl]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
@@ -978,41 +1047,98 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onFilterLow  = useCallback((v: number) => { client.current?.setBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh]);
   const onFilterHigh = useCallback((v: number) => { client.current?.setBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow]);
 
-  // ── NR cycle: off → nr → nr2 (SERV locked by server DSP section) ──────────
-  const onNrMode = useCallback((mode: 'off'|'nr'|'nr2') => {
-    setNrMode(mode);
-    client.current?.setNRMode(mode);
+  // ── Audio-WS commands (set_dsp / squelch / gate are AUDIO-WS message types;
+  //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp
+  //    paths were sending into the void) ──────────────────────────────────────
+  const sendAudioCmd = useCallback((obj: Record<string, unknown>) => {
+    if (Platform.OS === 'ios') VibePowerModule?.sendAudioCommand(JSON.stringify(obj));
   }, []);
 
-  // ── NB toggle ────────────────────────────────────────────────────────────
+  // ── NR cycle: off → nr → nr2 — native Swift DSP (VibeDSP.swift skin ports)
+  const onNrMode = useCallback((mode: 'off'|'nr'|'nr2') => {
+    setNrMode(mode);
+    if (Platform.OS === 'ios') VibePowerModule?.setNrMode(mode);
+  }, []);
+
+  // ── NB toggle — native Swift noise blanker ────────────────────────────────
   const onNb = useCallback((on: boolean) => {
     setNb(on);
-    client.current?.setNoiseBlanker(on);
+    if (Platform.OS === 'ios') VibePowerModule?.setNoiseBlanker(on);
   }, []);
 
   // ── SNR squelch (audio gate) ──────────────────────────────────────────────
   const onSnrSquelch = useCallback((minSnr: number) => {
     setSnrSquelch(minSnr);
-    client.current?.setAudioGate(minSnr);
-  }, []);
+    sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr });
+  }, [sendAudioCmd]);
 
   // ── FM squelch ────────────────────────────────────────────────────────────
   const onFmSquelch = useCallback((db: number) => {
     setFmSquelch(db);
-    client.current?.setSquelch(db);
+    sendAudioCmd({ type: 'set_squelch', squelchOpen: db });
+  }, [sendAudioCmd]);
+
+  // ── Server-side NR (DSP insert) ───────────────────────────────────────────
+  // Ref mirrors so the WS-event listener and debounced senders read current
+  // values without re-subscribing.
+  const dspFiltersRef       = useRef<DspFilterDesc[]>([]);
+  const dspFilterRef        = useRef('');
+  const dspParamsRef        = useRef<Record<string,string>>({});
+  const serverDspEnabledRef = useRef(false);
+  useEffect(() => { dspFiltersRef.current = dspFilters; },             [dspFilters]);
+  useEffect(() => { dspFilterRef.current = serverDspFilter; },         [serverDspFilter]);
+  useEffect(() => { serverDspEnabledRef.current = serverDspEnabled; }, [serverDspEnabled]);
+
+  const dspDefaults = useCallback((f?: DspFilterDesc): Record<string,string> => {
+    const out: Record<string,string> = {};
+    for (const p of f?.params ?? []) {
+      if (p.runtime_safe === false) continue;
+      out[p.name] = p.default ?? p.min ?? '0';
+    }
+    return out;
   }, []);
 
-  // ── Server DSP ────────────────────────────────────────────────────────────
-  const onServerDsp = useCallback((enabled: boolean, filter?: string, params?: Record<string,number>) => {
-    setServerDspEnabled(enabled);
-    if (filter) setServerDspFilter(filter);
-    if (params) setServerDspParams(params);
-    client.current?.setDsp(enabled, filter, params);
+  const applyDspParams = useCallback((p: Record<string,string>) => {
+    dspParamsRef.current = p;
+    setServerDspParams(p);
   }, []);
 
-  const onServerDspParams = useCallback((params: Record<string,number>) => {
-    setServerDspParams(params);
-    client.current?.setDspParams(params);
+  const onServerDsp = useCallback((enabled: boolean) => {
+    setServerDspEnabled(enabled);  // optimistic — dsp_status confirms
+    if (enabled) {
+      sendAudioCmd({ type: 'set_dsp', enabled: true,
+                     filter: dspFilterRef.current, params: dspParamsRef.current });
+      // Server NR replaces client NR — the menu NR button locks to SERV
+      setNrMode('off');
+      if (Platform.OS === 'ios') VibePowerModule?.setNrMode('off');
+    } else {
+      sendAudioCmd({ type: 'set_dsp', enabled: false });
+    }
+  }, [sendAudioCmd]);
+
+  const onServerDspFilter = useCallback((name: string) => {
+    setServerDspFilter(name);
+    const defs = dspDefaults(dspFiltersRef.current.find((f: DspFilterDesc) => f.name === name));
+    applyDspParams(defs);
+    if (serverDspEnabledRef.current) {
+      sendAudioCmd({ type: 'set_dsp', enabled: true, filter: name, params: defs });
+    }
+  }, [sendAudioCmd, dspDefaults, applyDspParams]);
+
+  // Param edits send the FULL params map, debounced 120ms (skin parity)
+  const dspParamTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onServerDspParam = useCallback((name: string, value: string) => {
+    const next = { ...dspParamsRef.current, [name]: value };
+    applyDspParams(next);
+    if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
+    dspParamTimer.current = setTimeout(() => {
+      if (serverDspEnabledRef.current) {
+        sendAudioCmd({ type: 'set_dsp_params', params: dspParamsRef.current });
+      }
+    }, 120);
+  }, [sendAudioCmd, applyDspParams]);
+  useEffect(() => () => {
+    if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
   }, []);
 
   const onTuneHz = useCallback((hz: number) => {
@@ -1024,16 +1150,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
-  // fell back to just closing the menu); ⟳ RECONNECT recycles the client.
+  // fell back to just closing the menu). The ⟳ RECONNECT button was removed
+  // 2026-06-12: it only recycled the spectrum client while the native audio
+  // WS kept the old session → frozen waterfall, and the zombie watchdog +
+  // revive() already cover real reconnects.
   const onBackToPicker = useCallback(() => {
     setMenuOpen(false);
     navigation.goBack();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const onReconnect = useCallback(() => {
-    setMenuOpen(false);
-    setConnected(false);
-    setReconnectNonce((n: number) => n + 1);
   }, []);
 
   // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
@@ -1239,7 +1363,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onSignalMode={setSignalMode}
         onDisplayStyle={handleDisplayStyle}
         onBack={onBackToPicker}
-        onReconnect={onReconnect}
+        onAdminLink={onAdminLink}
         onResetSettings={() => {
           setDbMin(-120); setDbMax(-20); setColormap('gqrx');
           setStep(1000);
@@ -1251,7 +1375,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
-          onServerDsp(false);
+          if (serverDspEnabled) onServerDsp(false);
           setMenuOpen(false);
         }}
         onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
@@ -1280,8 +1404,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}
         serverDspParams={serverDspParams}
+        dspFilters={dspFilters}
+        dspError={dspError}
         onServerDsp={onServerDsp}
-        onServerDspParams={onServerDspParams}
+        onServerDspFilter={onServerDspFilter}
+        onServerDspParam={onServerDspParam}
       />
 
       {/* Step picker — bottom sheet */}
@@ -1307,6 +1434,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
+      />
+
+      {/* Admin pages — in-app browser with ← SDR bar */}
+      <BrowserOverlay
+        url={adminPage?.url ?? null}
+        title={adminPage?.title}
+        onClose={() => setAdminPage(null)}
       />
 
       {/* Frequency modal */}

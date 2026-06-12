@@ -4,7 +4,7 @@
  * Sections (in order):
  *   Nearby Station · Spectrum/Waterfall · Audio · Server Maps
  *   Client Decoders · Server Extensions · Controls · Instance
- *   Reconnect · Reset Interface Settings
+ *   Reset Interface Settings
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -81,9 +81,12 @@ export interface MenuSheetProps {
   // Server DSP
   serverDspEnabled?:   boolean;
   serverDspFilter?:    string;
-  serverDspParams?:    Record<string, number>;
-  onServerDsp?:        (enabled: boolean, filter?: string, params?: Record<string,number>) => void;
-  onServerDspParams?:  (params: Record<string,number>) => void;
+  serverDspParams?:    Record<string, string>;
+  dspFilters?:         DspFilterDesc[];
+  dspError?:           string | null;
+  onServerDsp?:        (enabled: boolean) => void;
+  onServerDspFilter?:  (name: string) => void;
+  onServerDspParam?:   (name: string, value: string) => void;
 
   signalMode?:     'snr' | 'smeter' | 'dbfs';
   onSignalMode?:   (m: 'snr' | 'smeter' | 'dbfs') => void;
@@ -108,7 +111,7 @@ export interface MenuSheetProps {
 
   onClose:          () => void;
   onBack?:          () => void;
-  onReconnect?:     () => void;
+  onAdminLink?:     (path: string, title: string) => void;
   onResetSettings?: () => void;
   onDisplaySettings?: () => void;
 
@@ -182,6 +185,37 @@ function fmtHz(hz: number) {
 function fmtRecTime(s: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+// ── Server-side NR (DSP insert) descriptors — shapes match the server's
+//    dsp_filters paramInfo/filterInfo JSON (all values are strings on the wire)
+export interface DspParamDesc {
+  name:          string;
+  type?:         string;   // 'float' | 'int' | 'bool' | free text
+  default?:      string;
+  min?:          string;
+  max?:          string;
+  description?:  string;
+  runtime_safe?: boolean;
+}
+export interface DspFilterDesc {
+  name:         string;
+  description?: string;
+  params?:      DspParamDesc[];
+}
+
+function fmtParamName(n: string) {
+  return n.replace(/_/g, ' ').toUpperCase();
+}
+function dspStep(min: number, max: number) {
+  const r = max - min;
+  if (r <= 1)   return 0.01;
+  if (r <= 10)  return 0.1;
+  if (r <= 100) return 1;
+  return Math.pow(10, Math.floor(Math.log10(r)) - 2);
+}
+function fmtDspVal(v: number, step: number) {
+  return v.toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0);
 }
 
 function StepSlider({
@@ -302,7 +336,8 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
-  serverDspEnabled = false, serverDspFilter = 'wiener', serverDspParams = {}, onServerDsp, onServerDspParams,
+  serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
+  dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
   drumMode = 'normal', onDrumMode, onCentreVfo, onHideControls,
@@ -310,7 +345,7 @@ export default function MenuSheet({
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
-  onClose, onBack, onReconnect, onResetSettings, onDisplaySettings,
+  onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
   onZoomIn, onZoomOut, onSetDefault,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap,
@@ -722,17 +757,68 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* ── SERVER DSP ─────────────────────────────────────── */}
-            <SectionLabel label="SERVER DSP" />
+            {/* ── SERVER SIDE NR (DSP insert) — section appears only when the
+                   server advertises filters (get_dsp_filters → dsp_filters);
+                   type selector + per-filter param sliders only while active,
+                   to keep the menu clutter-free. ── */}
+            {dspFilters.length > 0 && (<>
+            <SectionLabel label="SERVER SIDE NR" />
             <BtnRow>
               <Btn
                 label={serverDspEnabled ? 'DISABLE SERVER NR' : 'ENABLE SERVER NR'}
                 active={serverDspEnabled}
                 full
                 style={serverDspEnabled ? { borderColor: 'rgba(50,210,100,0.50)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
-                onPress={() => onServerDsp?.(!serverDspEnabled, serverDspFilter, serverDspParams)}
+                onPress={() => onServerDsp?.(!serverDspEnabled)}
               />
             </BtnRow>
+            {dspError != null && (
+              <Text style={styles.dspError}>{dspError}</Text>
+            )}
+            {serverDspEnabled && (
+              <View style={styles.subPanel}>
+                <SubLabel label="DSP TYPE" />
+                <OptRow>
+                  {dspFilters.map((f: DspFilterDesc) => (
+                    <SegBtn key={f.name} label={f.name.toUpperCase()}
+                            active={serverDspFilter === f.name}
+                            onPress={() => onServerDspFilter?.(f.name)} />
+                  ))}
+                </OptRow>
+                {(dspFilters.find((f: DspFilterDesc) => f.name === serverDspFilter)?.params ?? [])
+                  .filter((p: DspParamDesc) => p.runtime_safe !== false)
+                  .map((p: DspParamDesc) => {
+                    const val = serverDspParams[p.name] ?? p.default ?? '';
+                    if ((p.type ?? 'float').toLowerCase() === 'bool') {
+                      return (
+                        <BtnRow key={p.name}>
+                          <Btn label={fmtParamName(p.name)} active={val === 'true'} full
+                               onPress={() => onServerDspParam?.(p.name, val === 'true' ? 'false' : 'true')} />
+                        </BtnRow>
+                      );
+                    }
+                    const min = parseFloat(p.min ?? ''), max = parseFloat(p.max ?? '');
+                    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+                      return null;  // free-text params: not editable on mobile
+                    }
+                    const step = dspStep(min, max);
+                    const num  = Number.isFinite(parseFloat(val)) ? parseFloat(val) : min;
+                    return (
+                      <View key={p.name} style={styles.bwRow}>
+                        <Text style={styles.bwLabel} numberOfLines={1}>{fmtParamName(p.name)}</Text>
+                        <Slider style={styles.bwSlider}
+                          minimumValue={min} maximumValue={max} step={step}
+                          value={Math.max(min, Math.min(max, num))}
+                          onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
+                          minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
+                          thumbTintColor={C.gold} />
+                        <Text style={styles.bwVal}>{fmtDspVal(num, step)}</Text>
+                      </View>
+                    );
+                  })}
+              </View>
+            )}
+            </>)}
 
             {/* ── SERVER MAPS — full-screen Leaflet overlays (skin parity) ── */}
             <SectionLabel label="SERVER MAPS" />
@@ -812,6 +898,17 @@ export default function MenuSheet({
               </BtnRow>
             </View>
 
+            {/* ── ADMIN — server pages in an in-app browser view ──── */}
+            <SectionLabel label="ADMIN" />
+            <BtnRow>
+              <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
+              <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
+            </BtnRow>
+            <BtnRow>
+              <Btn label="CONDITIONS" onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
+              <Btn label="LISTENERS"  onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
+            </BtnRow>
+
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="INSTANCE" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
@@ -820,7 +917,6 @@ export default function MenuSheet({
               <Btn label="← BACK"        onPress={onBack ?? onClose} />
             </BtnRow>
             <BtnRow col>
-              <Btn label="⟳ RECONNECT"                full onPress={onReconnect ?? onClose} />
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
 
@@ -952,6 +1048,7 @@ const styles = StyleSheet.create({
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
   recTime:  { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
   ctrlLabel: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 },

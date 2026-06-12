@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import UIKit
 
 // Classic RCT bridge module — accessible via NativeModules.VibePowerModule.
 // Owns the audio WebSocket natively so audio survives JS suspension (background).
@@ -19,7 +20,7 @@ class VibePowerModule: RCTEventEmitter {
   // MARK: - RCTEventEmitter
 
   override func supportedEvents() -> [String]! {
-    return ["VibeTuned", "VibeMuted"]
+    return ["VibeTuned", "VibeMuted", "VibeWsText"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -33,6 +34,42 @@ class VibePowerModule: RCTEventEmitter {
   private var audioEngine:       AVAudioEngine?
   private var playerNode:        AVAudioPlayerNode?
   private var audioFormat:       AVAudioFormat?
+
+  // FIXED-FORMAT ENGINE (half-speed FM bug 2026-06-12): the server flips
+  // sample rate per mode (linear 12k, FM 24k). The old design rebuilt the
+  // engine on main.async while the Opus decoder swapped synchronously on
+  // audioQ — packets decoded at the new rate were scheduled into buffers of
+  // the old format during the window = half-speed stretched audio. Now the
+  // engine runs at 48 kHz stereo FOREVER and an AVAudioConverter (audioQ-only,
+  // rebuilt when the packet format changes) resamples each packet. No engine
+  // rebuilds, no race.
+  private let ENGINE_RATE: Double = 48_000
+  private let ENGINE_CH:   AVAudioChannelCount = 2
+  private var converter:      AVAudioConverter?
+  private var converterInFmt: AVAudioFormat?
+
+  // Recorder — taps the uniform post-converter 48 kHz feed, so mode/rate
+  // flips mid-recording are invisible to the file (same reason the skin
+  // recorder behaved: Web Audio resampled upstream). AVAudioFile encodes
+  // AAC .m4a in hardware. recFile is audioQ-only; recArmed is read on the
+  // WS callback thread (same benign cross-thread pattern as isMuted).
+  private var recFile:  AVAudioFile?
+  private var recPath:  String = ""
+  private var recArmed  = false
+
+  // Client noise DSP (VibeDSP.swift — verbatim skin ports) applied to the
+  // MONO packet-rate feed before stereo duplication + 48k conversion, the
+  // same point the skin's Web Audio graph ran them. All state audioQ-only;
+  // engines are lazy and rebuilt whenever the stream sample rate flips.
+  private var nrModeStr     = "off"   // "off" | "nr" | "nr2"
+  private var nbOn          = false
+  private var dspRate: Int32 = 0
+  private var nbEngine:      NoiseBlankerEngine?
+  private var nr2Engine:     NR2Engine?
+  private var nr2Chunker:    BlockChunker?
+  private var websdrEngine:  WebSDRNREngine?
+  private var websdrChunker: BlockChunker?
+  private var nrBandwidthHz: Double = 2700
 
   private var wsTask:       URLSessionWebSocketTask?
   private var wsSession:    URLSession?
@@ -81,7 +118,7 @@ class VibePowerModule: RCTEventEmitter {
     lastPacketAt = Date()
     startHealthTimer()
     configureAVSession()
-    startEngine(sampleRate: 48000, channels: 1)
+    startEngine()
     openAudioWs(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
     DispatchQueue.main.async {
       self.setupRemoteCommands()
@@ -176,6 +213,75 @@ class VibePowerModule: RCTEventEmitter {
 
   @objc func sendBandwidth(_ low: Int, high: Int) {
     sendWsJson(["type": "tune", "bandwidthLow": low, "bandwidthHigh": high])
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      // Audio occupies 0..max-edge Hz regardless of sideband
+      self.nrBandwidthHz = Double(max(abs(low), abs(high)))
+      self.websdrEngine?.syncBins(bandwidthHz: self.nrBandwidthHz,
+                                  sampleRate: Double(self.dspRate > 0 ? self.dspRate : 12_000))
+    }
+  }
+
+  // MARK: - Client noise DSP control
+
+  @objc func setNrMode(_ mode: String) {
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      self.nrModeStr = mode
+      // Fresh start on every (re)engage — matches the skin's reset-on-toggle
+      self.nr2Engine?.reset();    self.nr2Chunker?.reset()
+      self.websdrEngine?.reset(); self.websdrChunker?.reset()
+    }
+  }
+
+  @objc func setNoiseBlanker(_ on: Bool) {
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      self.nbOn = on
+      self.nbEngine?.reset()
+    }
+  }
+
+  /** Forward a raw JSON command over the native audio WS (set_dsp,
+   *  set_dsp_params, get_dsp_filters, set_audio_gate, set_squelch — these
+   *  are AUDIO-WS message types; the spectrum WS doesn't know them). */
+  @objc func sendAudioCommand(_ json: String) {
+    guard let task = wsTask, task.state == .running else { return }
+    task.send(.string(json)) { err in
+      if let err { NSLog("[VibePowerModule] audio cmd send error: %@", err.localizedDescription) }
+    }
+  }
+
+  /** audioQ-only. Applies NB → NR/NR2 to the mono packet-rate feed. */
+  private func dspProcessMono(_ samples: inout [Float], sr: Int32) {
+    if dspRate != sr {
+      dspRate = sr
+      nbEngine = nil
+      nr2Engine = nil; nr2Chunker = nil
+      websdrEngine = nil; websdrChunker = nil
+    }
+    if nbOn {
+      if nbEngine == nil { nbEngine = NoiseBlankerEngine(sampleRate: Double(sr)) }
+      nbEngine?.process(&samples)
+    }
+    switch nrModeStr {
+    case "nr2":
+      if nr2Engine == nil {
+        let eng = NR2Engine()
+        nr2Engine  = eng
+        nr2Chunker = BlockChunker(block: 512) { blk in eng.processHop(blk) }
+      }
+      if let c = nr2Chunker { samples = c.run(samples) }
+    case "nr":
+      if websdrEngine == nil {
+        let eng = WebSDRNREngine()
+        eng.syncBins(bandwidthHz: nrBandwidthHz, sampleRate: Double(sr))
+        websdrEngine  = eng
+        websdrChunker = BlockChunker(block: WebSDRNREngine.BLOCK) { blk in eng.processWithDelay(blk) }
+      }
+      if let c = websdrChunker { samples = c.run(samples) }
+    default: break
+    }
   }
 
   @objc func setStep(_ hz: Int) {
@@ -204,7 +310,97 @@ class VibePowerModule: RCTEventEmitter {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
     let ws  = wsTask?.state == .running ? "open" : "closed"
-    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws)"
+    return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)"
+  }
+
+  // MARK: - Recording
+
+  @objc func startRecording(_ resolve: @escaping RCTPromiseResolveBlock,
+                            rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard isRunning else {
+      reject("not_running", "Audio engine is not running", nil); return
+    }
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+    let mhz  = String(format: "%.4fMHz", Double(currentFreq) / 1e6)
+    let name = "VibeSDR_\(df.string(from: Date()))_\(mhz)_\(currentMode.uppercased()).m4a"
+    let url  = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent(name)
+    audioQ.async { [weak self] in
+      guard let self else { reject("gone", "module deallocated", nil); return }
+      do {
+        // AAC straight from the hardware encoder; the file format is fixed
+        // 48 kHz so tune/mode/BW changes mid-recording need no handling.
+        let settings: [String: Any] = [
+          AVFormatIDKey:         kAudioFormatMPEG4AAC,
+          AVSampleRateKey:       self.ENGINE_RATE,
+          AVNumberOfChannelsKey: Int(self.ENGINE_CH),
+          AVEncoderBitRateKey:   128_000,
+        ]
+        self.recFile = try AVAudioFile(forWriting: url, settings: settings,
+                                       commonFormat: .pcmFormatFloat32, interleaved: false)
+        self.recPath  = url.path
+        self.recArmed = true
+        NSLog("[VibePowerModule] recording → %@", name)
+        resolve(url.path)
+      } catch {
+        reject("rec_open", error.localizedDescription, error)
+      }
+    }
+  }
+
+  @objc func stopRecording(_ resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+    recArmed = false
+    audioQ.async { [weak self] in
+      guard let self else { resolve(nil); return }
+      let path = self.recPath
+      self.recFile = nil  // closing the AVAudioFile finalises the .m4a
+      self.recPath = ""
+      NSLog("[VibePowerModule] recording stopped: %@", path)
+      resolve(path.isEmpty ? nil : path)
+    }
+  }
+
+  /** audioQ-only — called from handlePacket with the converted 48 kHz buffer. */
+  private func writeRecording(_ buf: AVAudioPCMBuffer) {
+    guard let f = recFile else { return }
+    do { try f.write(from: buf) }
+    catch {
+      NSLog("[VibePowerModule] rec write error: %@", error.localizedDescription)
+      recArmed = false
+      recFile  = nil
+    }
+  }
+
+  /** Half-height iOS share sheet (medium detent, grabber to expand) — skin
+   *  parity with the web navigator.share card. Unlike the skin, no save-mode
+   *  workaround is needed: the audio WS is native, so presenting the sheet
+   *  can't defocus/kill the connection. */
+  @objc func shareRecording(_ path: String) {
+    DispatchQueue.main.async {
+      let url = URL(fileURLWithPath: path)
+      guard FileManager.default.fileExists(atPath: path) else {
+        NSLog("[VibePowerModule] shareRecording: missing file %@", path); return
+      }
+      guard let scene = UIApplication.shared.connectedScenes
+              .compactMap({ $0 as? UIWindowScene })
+              .first(where: { $0.activationState == .foregroundActive })
+              ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+            let root = (scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first)?
+              .rootViewController else {
+        NSLog("[VibePowerModule] shareRecording: no root VC"); return
+      }
+      var top = root
+      while let presented = top.presentedViewController { top = presented }
+      let avc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+      if let sheet = avc.sheetPresentationController {
+        sheet.detents = [.medium(), .large()]
+        sheet.selectedDetentIdentifier = .medium
+        sheet.prefersGrabberVisible = true
+      }
+      top.present(avc, animated: true)
+    }
   }
 
   // MARK: - Native WebSocket
@@ -243,11 +439,15 @@ class VibePowerModule: RCTEventEmitter {
           if self.packetCount <= 3 {
             NSLog("[VibePowerModule] ws pkt#%d len=%d", self.packetCount, data.count)
           }
-          if !self.isMuted {
+          // Recording must keep decoding through mutes (file taps the
+          // converter feed); playback gating happens after conversion.
+          if !self.isMuted || self.recArmed {
             self.audioQ.async { self.handlePacket(data) }
           }
         case .string(let text):
-          NSLog("[VibePowerModule] ws text: %@", text)
+          // dsp_filters / dsp_status / dsp_error etc. — JS owns the server-NR
+          // UI, so forward every text message up as an event.
+          self.sendEvent(withName: "VibeWsText", body: ["text": text])
         @unknown default: break
         }
         self.receiveLoop(task: task)
@@ -290,6 +490,14 @@ class VibePowerModule: RCTEventEmitter {
     wsTask    = nil
     wsSession = nil
     destroyDecoder()
+    recArmed = false
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      self.recFile   = nil  // closing the AVAudioFile finalises the .m4a
+      self.converter = nil
+      self.converterInFmt = nil
+      self.dspRate = 0      // force DSP engine rebuild on next session
+    }
     playerNode?.stop()
     audioEngine?.stop()
     playerNode  = nil
@@ -321,13 +529,13 @@ class VibePowerModule: RCTEventEmitter {
     }
   }
 
-  private func startEngine(sampleRate: Double, channels: Int) {
+  private func startEngine() {
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
     engine.attach(player)
     guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                  sampleRate: sampleRate,
-                                  channels: AVAudioChannelCount(channels),
+                                  sampleRate: ENGINE_RATE,
+                                  channels: ENGINE_CH,
                                   interleaved: false) else {
       NSLog("[VibePowerModule] AVAudioFormat init failed"); return
     }
@@ -335,7 +543,7 @@ class VibePowerModule: RCTEventEmitter {
     do {
       try engine.start()
       player.play()
-      NSLog("[VibePowerModule] engine started %.0fHz %dch", sampleRate, channels)
+      NSLog("[VibePowerModule] engine started %.0fHz %dch", ENGINE_RATE, Int(ENGINE_CH))
     } catch {
       NSLog("[VibePowerModule] engine start error: %@", error.localizedDescription); return
     }
@@ -343,27 +551,18 @@ class VibePowerModule: RCTEventEmitter {
     playerNode  = player
     audioFormat = fmt
 
+    // Route changes (AirPods connect etc.) still need an engine restart, but
+    // the format is fixed so a restart can never disagree with the decoder.
     NotificationCenter.default.addObserver(
       forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
     ) { [weak self] _ in
       guard let self, self.isRunning else { return }
       NSLog("[VibePowerModule] config change — restarting")
       DispatchQueue.main.async {
-        guard let sr = self.audioFormat?.sampleRate, let ch = self.audioFormat?.channelCount else { return }
         self.playerNode?.stop(); self.audioEngine?.stop()
         self.playerNode = nil;   self.audioEngine = nil; self.audioFormat = nil
-        self.startEngine(sampleRate: sr, channels: Int(ch))
+        self.startEngine()
       }
-    }
-  }
-
-  private func reconfigureIfNeeded(sr: Double, ch: Int) {
-    guard let fmt = audioFormat else { return }
-    if fmt.sampleRate == sr && Int(fmt.channelCount) == ch { return }
-    DispatchQueue.main.async {
-      self.playerNode?.stop(); self.audioEngine?.stop()
-      self.playerNode = nil;   self.audioEngine = nil; self.audioFormat = nil
-      self.startEngine(sampleRate: sr, channels: ch)
     }
   }
 
@@ -393,34 +592,80 @@ class VibePowerModule: RCTEventEmitter {
     }
     guard decoded > 0 else { return }
 
-    reconfigureIfNeeded(sr: Double(sr), ch: Int(ch))
-
     let total = Int(decoded) * Int(ch)
     var pcmF  = [Float](repeating: 0, count: total)
     vDSP_vflt16(&pcm16, 1, &pcmF, 1, vDSP_Length(total))
     var scale: Float = 1.0 / 32768.0
     var pcmFScaled = [Float](repeating: 0, count: total)
     vDSP_vsmul(&pcmF, 1, &scale, &pcmFScaled, 1, vDSP_Length(total))
-    schedulePCM(samples: pcmFScaled, frameCount: Int(decoded), ch: Int(ch))
+
+    // Client noise DSP (NB / NR / NR2) on the mono feed at the packet rate —
+    // the recorder downstream captures the processed audio, like the skin.
+    if ch == 1 && (nbOn || nrModeStr != "off") {
+      dspProcessMono(&pcmFScaled, sr: sr)
+    }
+
+    // Packet-rate stereo buffer (mono duplicated to both channels) so the
+    // converter only ever resamples 2ch→2ch — no channel-map ambiguity.
+    let frameCount = Int(decoded)
+    guard let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                    sampleRate: Double(sr),
+                                    channels: ENGINE_CH,
+                                    interleaved: false),
+          let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt,
+                                       frameCapacity: AVAudioFrameCount(frameCount))
+    else { return }
+    inBuf.frameLength = AVAudioFrameCount(frameCount)
+    let left  = inBuf.floatChannelData![0]
+    let right = inBuf.floatChannelData![1]
+    if ch == 1 {
+      for i in 0..<frameCount { let v = pcmFScaled[i]; left[i] = v; right[i] = v }
+    } else {
+      for i in 0..<frameCount { left[i] = pcmFScaled[i*2]; right[i] = pcmFScaled[i*2+1] }
+    }
+
+    guard let outBuf = convertTo48k(inBuf) else { return }
+    if recArmed { writeRecording(outBuf) }
+    if !isMuted { scheduleOut(outBuf) }
   }
 
-  private func schedulePCM(samples: [Float], frameCount: Int, ch: Int) {
-    guard let player = playerNode, let fmt = audioFormat,
-          let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(frameCount))
-    else { return }
+  /** Resample a packet-rate buffer to the fixed engine format. Runs on
+   *  audioQ, same thread as the decoder swap — a rate flip rebuilds the
+   *  converter and the very next packet is already correct. */
+  private func convertTo48k(_ inBuf: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    guard let fmt = audioFormat else { return nil }
+    if inBuf.format.sampleRate == fmt.sampleRate { return inBuf }
+    if converter == nil || converterInFmt != inBuf.format {
+      converter      = AVAudioConverter(from: inBuf.format, to: fmt)
+      converterInFmt = inBuf.format
+      NSLog("[VibePowerModule] converter %.0f→%.0fHz", inBuf.format.sampleRate, fmt.sampleRate)
+    }
+    guard let conv = converter else { return nil }
+    let ratio  = fmt.sampleRate / inBuf.format.sampleRate
+    let outCap = AVAudioFrameCount(Double(inBuf.frameLength) * ratio) + 64
+    guard let outBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: outCap) else { return nil }
+    var fed = false
+    var err: NSError?
+    let status = conv.convert(to: outBuf, error: &err) { _, outStatus in
+      if fed { outStatus.pointee = .noDataNow; return nil }
+      fed = true
+      outStatus.pointee = .haveData
+      return inBuf
+    }
+    if status == .error {
+      NSLog("[VibePowerModule] convert error: %@", err?.localizedDescription ?? "?")
+      return nil
+    }
+    return outBuf.frameLength > 0 ? outBuf : nil
+  }
+
+  private func scheduleOut(_ buf: AVAudioPCMBuffer) {
+    guard let player = playerNode, let fmt = audioFormat else { return }
     // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
     // audio, drop instead of scheduling — latency stays bounded instead of
     // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).
-    let dur = Double(frameCount) / fmt.sampleRate
+    let dur = Double(buf.frameLength) / fmt.sampleRate
     if queuedSeconds > 0.4 { return }
-    buf.frameLength = AVAudioFrameCount(frameCount)
-    if ch == 1 {
-      let out = buf.floatChannelData![0]
-      for i in 0..<frameCount { out[i] = samples[i] }
-    } else {
-      let ch0 = buf.floatChannelData![0], ch1 = buf.floatChannelData![1]
-      for i in 0..<frameCount { ch0[i] = samples[i*2]; ch1[i] = samples[i*2+1] }
-    }
     queuedSeconds += dur
     player.scheduleBuffer(buf) { [weak self] in
       guard let self else { return }

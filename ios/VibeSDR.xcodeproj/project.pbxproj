@@ -13,6 +13,7 @@
 		59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD80C701468F7B7CD5EBF40E /* ExpoModulesProvider.swift */; };
 		A9F1D878FBB71E5FB735A713 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */; };
 		AA000001000000000000AAA3 /* VibePowerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAA1 /* VibePowerModule.swift */; };
+		AA000001000000000000AAB3 /* VibeDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAB1 /* VibeDSP.swift */; };
 		AA000001000000000000AAA4 /* VibePowerModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAA2 /* VibePowerModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
@@ -25,6 +26,7 @@
 		5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = VibeSDR/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A4E2299D81CB8EA18B6F9962 /* Pods-VibeSDR.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-VibeSDR.release.xcconfig"; path = "Target Support Files/Pods-VibeSDR/Pods-VibeSDR.release.xcconfig"; sourceTree = "<group>"; };
 		AA000001000000000000AAA1 /* VibePowerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibePowerModule.swift; path = VibeSDR/VibePowerModule.swift; sourceTree = "<group>"; };
+		AA000001000000000000AAB1 /* VibeDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeDSP.swift; path = VibeSDR/VibeDSP.swift; sourceTree = "<group>"; };
 		AA000001000000000000AAA2 /* VibePowerModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibePowerModule.m; path = VibeSDR/VibePowerModule.m; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = VibeSDR/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BA976CDAEC029F7C8C1E8873 /* libPods-VibeSDR.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-VibeSDR.a"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -52,6 +54,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000AAA1 /* VibePowerModule.swift */,
+				AA000001000000000000AAB1 /* VibeDSP.swift */,
 				AA000001000000000000AAA2 /* VibePowerModule.m */,
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				F11748442D0722820044C1D9 /* VibeSDR-Bridging-Header.h */,
@@ -340,6 +343,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA000001000000000000AAA3 /* VibePowerModule.swift in Sources */,
+				AA000001000000000000AAB3 /* VibeDSP.swift in Sources */,
 				AA000001000000000000AAA4 /* VibePowerModule.m in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */,
