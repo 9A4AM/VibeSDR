@@ -44,6 +44,41 @@ export async function fetchBookmarks(baseUrl: string): Promise<ServerBookmark[]>
   );
 }
 
+/** Server UI config — spectrum backdrop + station-ID overlay settings. */
+export interface ServerUiConfig {
+  spectrum_bg_image?:   string;   // url/path; empty = none
+  spectrum_bg_opacity?: number;   // 0–1, server default 0.30
+  station_id_overlay?:  boolean;  // default true
+  station_id_color?:    string;   // #rrggbb, default #ffffff
+}
+
+export async function fetchUiConfig(baseUrl: string): Promise<ServerUiConfig | null> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/ui-config`);
+    if (!res.ok) return null;
+    return await res.json() as ServerUiConfig;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReceiverInfo {
+  callsign?: string;
+  name?:     string;
+  location?: string;
+}
+
+export async function fetchReceiverInfo(baseUrl: string): Promise<ReceiverInfo | null> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/description`);
+    if (!res.ok) return null;
+    const d = await res.json() as { receiver?: ReceiverInfo };
+    return d?.receiver ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchBands(baseUrl: string): Promise<ServerBand[]> {
   const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/bands`);
   if (!res.ok) throw new Error(`bands HTTP ${res.status}`);

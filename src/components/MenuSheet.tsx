@@ -143,6 +143,10 @@ export interface MenuSheetProps {
   /** Frosted backing 0–10 (0 = off) — dims the waterfall behind the needle. */
   vfoFrost?:          number;
   onVfoFrost?:        (v: number) => void;
+  /** Instance spectrum backdrop opacity 0–10 (server-supplied image). */
+  bgOpacity?:         number;
+  onBgOpacity?:       (v: number) => void;
+  hasBgImage?:        boolean;
   wfCoarse?:          'auto' | 'manual';
   onWfCoarse?:        (v: 'auto' | 'manual') => void;
   /** UberSDR auto-range symmetric contrast 0–20 (web calibration = 10). */
@@ -387,6 +391,7 @@ export default function MenuSheet({
   vfoNeedle = '#ff8800', onVfoNeedle,
   vfoIntensity = 5, onVfoIntensity,
   vfoFrost = 0, onVfoFrost,
+  bgOpacity = 3, onBgOpacity, hasBgImage = false,
   wfCoarse = 'auto', onWfCoarse,
   autoContrast = 10, onAutoContrast,
   spatialSmooth = true, onSpatialSmooth,
@@ -786,6 +791,22 @@ export default function MenuSheet({
                     thumbTintColor={C.gold} />
                   <Text style={styles.bwVal}>{vfoFrost === 0 ? 'Off' : vfoFrost}</Text>
                 </View>
+
+                {/* Instance spectrum backdrop — only shown when the server
+                    actually serves one (/api/spectrum-bg-image) */}
+                {hasBgImage && (
+                  <View style={styles.bwRow}>
+                    <Text style={styles.bwLabel}>BACKDROP</Text>
+                    <Slider style={styles.bwSlider}
+                      minimumValue={0} maximumValue={10} step={1}
+                      value={bgOpacity}
+                      onValueChange={(v: number) => onBgOpacity?.(v)}
+                      minimumTrackTintColor={bgOpacity > 0 ? C.gold : C.muted}
+                      maximumTrackTintColor={C.muted}
+                      thumbTintColor={C.gold} />
+                    <Text style={styles.bwVal}>{bgOpacity === 0 ? 'Off' : bgOpacity}</Text>
+                  </View>
+                )}
 
                 {/* Waterfall — Coarse */}
                 <SubLabel label="Waterfall — Coarse" />

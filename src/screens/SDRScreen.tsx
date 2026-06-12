@@ -70,7 +70,9 @@ import PasswordModal from '../components/PasswordModal';
 import {
   fetchBookmarks, fetchBands, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
+  fetchUiConfig, fetchReceiverInfo,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
+  type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
@@ -231,6 +233,50 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [vfoIntensity,  setVfoIntensity]  = useState(5);
   // Frost 0-10 (0 = off): smoked-glass band over the passband
   const [vfoFrost,      setVfoFrost]      = useState(0);
+  // Instance spectrum backdrop (/api/spectrum-bg-image) + opacity 0-10
+  // (3 = web default 0.30); follows the server's configured opacity until
+  // the user moves the slider (or a saved pref exists)
+  const [bgImageUrl,    setBgImageUrl]    = useState<string | null>(null);
+  const [bgOpacity,     setBgOpacity]     = useState(3);
+  const bgOpacityUserSet = useRef(false);
+  // Station-ID overlay (web drawStationIdOverlay parity)
+  const [stationId,     setStationId]     = useState<{ line1: string; line2?: string; color: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchUiConfig(baseUrl).then((cfg: ServerUiConfig | null) => {
+      if (cancelled) return;
+      if (cfg?.spectrum_bg_image) {
+        const raw = cfg.spectrum_bg_image;
+        const abs = raw.startsWith('http')
+          ? raw
+          : baseUrl.replace(/\/+$/, '') + (raw.startsWith('/') ? raw : '/' + raw);
+        // Cache-bust like the web client — a freshly uploaded image always loads
+        setBgImageUrl(abs + (abs.includes('?') ? '&' : '?') + 't=' + Date.now());
+      } else {
+        setBgImageUrl(null);
+      }
+      if (!bgOpacityUserSet.current && typeof cfg?.spectrum_bg_opacity === 'number') {
+        setBgOpacity(Math.round(Math.max(0, Math.min(1, cfg.spectrum_bg_opacity)) * 10));
+      }
+      if (cfg?.station_id_overlay === false) { setStationId(null); return; }
+      const idColor = /^#[0-9a-fA-F]{6}$/.test((cfg?.station_id_color ?? '').trim())
+        ? (cfg!.station_id_color as string).trim() : '#ffffff';
+      fetchReceiverInfo(baseUrl).then((r: ReceiverInfo | null) => {
+        if (cancelled || !r) return;
+        const callsign = (r.callsign ?? '').trim();
+        const name     = (r.name ?? '').trim();
+        if (!callsign && !name) return;
+        setStationId({
+          line1: callsign && name ? `${callsign} - ${name}` : (callsign || name),
+          line2: (r.location ?? '').trim() || undefined,
+          color: idColor,
+        });
+      }).catch(() => {});
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [baseUrl]);
+
   // SNR squelch (audio gate) — value ≤ -999 = open/disabled
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
   // FM squelch — value ≤ -999 = open. Only active on fm/nfm modes.
@@ -327,6 +373,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (typeof p.vfoNeedle === 'string') setVfoNeedle(p.vfoNeedle);
           num('vfoIntensity', setVfoIntensity);
           num('vfoFrost', setVfoFrost);
+          num('bgOpacity', (v: number) => { setBgOpacity(v); bgOpacityUserSet.current = true; });
         } catch {}
       }
       prefsLoaded.current = true;
@@ -339,7 +386,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const json = JSON.stringify({
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape,
     });
     latestPrefsJson.current = json;
@@ -351,7 +398,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
@@ -364,7 +411,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSpecPeakScale(10); setPeakHold(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
     setAutoContrast(10); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setSignalMode('snr'); setStep(1000);
+    setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
     Alert.alert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
@@ -1814,6 +1861,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         needleColor={vfoNeedle}
         needleIntensity={vfoIntensity}
         needleFrost={vfoFrost}
+        bgImageUrl={bgImageUrl}
+        bgOpacity={bgOpacity / 10}
+        stationId={stationId}
         specFrac={specFrac}
       />
       </View>
@@ -1990,7 +2040,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(10); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0);
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setBgOpacity(3);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
@@ -2015,6 +2065,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
         vfoIntensity={vfoIntensity}       onVfoIntensity={setVfoIntensity}
         vfoFrost={vfoFrost}               onVfoFrost={setVfoFrost}
+        bgOpacity={bgOpacity}             onBgOpacity={(v: number) => { bgOpacityUserSet.current = true; setBgOpacity(v); }}
+        hasBgImage={bgImageUrl != null}
         wfCoarse={wfCoarse}             onWfCoarse={setWfCoarse}
         autoContrast={autoContrast}     onAutoContrast={setAutoContrast}
         spatialSmooth={spatialSmooth}   onSpatialSmooth={setSpatialSmooth}

@@ -41,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PixelRatio, StyleSheet, Text, View } from 'react-native';
+import { Image as RNImage, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Fill,
@@ -167,6 +167,14 @@ export interface WaterfallViewProps {
    *  that dims the waterfall behind the needle — contrast on bright
    *  palettes even when their colours match the needle. */
   needleFrost?: number;
+  /** Instance spectrum backdrop (/api/spectrum-bg-image) — sits behind the
+   *  spectrum line graph only, like the web UI. */
+  bgImageUrl?:  string | null;
+  /** Backdrop opacity 0–1 (0 = hidden). */
+  bgOpacity?:   number;
+  /** Station-ID overlay: "CALLSIGN - NAME" + location, top-right of the
+   *  spectrum (web drawStationIdOverlay parity). */
+  stationId?:   { line1: string; line2?: string; color: string } | null;
   // Smooth tune (variable refresh): 120Hz interpolated scroll while the user
   // is interacting; once settled the waterfall steps rows discretely (data is
   // ~10Hz — the slide is pure interpolation) and the spectrum trace eases at
@@ -246,6 +254,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
   frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
+  bgImageUrl = null, bgOpacity = 0, stationId = null,
   smoothTune = true, lastInteractAt,
 }: WaterfallViewProps) {
 
@@ -944,6 +953,17 @@ function WaterfallView({
     <GestureDetector gesture={gesture}>
       <View style={[styles.root, { width, height }]}>
 
+        {/* Instance spectrum backdrop — behind the line graph only (web
+            parity); the canvases above are transparent in that region */}
+        {bgImageUrl != null && bgOpacity > 0 && specShow && specH > 8 && (
+          <RNImage
+            source={{ uri: bgImageUrl }}
+            resizeMode="cover"
+            style={{ position: 'absolute', left: 0, top: specTop, width,
+                     height: specH, opacity: bgOpacity }}
+          />
+        )}
+
         <Canvas style={{ position: 'absolute', left: 0, top: wfTop, width, height: wfH }}>
           {/* GPU waterfall: intensity ring + LUT sampled by the runtime
               shader; scroll/slide/sharpness/contrast are uniforms (UI-thread,
@@ -1016,6 +1036,22 @@ function WaterfallView({
           </Text>
         ))}
 
+        {/* Station-ID overlay — top-right of the spectrum (web parity:
+            bold "CALLSIGN - NAME", location at 75% beneath, drop shadow) */}
+        {stationId != null && specShow && specH > 40 && (
+          <View pointerEvents="none"
+                style={[styles.stationId, { top: specTop + 6 }]}>
+            <Text style={[styles.stationIdL1, { color: stationId.color }]} numberOfLines={1}>
+              {stationId.line1}
+            </Text>
+            {!!stationId.line2 && (
+              <Text style={[styles.stationIdL2, { color: stationId.color }]} numberOfLines={1}>
+                {stationId.line2}
+              </Text>
+            )}
+          </View>
+        )}
+
       </View>
     </GestureDetector>
   );
@@ -1025,6 +1061,15 @@ function WaterfallView({
 
 const styles = StyleSheet.create({
   root: { overflow: 'hidden', backgroundColor: '#000' },
+  stationId: { position: 'absolute', right: 6, alignItems: 'flex-end' },
+  stationIdL1: {
+    fontSize: 13, fontWeight: 'bold',
+    textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 0,
+  },
+  stationIdL2: {
+    fontSize: 11, opacity: 0.75,
+    textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 0,
+  },
   bandLabelWrap: {
     position: 'absolute', top: 0,
     alignItems: 'center', justifyContent: 'flex-end',
