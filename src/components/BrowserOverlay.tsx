@@ -1,11 +1,14 @@
 /**
  * BrowserOverlay — full-screen in-app browser for the server's admin pages
  * (ADMIN / NOISE / CONDITIONS / LISTENERS — skin menu's Admin section).
- * Native "← SDR" bar on top; the pages are arbitrary server HTML, so unlike
- * MapOverlay no chrome is injected into the WebView itself.
+ * Native "← SDR" bar with browser ‹ › history arrows (the admin pages are
+ * multi-level); iOS also keeps edge-swipe back/forward inside the page, and
+ * the Android back gesture navigates page history before closing the modal.
+ * The pages are arbitrary server HTML, so unlike MapOverlay no chrome is
+ * injected into the WebView itself.
  */
 
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Modal, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
@@ -19,13 +22,20 @@ export interface BrowserOverlayProps {
 }
 
 export default function BrowserOverlay({ url, title, onClose }: BrowserOverlayProps) {
+  const webRef = useRef<WebView>(null);
+  const [canBack, setCanBack] = useState(false);
+  const [canFwd,  setCanFwd]  = useState(false);
   if (!url) return null;
   return (
     <Modal
       visible
       animationType="slide"
       supportedOrientations={['portrait', 'landscape']}
-      onRequestClose={onClose}
+      // Android back gesture/button: walk page history first, close last
+      onRequestClose={() => {
+        if (canBack) webRef.current?.goBack();
+        else onClose();
+      }}
     >
       {/* SafeAreaView (native, measures the modal's own window) — the
           useSafeAreaInsets hook returns 0 inside an RN Modal, which clipped
@@ -36,13 +46,29 @@ export default function BrowserOverlay({ url, title, onClose }: BrowserOverlayPr
             <Text style={styles.back}>← SDR</Text>
           </TouchableOpacity>
           <Text style={styles.title} numberOfLines={1}>{title ?? url}</Text>
-          {/* spacer balances the back button so the title centres */}
-          <View style={styles.spacer} />
+          {/* Browser history arrows — multi-level admin pages */}
+          <TouchableOpacity
+            onPress={() => webRef.current?.goBack()}
+            hitSlop={10} activeOpacity={0.7} disabled={!canBack}
+          >
+            <Text style={[styles.navArrow, !canBack && styles.navArrowDim]}>‹</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => webRef.current?.goForward()}
+            hitSlop={10} activeOpacity={0.7} disabled={!canFwd}
+          >
+            <Text style={[styles.navArrow, !canFwd && styles.navArrowDim]}>›</Text>
+          </TouchableOpacity>
         </View>
         <WebView
+          ref={webRef}
           source={{ uri: url }}
           style={styles.web}
           allowsBackForwardNavigationGestures
+          onNavigationStateChange={(nav: { canGoBack: boolean; canGoForward: boolean }) => {
+            setCanBack(nav.canGoBack);
+            setCanFwd(nav.canGoForward);
+          }}
         />
       </SafeAreaView>
     </Modal>
@@ -55,12 +81,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)',
+    gap: 6,
   },
   back:  { color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 16 },
   title: {
-    flex: 1, textAlign: 'center', paddingHorizontal: 10,
+    flex: 1, textAlign: 'center', paddingHorizontal: 8,
     color: 'rgba(255,255,255,0.85)', fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
   },
-  spacer: { width: 52 },
+  navArrow: {
+    color: '#ffe566', fontSize: 26, lineHeight: 28,
+    paddingHorizontal: 8, fontFamily: 'Atkinson Hyperlegible',
+  },
+  navArrowDim: { color: 'rgba(255,255,255,0.22)' },
   web:   { flex: 1, backgroundColor: '#000' },
 });

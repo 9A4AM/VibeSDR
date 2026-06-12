@@ -105,6 +105,18 @@ class VibeStreamService : Service() {
     private val packetQueue = LinkedBlockingDeque<ByteArray>(32)
     private var decodeThread: Thread? = null
 
+    // Now-playing overrides — JS computes VTS-aware title/artist (station or
+    // band name, user's frequency unit, tune step); native skips clear them
+    // until the JS VibeTuned round-trip refreshes (sub-second).
+    @Volatile private var npTitle: String? = null
+    @Volatile private var npArtist: String? = null
+    // Media skip routing: "step" = native tune±step; "bookmark" = emit
+    // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
+    @Volatile var skipMode = "step"
+    // Composited album art (app icon + server-type logo inset), cached
+    private var npArtwork: android.graphics.Bitmap? = null
+    private var npArtworkType = ""
+
     private var watchdog: Runnable? = null
     // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune
     // per step thrashes radiod. Leading send + 80ms trailing timer.
@@ -264,8 +276,15 @@ class VibeStreamService : Service() {
     }
 
     private fun tuneByStep(direction: Int) {
+        if (skipMode == "bookmark") {
+            emitEvent("VibeSkip") { it.putString("direction", if (direction > 0) "next" else "prev") }
+            return
+        }
         val newFreq = (currentFreq + direction * currentStep).coerceAtLeast(100_000L)
         currentFreq = newFreq
+        // Stale VTS strings (old station name) — fall back until JS catches up
+        npTitle = null
+        npArtist = null
         sendWsJson(JSONObject().put("type", "tune").put("frequency", newFreq))
         emitEvent("VibeTuned") {
             it.putDouble("frequency", newFreq.toDouble())
@@ -535,21 +554,64 @@ class VibeStreamService : Service() {
     // ── Notification / MediaSession ──────────────────────────────────────────
 
     private fun nowPlayingTitle(): String {
-        val mhz = String.format("%.3f MHz", currentFreq / 1_000_000.0)
-        return "$mhz ${currentMode.uppercase()}${if (muted) " ·muted·" else ""}"
+        val base = npTitle ?: run {
+            val mhz = String.format("%.3f MHz", currentFreq / 1_000_000.0)
+            "$mhz ${currentMode.uppercase()}"
+        }
+        return base + (if (muted) " ·muted·" else "")
+    }
+
+    private fun nowPlayingArtist(): String =
+        npArtist ?: instanceName.ifEmpty { currentBase }
+
+    /** VTS-aware now-playing strings from JS (empty string clears). */
+    fun setNowPlayingNative(title: String, artist: String) {
+        npTitle = title.ifEmpty { null }
+        npArtist = artist.ifEmpty { null }
+        mainHandler.post { updateMetadataSession(); updateNotification() }
+    }
+
+    /** Album art: VibeSDR icon with the server-type logo inset bottom-right
+     *  (multi-server prep — type picks the overlay, "ubersdr" for now). */
+    fun setArtworkNative(serverType: String) {
+        if (serverType == npArtworkType) return
+        npArtworkType = serverType
+        mainHandler.post {
+            try {
+                val base = android.graphics.BitmapFactory.decodeResource(
+                    resources, R.drawable.artwork_base) ?: return@post
+                val overlayId = resources.getIdentifier(
+                    "logo_$serverType", "drawable", packageName)
+                var composed = base
+                if (overlayId != 0) {
+                    val overlay = android.graphics.BitmapFactory.decodeResource(resources, overlayId)
+                    if (overlay != null) {
+                        composed = base.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+                        val canvas = android.graphics.Canvas(composed)
+                        val inset = composed.width * 0.30f
+                        val pad = composed.width * 0.045f
+                        val dst = android.graphics.RectF(
+                            composed.width - inset - pad, composed.height - inset - pad,
+                            composed.width - pad, composed.height - pad)
+                        canvas.drawBitmap(overlay, null, dst, null)
+                    }
+                }
+                npArtwork = composed
+                updateMetadataSession()
+                updateNotification()
+            } catch (e: Exception) {
+                Log.w(TAG, "artwork composite failed: ${e.message}")
+            }
+        }
     }
 
     private fun updateMetadataSession() {
-        mediaSession?.setMetadata(
-            MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle())
-                .putString(
-                    MediaMetadataCompat.METADATA_KEY_ARTIST,
-                    instanceName.ifEmpty { currentBase }
-                )
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "VibeSDR")
-                .build()
-        )
+        val b = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle())
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, nowPlayingArtist())
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "VibeSDR")
+        npArtwork?.let { b.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+        mediaSession?.setMetadata(b.build())
     }
 
     private fun updatePlaybackState(state: Int) {
@@ -606,8 +668,9 @@ class VibeStreamService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
+            .setLargeIcon(npArtwork)
             .setContentTitle(nowPlayingTitle())
-            .setContentText(instanceName.ifEmpty { currentBase })
+            .setContentText(nowPlayingArtist())
             .setContentIntent(contentPi)
             .addAction(android.R.drawable.ic_media_previous, "Prev", pi(1, ACTION_PREV))
             .addAction(playPauseIcon, playPauseLabel, pi(2, playPauseAction))

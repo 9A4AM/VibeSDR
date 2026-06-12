@@ -17,5 +17,8 @@ RCT_EXTERN_METHOD(shareRecording:(NSString *)path)
 RCT_EXTERN_METHOD(setNrMode:(NSString *)mode)
 RCT_EXTERN_METHOD(setNoiseBlanker:(BOOL)on)
 RCT_EXTERN_METHOD(sendAudioCommand:(NSString *)json)
+RCT_EXTERN_METHOD(setNowPlaying:(NSString *)title artist:(NSString *)artist)
+RCT_EXTERN_METHOD(setMediaSkipMode:(NSString *)mode)
+RCT_EXTERN_METHOD(setArtwork:(NSString *)serverType)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getDebugInfoSync)
 @end

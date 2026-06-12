@@ -32,6 +32,7 @@ import {
   setDefaultInstance,
 } from '../services/defaultInstance';
 import { Favourite, getFavourites, toggleFavourite } from '../services/favourites';
+import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, clearViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 
@@ -186,7 +187,25 @@ export default function InstancePickerScreen({ navigation }: Props) {
       'Clears your display mode choice and returns to the setup screen. Your default instance is kept.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: async () => { await clearViewMode(); navigation.replace('InstancePicker'); } },
+        { text: 'Reset', style: 'destructive', onPress: async () => {
+          await clearViewMode();
+          // Bookmarks are precious — never clear silently with a reset
+          const bms = await loadUserBookmarks().catch(() => [] as UserBookmark[]);
+          if (bms.length > 0) {
+            Alert.alert(
+              'Bookmarks',
+              `Keep your ${bms.length} saved bookmark${bms.length !== 1 ? 's' : ''}?`,
+              [
+                { text: 'Keep', style: 'default',
+                  onPress: () => navigation.replace('InstancePicker') },
+                { text: 'Clear All', style: 'destructive',
+                  onPress: async () => { await saveUserBookmarks([]); navigation.replace('InstancePicker'); } },
+              ],
+            );
+          } else {
+            navigation.replace('InstancePicker');
+          }
+        } },
       ],
     );
   }, [navigation]);

@@ -30,6 +30,7 @@ import {
   searchStations, fmtFreq, fmtRange, grpAbbr,
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
+import { type UserBookmark } from '../services/userBookmarks';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,8 @@ export interface MenuSheetProps {
   onDisplayStyle?: (s: 'amber' | 'white') => void;
   drumMode?:       'normal' | 'precise';
   onDrumMode?:     (m: 'normal' | 'precise') => void;
+  mediaSkip?:      'step' | 'bookmark';
+  onMediaSkip?:    (m: 'step' | 'bookmark') => void;
   /** Recentre the spectrum view on the tuned frequency (skin parity). */
   onCentreVfo?:    () => void;
   /** Hide the controls bar for a full-screen waterfall (chevron restores). */
@@ -117,6 +120,13 @@ export interface MenuSheetProps {
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
   onSearchTune?:    (hz: number, mode?: string | null) => void;
+  userBookmarks?:     UserBookmark[];
+  currentFreq?:       number;
+  currentMode?:       string;
+  onAddBookmark?:     (name: string, allInstances: boolean) => void;
+  onDeleteBookmark?:  (bm: UserBookmark) => void;
+  onExportBookmarks?: () => void;
+  onImportBookmarks?: (text: string, allInstances: boolean) => string;
 
   onClose:          () => void;
   onBack?:          () => void;
@@ -350,11 +360,14 @@ export default function MenuSheet({
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
   drumMode = 'normal', onDrumMode, onCentreVfo, onHideControls,
+  mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   searchBookmarks = [], searchBands = [], onSearchTune,
+  userBookmarks = [], currentFreq = 0, currentMode = '',
+  onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
   onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
@@ -398,6 +411,17 @@ export default function MenuSheet({
     : { height: sheetH };
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
+
+  // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
+  const [bookmarksOpen,  setBookmarksOpen]  = useState(false);
+  const [bmName,         setBmName]         = useState('');
+  const [bmAll,          setBmAll]          = useState(false);
+  const [bmImportOpen,   setBmImportOpen]   = useState(false);
+  const [bmImportText,   setBmImportText]   = useState('');
+  const [bmImportMsg,    setBmImportMsg]    = useState('');
+  useEffect(() => {
+    if (!visible) { setBookmarksOpen(false); setBmImportOpen(false); setBmImportMsg(''); }
+  }, [visible]);
   const [bwSync,           setBwSync]           = useState(false);
 
   // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
@@ -469,7 +493,7 @@ export default function MenuSheet({
             {/* Display settings is its OWN view — it REPLACES the main menu
                 content instead of expanding inline over it (inline blended in
                 and was confusing to read). */}
-            {!dispSettingsOpen && (<>
+            {!dispSettingsOpen && !bookmarksOpen && (<>
 
             {/* ── NEARBY STATION ─────────────────────────────────── */}
             <SectionLabel label="NEARBY STATION" first />
@@ -536,6 +560,12 @@ export default function MenuSheet({
               )}
             </View>
 
+            {/* User bookmarks pane opener */}
+            <BtnRow>
+              <Btn label={`★ BOOKMARKS (${userBookmarks.length})`} full
+                   onPress={() => setBookmarksOpen(true)} />
+            </BtnRow>
+
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
             <SectionLabel label="SPECTRUM / WATERFALL" />
             <BtnRow>
@@ -553,6 +583,95 @@ export default function MenuSheet({
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />
             </BtnRow>
             </>)}
+
+            {/* ── BOOKMARKS pane — replaces the menu (display-settings
+                   pattern). Add current tune / list / delete / export-import
+                   in the desktop-UberSDR JSON format. ── */}
+            {bookmarksOpen && (
+              <View style={styles.subPanel}>
+                <TouchableOpacity style={styles.backRow}
+                  onPress={() => setBookmarksOpen(false)} activeOpacity={0.7}>
+                  <Text style={styles.backRowChevron}>‹  BACK</Text>
+                  <Text style={styles.backRowTitle}>BOOKMARKS</Text>
+                </TouchableOpacity>
+
+                {/* Add current tune */}
+                <SubLabel label={`Add: ${(currentFreq / 1_000_000).toFixed(4)} MHz ${currentMode.toUpperCase()}`} />
+                <TextInput
+                  style={styles.searchInput}
+                  value={bmName}
+                  onChangeText={setBmName}
+                  placeholder="Bookmark name…"
+                  placeholderTextColor="rgba(255,255,255,0.40)"
+                  autoCorrect={false}
+                  maxLength={60}
+                />
+                <OptRow>
+                  <SegBtn label="THIS INSTANCE" active={!bmAll} onPress={() => setBmAll(false)} />
+                  <SegBtn label="ALL INSTANCES" active={bmAll}  onPress={() => setBmAll(true)} />
+                </OptRow>
+                <BtnRow>
+                  <Btn label="★ SAVE BOOKMARK" full
+                       onPress={() => {
+                         if (!bmName.trim()) return;
+                         onAddBookmark?.(bmName, bmAll);
+                         setBmName('');
+                       }} />
+                </BtnRow>
+
+                {/* Saved list — tap to tune, ✕ deletes */}
+                <SubLabel label={`Saved (${userBookmarks.length})`} />
+                {userBookmarks.length === 0 && (
+                  <Text style={styles.bmEmpty}>No bookmarks yet — tune somewhere good and save it.</Text>
+                )}
+                {userBookmarks.map((b: UserBookmark, i: number) => (
+                  <View key={`${b.name}|${b.frequency}|${i}`} style={styles.bmRow}>
+                    <TouchableOpacity style={styles.bmTune} activeOpacity={0.7}
+                      onPress={() => onSearchTune?.(b.frequency, b.mode)}>
+                      <Text style={styles.bmName} numberOfLines={1}>
+                        {b.scope ? '' : '🌐 '}{b.name}
+                      </Text>
+                      <Text style={styles.bmFreq}>
+                        {fmtFreq(b.frequency)}  {b.mode.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}>
+                      <Text style={styles.bmDel}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+                {/* Export / import — desktop-UberSDR-compatible JSON */}
+                <SubLabel label="Transfer" />
+                <BtnRow>
+                  <Btn label="⇧ EXPORT JSON" onPress={onExportBookmarks} />
+                  <Btn label="⇩ IMPORT" active={bmImportOpen}
+                       onPress={() => { setBmImportOpen((p: boolean) => !p); setBmImportMsg(''); }} />
+                </BtnRow>
+                {bmImportOpen && (<>
+                  <TextInput
+                    style={[styles.searchInput, styles.bmImportBox]}
+                    value={bmImportText}
+                    onChangeText={setBmImportText}
+                    placeholder="Paste UberSDR bookmarks JSON here…"
+                    placeholderTextColor="rgba(255,255,255,0.40)"
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                    multiline
+                  />
+                  <BtnRow>
+                    <Btn label="CONFIRM IMPORT" full
+                         onPress={() => {
+                           const msg = onImportBookmarks?.(bmImportText, bmAll) ?? '';
+                           setBmImportMsg(msg);
+                           if (msg.startsWith('Imported')) setBmImportText('');
+                         }} />
+                  </BtnRow>
+                  {!!bmImportMsg && <Text style={styles.bmImportMsg}>{bmImportMsg}</Text>}
+                </>)}
+                <View style={{ height: 24 }} />
+              </View>
+            )}
 
             {dispSettingsOpen && (
               <View style={styles.subPanel}>
@@ -739,7 +858,7 @@ export default function MenuSheet({
               </View>
             )}
 
-            {!dispSettingsOpen && (<>
+            {!dispSettingsOpen && !bookmarksOpen && (<>
 
             {/* ── AUDIO ──────────────────────────────────────────── */}
             <SectionLabel label="AUDIO" />
@@ -965,6 +1084,17 @@ export default function MenuSheet({
                 <Btn label="✦ HAPTICS" active={hapticsEnabled}       onPress={() => onHaptics?.(!hapticsEnabled)} />
               </BtnRow>
             </View>
+            {/* Lock-screen / car-stereo skip buttons: tune by step, or jump
+                bookmarks like the VTS arrows */}
+            <View style={styles.ctrlRow}>
+              <Text style={styles.ctrlLabel}>MEDIA ⏮⏭</Text>
+              <BtnRow>
+                <Btn label="TUNE STEP" active={mediaSkip==='step'}
+                     onPress={() => onMediaSkip?.('step')} />
+                <Btn label="BOOKMARK SKIP" active={mediaSkip==='bookmark'}
+                     onPress={() => onMediaSkip?.('bookmark')} />
+              </BtnRow>
+            </View>
 
             {/* ── ADMIN — server pages in an in-app browser view ──── */}
             <SectionLabel label="ADMIN" />
@@ -1077,6 +1207,24 @@ const styles = StyleSheet.create({
   vtsName:  { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, letterSpacing: 1 },
   vtsFreq:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 },
   searchWrap: { paddingTop: 6, paddingBottom: 2 },
+  bmEmpty: {
+    color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 12, paddingVertical: 6,
+  },
+  bmRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  bmTune: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  bmName: { flexShrink: 1, color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
+  bmFreq: { flexShrink: 0, color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 12 },
+  bmDel:  { color: 'rgba(220,80,80,0.85)', fontSize: 16, paddingHorizontal: 6 },
+  bmImportBox: { minHeight: 90, textAlignVertical: 'top', marginTop: 4 },
+  bmImportMsg: {
+    color: 'rgba(120,235,140,0.90)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 12, paddingVertical: 4,
+  },
   searchInput: {
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', borderRadius: 8,

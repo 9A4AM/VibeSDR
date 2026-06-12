@@ -84,6 +84,21 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.sendRawCommand(json)
     }
 
+    @ReactMethod
+    fun setNowPlaying(title: String, artist: String) {
+        VibeStreamService.instance?.setNowPlayingNative(title, artist)
+    }
+
+    @ReactMethod
+    fun setArtwork(serverType: String) {
+        VibeStreamService.instance?.setArtworkNative(serverType)
+    }
+
+    @ReactMethod
+    fun setMediaSkipMode(mode: String) {
+        VibeStreamService.instance?.skipMode = mode
+    }
+
     // Client NR/NR2/NB are native Swift DSP on iOS; the Kotlin port hasn't
     // happened yet — accept the calls so JS stays platform-agnostic.
     @ReactMethod

@@ -276,7 +276,11 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const liveSnrText = m ? meterText(meterMode ?? 'snr', m) : snrText;
   const liveActive  = m ? m.active : signalActive;
   return (
-    <View style={pm.row}>
+    // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
+    // screens (SE / Moto G35) and with Android font metrics the fixed dp
+    // widths overflow the frame; the freq text's adjustsFontSizeToFit
+    // absorbs the squeeze (meter stays visible ≥13% each side).
+    <View style={[pm.row, { maxWidth: '74%', alignSelf: 'center' }]}>
       <TouchableOpacity
         style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
@@ -326,8 +330,8 @@ const pm = StyleSheet.create({
   dot:     { width: 7, height: 7, borderRadius: 3.5, marginRight: 5, alignSelf: 'center', flexShrink: 0 },
   dotOn:   { backgroundColor: '#00cc44' },
   dotOff:  { backgroundColor: '#333' },
-  freqBox: { flexDirection: 'row', alignItems: 'flex-end', borderTopLeftRadius: 5, borderBottomLeftRadius: 5 },
-  freq:    { letterSpacing: 1.5, textAlign: 'center', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 },
+  freqBox: { flexDirection: 'row', alignItems: 'flex-end', borderTopLeftRadius: 5, borderBottomLeftRadius: 5, flexShrink: 1 },
+  freq:    { letterSpacing: 1.5, textAlign: 'center', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6, flexShrink: 1 },
   unit:    { letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2, flexShrink: 0 },
   modeBtn: { borderTopRightRadius: 5, borderBottomRightRadius: 5,
              borderLeftWidth: 1, borderLeftColor: 'rgba(70,60,45,0.45)',

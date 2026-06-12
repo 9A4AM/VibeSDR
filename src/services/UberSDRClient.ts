@@ -192,11 +192,11 @@ export class UberSDRClient {
   zoom(frequency: number, binBandwidth: number) {
     const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
     const n  = this.status.binCount || 1024;
-    // Max-zoom floor: 2 Hz/bin ≈ 2 kHz span @1024 bins — one SSB channel.
-    // The server happily goes to 0.5 Hz/bin and even shrinks binCount for
-    // deeper zoom, but past ~2 kHz the spectrum is flat noise and the view
-    // "keeps zooming" with nothing visibly changing.
-    const bb = Math.max(2, Math.min(binBandwidth, 30_000_000 / n));
+    // Max-zoom floor: 6 kHz total span (3 kHz per sideband — one SSB
+    // channel both sides). The server goes deeper but past this the
+    // spectrum shows artefacts and looks frozen even though it isn't
+    // (device-confirmed on both platforms 2026-06-12).
+    const bb = Math.max(6_000 / n, Math.min(binBandwidth, 30_000_000 / n));
     this.view.centerHz     = f;
     this.view.binBandwidth = bb;
     this._sendView(f, bb);
@@ -431,7 +431,12 @@ export class UberSDRClient {
       }
     };
 
-    ws.onerror = () => this.callbacks.onError('Spectrum WebSocket error');
+    // Transient socket errors are NOT user-facing: onclose follows and
+    // _scheduleReconnect recovers silently (Android's socket stack fires
+    // onerror on any hiccup — surfacing it alert-booted users to the
+    // instance picker while the session was actually fine; the link bars
+    // already show degradation).
+    ws.onerror = () => this.dbg('Spectrum WS error (reconnect handles it)');
   }
 
   private _parseBinaryFrame(buf: ArrayBuffer) {

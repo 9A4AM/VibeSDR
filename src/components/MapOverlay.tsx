@@ -611,7 +611,7 @@ if(KIND==='hfdl'){
         if(!cur[k]){try{map.removeLayer(acM[k]);}catch(e){}delete acM[k];if(glowAC===k)glowAC=null;}
       });
       fetchGS();
-    }).catch(function(){cnt.textContent='&#10005;';});
+    }).catch(function(){cnt.textContent='\\u2715';});
   }
   fetchAC();
   setInterval(fetchAC,5000);
@@ -814,7 +814,12 @@ export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClos
     >
       <View style={mo.root}>
         <WebView
-          source={{ html }}
+          // baseUrl gives the document the INSTANCE's origin so in-page
+          // fetches (/addon/hfdl/*, /api/*) are same-origin — CORS is a
+          // per-instance ubersdr config flag (Server.EnableCORS) and most
+          // instances have it off, which silently killed the HFDL polls
+          // (digi/CW maps survived because WebSockets bypass CORS).
+          source={{ html, baseUrl: baseUrl.replace(/\/+$/, '') + '/' }}
           originWhitelist={['*']}
           style={mo.web}
           javaScriptEnabled

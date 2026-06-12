@@ -20,7 +20,7 @@ class VibePowerModule: RCTEventEmitter {
   // MARK: - RCTEventEmitter
 
   override func supportedEvents() -> [String]! {
-    return ["VibeTuned", "VibeMuted", "VibeWsText"]
+    return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -97,6 +97,19 @@ class VibePowerModule: RCTEventEmitter {
   // playback ran seconds behind live FOREVER — tuning sounded delayed because
   // you kept hearing the backlog. queuedSeconds is mutated on audioQ only.
   private var queuedSeconds: Double = 0
+  // Now-playing overrides — JS computes a VTS-aware title/artist (station or
+  // band name, user's frequency unit, tune step) and pushes them here. A
+  // native lock-screen skip clears them until JS catches up (VibeTuned →
+  // setNowPlaying round-trip, sub-second; background audio keeps JS alive).
+  private var npTitleOverride:  String?
+  private var npArtistOverride: String?
+  // Composited album art (app icon + server-type logo inset), cached per type
+  private var npArtwork: MPMediaItemArtwork?
+  private var npArtworkType = ""
+  // Media skip routing: "step" = native tune±step; "bookmark" = emit
+  // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
+  private var skipMode = "step"
+
   // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune per
   // step thrashes radiod. Leading send + 80ms trailing timer.
   private var pendingTune: (freq: Int, mode: String)?
@@ -286,6 +299,10 @@ class VibePowerModule: RCTEventEmitter {
 
   @objc func setStep(_ hz: Int) {
     currentStep = hz
+  }
+
+  @objc func setMediaSkipMode(_ mode: String) {
+    skipMode = mode
   }
 
   @objc func setInstanceName(_ name: String) {
@@ -693,15 +710,53 @@ class VibePowerModule: RCTEventEmitter {
 
   private func updateNowPlaying() {
     let mhz = String(format: "%.3f MHz", Double(currentFreq) / 1_000_000)
-    let title  = "\(mhz) \(currentMode.uppercased())\(isMuted ? " ·muted·" : "")"
-    let artist = instanceName.isEmpty ? currentBase : instanceName
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+    let fallbackTitle  = "\(mhz) \(currentMode.uppercased())"
+    let fallbackArtist = instanceName.isEmpty ? currentBase : instanceName
+    let title  = (npTitleOverride ?? fallbackTitle) + (isMuted ? " ·muted·" : "")
+    let artist = npArtistOverride ?? fallbackArtist
+    var info: [String: Any] = [
       MPMediaItemPropertyTitle:             title,
       MPMediaItemPropertyArtist:            artist,
       MPMediaItemPropertyAlbumTitle:        "VibeSDR",
       MPNowPlayingInfoPropertyPlaybackRate: isMuted ? 0.0 : 1.0,
       MPNowPlayingInfoPropertyIsLiveStream: true,
     ]
+    if let art = npArtwork { info[MPMediaItemPropertyArtwork] = art }
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+  }
+
+  /** VTS-aware now-playing strings from JS (empty string clears). */
+  @objc func setNowPlaying(_ title: String, artist: String) {
+    npTitleOverride  = title.isEmpty ? nil : title
+    npArtistOverride = artist.isEmpty ? nil : artist
+    DispatchQueue.main.async { self.updateNowPlaying() }
+  }
+
+  /** Album art: VibeSDR icon with the server-type logo inset bottom-right
+   *  (multi-server prep — type picks the overlay, "ubersdr" for now). */
+  @objc func setArtwork(_ serverType: String) {
+    guard serverType != npArtworkType else { return }
+    npArtworkType = serverType
+    DispatchQueue.main.async {
+      guard let base = UIImage(named: "artwork_base") else {
+        NSLog("[VibePowerModule] artwork_base missing"); return
+      }
+      var composed = base
+      if let overlay = UIImage(named: "logo_\(serverType)") {
+        let size = base.size
+        let inset = size.width * 0.30
+        let pad   = size.width * 0.045
+        composed = UIGraphicsImageRenderer(size: size).image { _ in
+          base.draw(in: CGRect(origin: .zero, size: size))
+          overlay.draw(in: CGRect(x: size.width - inset - pad,
+                                  y: size.height - inset - pad,
+                                  width: inset, height: inset))
+        }
+      }
+      let img = composed
+      self.npArtwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+      self.updateNowPlaying()
+    }
   }
 
   private func setupRemoteCommands() {
@@ -728,9 +783,15 @@ class VibePowerModule: RCTEventEmitter {
     cc.nextTrackCommand.removeTarget(nil)
     cc.nextTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
+      if self.skipMode == "bookmark" {
+        self.sendEvent(withName: "VibeSkip", body: ["direction": "next"])
+        return .success
+      }
       let newFreq = self.currentFreq + self.currentStep
       self.currentFreq = newFreq
       self.sendWsJson(["type": "tune", "frequency": newFreq])
+      // Stale VTS strings (old station name) — fall back until JS catches up
+      self.npTitleOverride = nil; self.npArtistOverride = nil
       self.updateNowPlaying()
       self.sendEvent(withName: "VibeTuned", body: ["frequency": newFreq, "mode": self.currentMode])
       return .success
@@ -741,9 +802,14 @@ class VibePowerModule: RCTEventEmitter {
     cc.previousTrackCommand.removeTarget(nil)
     cc.previousTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
+      if self.skipMode == "bookmark" {
+        self.sendEvent(withName: "VibeSkip", body: ["direction": "prev"])
+        return .success
+      }
       let newFreq = max(100_000, self.currentFreq - self.currentStep)
       self.currentFreq = newFreq
       self.sendWsJson(["type": "tune", "frequency": newFreq])
+      self.npTitleOverride = nil; self.npArtistOverride = nil
       self.updateNowPlaying()
       self.sendEvent(withName: "VibeTuned", body: ["frequency": newFreq, "mode": self.currentMode])
       return .success

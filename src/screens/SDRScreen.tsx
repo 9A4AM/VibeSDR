@@ -20,10 +20,12 @@ import React, {
 import {
   Alert,
   AppState,
+  BackHandler,
   Dimensions,
   NativeEventEmitter,
   NativeModules,
   Platform,
+  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -68,6 +70,10 @@ import {
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
 } from '../services/stations';
+import {
+  loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
+  exportBookmarksJSON, parseBookmarksJSON, mergeBookmarks, type UserBookmark,
+} from '../services/userBookmarks';
 import { getBandsAtRegion, type Band } from '../constants/bandPlan';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -511,6 +517,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
+  const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
+
+  // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
+  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_media_skip').then((v: string | null) => {
+      if (v === 'bookmark' || v === 'step') setMediaSkip(v);
+    }).catch(() => {});
+  }, []);
+  const onMediaSkip = useCallback((m: 'step' | 'bookmark') => {
+    setMediaSkip(m);
+    AsyncStorage.setItem('lsv_media_skip', m).catch(() => {});
+  }, []);
+  // Push to native; re-push on reconnect (the Android service can be recreated)
+  useEffect(() => {
+    VibePowerModule?.setMediaSkipMode(mediaSkip);
+  }, [mediaSkip, connected]);
 
   // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
   // the button stays live for the unread pulse, but opening demands portrait.
@@ -545,6 +568,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
   }, [isLandscape, chatOpen, showChatRotateHint]);
 
+  // Android back gesture/button: CONSUME it on this screen (iOS parity —
+  // gestureEnabled:false on the stack). Edge swipes while working the VFO
+  // drum were popping to the picker / exiting the app. Close transient UI
+  // if open; leaving the instance is the menu's ← BACK button. RN Modals
+  // (menu, maps, browser) intercept back themselves before this fires.
+  const chatOpenRef = useRef(false);
+  useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (chatOpenRef.current) setChatOpen(false);
+      return true;  // consumed — never pop the screen from a gesture
+    });
+    return () => sub.remove();
+  }, []);
+
   // ── Decoder ───────────────────────────────────────────────────────────────
 
   const [activeDecoder,  setActiveDecoder]  = useState<DecoderType>(null);
@@ -552,6 +591,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [decoderStatus,  setDecoderStatus]  = useState('listening…');
   const [decoding,       setDecoding]       = useState(false);
   const [pillBottom,     setPillBottom]     = useState(200); // updated by pill layout
+  const [rootH,          setRootH]          = useState(0);   // measured root height
+  const pillYRef = useRef<number | null>(null);
+  // Re-derive pillBottom once the root measures (or rotates) — the pill's
+  // own onLayout may have fired first with a stale height
+  useEffect(() => {
+    if (rootH > 0 && pillYRef.current != null) setPillBottom(rootH - pillYRef.current);
+  }, [rootH]);
 
   // Real decoders — UberSDR server audio extensions over /ws/dxcluster,
   // exactly as the confirmed-working skin wires them (see DecoderClient.ts).
@@ -793,11 +839,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Both platforms expose VibePowerModule with the same events now
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeTuned', (e: { frequency: number; mode: string }) => {
-      client.current?.syncFrequency(e.frequency, e.mode as SDRMode);
+      const c = client.current;
+      c?.syncFrequency(e.frequency, e.mode as SDRMode);
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: e.frequency, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
+      // Media-control skips tune blind from the lock screen / car stereo —
+      // follow with the view once the needle nears the span edge, otherwise
+      // repeated skips walk the VFO off-screen with the waterfall stuck.
+      if (c) {
+        const v = c.getView();
+        const span = v.binBandwidth * (v.binCount || 1024);
+        if (span > 0 && Math.abs(e.frequency - v.centerHz) > span * 0.4) {
+          c.pan(e.frequency);
+        }
+      }
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       setIsMuted(!!e.muted);
+    });
+    // Bookmark-skip mode: native ⏮⏭ defer to JS (it owns the station list)
+    const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
+      onVtsJumpRef.current?.(e.direction === 'prev' ? 'left' : 'right');
     });
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
@@ -832,7 +893,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setTimeout(() => setDspError(null), 4000);
       }
     });
-    return () => { sub.remove(); subMute.remove(); subWs.remove(); };
+    return () => { sub.remove(); subMute.remove(); subSkip.remove(); subWs.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1122,17 +1183,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       a.base * Math.pow(0.5, a.px / DRUM_SENS[drumModeRef.current].zoomOctave)));
   }, []);
 
-  const onZoomIn = useCallback(() => {
+  // Menu ± zoom anchors on the VFO when it's inside the current span —
+  // fresh connects restore the tune but the view geometry still sits on the
+  // server default, so zooming before touching the VFO used to dive into
+  // the old default band (20m FT8) instead of where you're listening.
+  const zoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
-    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
-    c.zoom(s.centerHz, Math.max(1, s.binBandwidth / 2));
+    const v = c.getView(); if (!v.binBandwidth || !v.centerHz) return;
+    const span  = v.binBandwidth * (v.binCount || 1024);
+    const tuned = c.getStatus().frequency;
+    const anchor = tuned && span > 0 && Math.abs(tuned - v.centerHz) < span / 2
+      ? tuned : v.centerHz;
+    c.zoom(anchor, Math.max(1, v.binBandwidth * factor));
   }, []);
-
-  const onZoomOut = useCallback(() => {
-    const c = client.current; if (!c) return;
-    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
-    c.zoom(s.centerHz, s.binBandwidth * 2);
-  }, []);
+  const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
+  const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
 
   // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
   const [isDefault, setIsDefault] = useState(false);
@@ -1331,6 +1396,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     onTuneHzRef.current    = onTuneHz;
     onModeRef.current      = onMode;
     onFilterBothRef.current = onFilterBoth;
+    onVtsJumpRef.current   = onVtsJump;
   });
 
   // ── VTS (station/band steward — a11y popup bar only, no tuning guide) ─────
@@ -1357,15 +1423,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [vtsMenuName, setVtsMenuName] = useState('');
   const [vtsMenuFreq, setVtsMenuFreq] = useState<number | undefined>(undefined);
 
+  const [serverBookmarks, setServerBookmarks] = useState<ServerBookmark[]>([]);
+  const [userBookmarks,   setUserBookmarks]   = useState<UserBookmark[]>([]);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       fetchBookmarks(baseUrl)
-        .then((b: ServerBookmark[]) => {
-          if (cancelled) return;
-          vtsBookmarks.current = b;
-          setSearchBookmarks(b);
-        })
+        .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
         .catch(() => {});
     };
     load();
@@ -1373,10 +1438,79 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then((b: ServerBand[]) => { if (!cancelled) setSearchBands(b); })
       .catch(() => {});
     refreshBandSnr(baseUrl);
+    loadUserBookmarks()
+      .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
+      .catch(() => {});
     // EiBi augmentation is time-of-day dependent — refresh periodically
     const iv = setInterval(load, 10 * 60_000);
     return () => { cancelled = true; clearInterval(iv); };
   }, [baseUrl]);
+
+  // Server + user bookmarks (this instance's scope) merged — feeds the VTS
+  // lookups AND the search bar identically (user requirement: user bookmarks
+  // searchable and visible in VTS). User entries win name+freq collisions.
+  useEffect(() => {
+    const mine = bookmarksForInstance(userBookmarks, baseUrl);
+    const seen = new Set(mine.map((b: UserBookmark) => `${b.name}|${b.frequency}`));
+    const merged: ServerBookmark[] = [
+      ...mine.map((b: UserBookmark) => ({
+        name: b.name, frequency: b.frequency, mode: b.mode,
+        group: b.group ?? undefined, comment: b.comment ?? undefined,
+        bandwidth_low: b.bandwidth_low ?? undefined,
+        bandwidth_high: b.bandwidth_high ?? undefined,
+      })),
+      ...serverBookmarks.filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)),
+    ];
+    vtsBookmarks.current = merged;
+    setSearchBookmarks(merged);
+  }, [serverBookmarks, userBookmarks, baseUrl]);
+
+  // ── User bookmark management (menu BOOKMARKS pane) ────────────────────────
+  const persistUserBookmarks = useCallback((next: UserBookmark[]) => {
+    setUserBookmarks(next);
+    saveUserBookmarks(next).catch(() => {});
+  }, []);
+
+  const onAddBookmark = useCallback((name: string, allInstances: boolean) => {
+    const clean = name.trim();
+    if (!clean) return;
+    const bm: UserBookmark = {
+      name:           clean,
+      frequency:      Math.round(status.frequency),
+      mode:           status.mode,
+      bandwidth_low:  status.bandwidthLow,
+      bandwidth_high: status.bandwidthHigh,
+      group:          null, comment: null, extension: null,
+      scope:          allInstances ? '' : baseUrl,
+    };
+    persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
+  }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh,
+      baseUrl, userBookmarks, persistUserBookmarks]);
+
+  const onDeleteBookmark = useCallback((bm: UserBookmark) => {
+    persistUserBookmarks(userBookmarks.filter(
+      (b: UserBookmark) => !(b.name === bm.name && b.frequency === bm.frequency && b.scope === bm.scope),
+    ));
+  }, [userBookmarks, persistUserBookmarks]);
+
+  const onExportBookmarks = useCallback(() => {
+    const list = userBookmarks;
+    if (!list.length) { Alert.alert('Bookmarks', 'No bookmarks to export.'); return; }
+    // Plain-array JSON — directly importable by desktop UberSDR's
+    // local-bookmarks Import (JSON). Share as text: save/airdrop/paste.
+    Share.share({ message: exportBookmarksJSON(list) }).catch(() => {});
+  }, [userBookmarks]);
+
+  const onImportBookmarks = useCallback((text: string, allInstances: boolean): string => {
+    try {
+      const incoming = parseBookmarksJSON(text, allInstances ? '' : baseUrl);
+      if (!incoming.length) return 'No bookmarks found in that JSON.';
+      persistUserBookmarks(mergeBookmarks(userBookmarks, incoming));
+      return `Imported ${incoming.length} bookmark${incoming.length !== 1 ? 's' : ''}.`;
+    } catch {
+      return 'Could not parse that JSON.';
+    }
+  }, [baseUrl, userBookmarks, persistUserBookmarks]);
 
   const showBandNotif = useCallback((bands: Band[]) => {
     if (!bands.length) return;
@@ -1460,6 +1594,41 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [status.frequency, vtsCheck]);
 
+  // ── VTS-aware media session ────────────────────────────────────────────────
+  // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
+  // Artist = "VibeSDR: Radio Caroline" on a station, else the band
+  //          ("VibeSDR: 40m Ham Band"); art = app icon + server-type logo.
+  useEffect(() => {
+    const hz = status.frequency;
+    if (!hz) return;
+    const t = setTimeout(() => {
+      const trim = (v: number, dp: number) =>
+        v.toFixed(dp).replace(/\.?0+$/, '');
+      const fq = freqUnit === 'hz' ? `${Math.round(hz)} Hz`
+        : freqUnit === 'mhz' ? `${trim(hz / 1e6, 4)} MHz`
+        : `${trim(hz / 1e3, 3)} kHz`;
+      const st = mediaSkip === 'bookmark'
+        ? 'bookmark skip'
+        : (step >= 1000 ? `${trim(step / 1e3, 1)} kHz step` : `${step} Hz step`);
+      const title = `${fq} ${status.mode.toUpperCase()} · ${st}`;
+
+      const nearest = findNearest(vtsBookmarks.current, hz);
+      let context: string;
+      if (nearest && Math.abs(nearest.offset) <= 1000) {
+        context = nearest.name;
+      } else {
+        const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+        const bands = getBandsAtRegion(hz, ituRegion)
+          .sort((a: Band, b: Band) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+        context = bands.length ? bands[0].name : 'HF Radio';
+      }
+      VibePowerModule?.setNowPlaying(title, `VibeSDR: ${context}`);
+      VibePowerModule?.setArtwork('ubersdr');  // native caches per type
+    }, 300);
+    return () => clearTimeout(t);
+  }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
+      serverBookmarks, userBookmarks]);
+
   useEffect(() => () => {
     if (vtsDeferredBand.current) clearTimeout(vtsDeferredBand.current);
   }, []);
@@ -1512,6 +1681,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Capture-phase touch sniff (returns false — never steals the touch):
       // marks interaction for smooth tune / idle saver on any Pressable UI.
       onStartShouldSetResponderCapture={() => { markInteract(); return false; }}
+      // Real layout height — Android's Dimensions window height disagrees
+      // with the laid-out root (status/nav bar handling), which pushed every
+      // pillBottom-anchored overlay (spec-ratio popup, VTS bar, decoder
+      // panel) off the bottom on Android.
+      onLayout={(e: { nativeEvent: { layout: { height: number } } }) =>
+        setRootH(e.nativeEvent.layout.height)}
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
@@ -1628,9 +1803,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       {!controlsHidden && <View
         style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
         onLayout={(e: any) => {
-          // Track pill top so decoder panel can anchor above it
-          const { y, height } = e.nativeEvent.layout;
-          setPillBottom(screenH - y);
+          // Track pill top so bottom-anchored overlays can sit above it
+          const { y } = e.nativeEvent.layout;
+          pillYRef.current = y;
+          setPillBottom((rootH > 0 ? rootH : screenH) - y);
         }}
       >
         <ControlsBar
@@ -1670,6 +1846,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         searchBookmarks={searchBookmarks}
         searchBands={searchBands}
         onSearchTune={onSearchTune}
+        userBookmarks={userBookmarks}
+        currentFreq={status.frequency}
+        currentMode={status.mode}
+        onAddBookmark={onAddBookmark}
+        onDeleteBookmark={onDeleteBookmark}
+        onExportBookmarks={onExportBookmarks}
+        onImportBookmarks={onImportBookmarks}
         colormap={colormap}
         dbMin={dbMin}
         dbMax={dbMax}
@@ -1724,6 +1907,20 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSnrSquelch(-999); onFmSquelch(-999);
           if (serverDspEnabled) onServerDsp(false);
           setMenuOpen(false);
+          // Bookmarks are precious — never clear silently with a reset
+          const instCount = bookmarksForInstance(userBookmarks, baseUrl)
+            .filter((b: UserBookmark) => b.scope === baseUrl).length;
+          if (instCount > 0) {
+            Alert.alert(
+              'Bookmarks',
+              `Keep the ${instCount} bookmark${instCount !== 1 ? 's' : ''} saved for this instance?`,
+              [
+                { text: 'Keep', style: 'default' },
+                { text: 'Clear', style: 'destructive',
+                  onPress: () => persistUserBookmarks(withoutInstance(userBookmarks, baseUrl)) },
+              ],
+            );
+          }
         }}
         onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
         vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
@@ -1742,6 +1939,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         drumMode={drumMode}             onDrumMode={onDrumMode}
+        mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}
