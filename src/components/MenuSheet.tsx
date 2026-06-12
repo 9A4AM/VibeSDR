@@ -7,7 +7,7 @@
  *   Reset Interface Settings
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -15,6 +15,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
@@ -25,6 +26,10 @@ import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
 import { COLORMAP_NAMES } from '../assets/colormapUtils';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
+import {
+  searchStations, fmtFreq, fmtRange, grpAbbr,
+  type ServerBookmark, type ServerBand, type SearchResult,
+} from '../services/stations';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -109,6 +114,9 @@ export interface MenuSheetProps {
   vtsFreq?:    number;
   onVtsNext?:  () => void;
   onVtsPrev?:  () => void;
+  searchBookmarks?: ServerBookmark[];
+  searchBands?:     ServerBand[];
+  onSearchTune?:    (hz: number, mode?: string | null) => void;
 
   onClose:          () => void;
   onBack?:          () => void;
@@ -346,6 +354,7 @@ export default function MenuSheet({
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
+  searchBookmarks = [], searchBands = [], onSearchTune,
   onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
@@ -392,6 +401,14 @@ export default function MenuSheet({
   const [bwSync,           setBwSync]           = useState(false);
 
   // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
+  // Search bookmarks & band plan (skin lsv-mp-bm-input)
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchResults = useMemo(
+    () => searchStations(searchBookmarks, searchBands, searchQuery),
+    [searchBookmarks, searchBands, searchQuery],
+  );
+  useEffect(() => { if (!visible) setSearchQuery(''); }, [visible]);
+
   const [nrMode, setNrMode] = useState<'off'|'nr'|'nr2'|'serv'>(
     serverDspEnabled ? 'serv' : nr ? 'nr' : 'off'
   );
@@ -469,6 +486,54 @@ export default function MenuSheet({
               <TouchableOpacity style={styles.vtsArrow} onPress={onVtsNext} hitSlop={8}>
                 <Text style={styles.vtsArrowText}>▸</Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Search bookmarks & band plan — tap a result to tune */}
+            <View style={styles.searchWrap}>
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="🔍 Search bookmarks & band plan…"
+                placeholderTextColor="rgba(255,255,255,0.40)"
+                autoCorrect={false}
+                autoCapitalize="none"
+                spellCheck={false}
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.trim().length > 0 && (
+                <View style={styles.searchDrop}>
+                  {searchResults.length === 0 ? (
+                    <Text style={styles.searchMsg}>No results for “{searchQuery.trim()}”</Text>
+                  ) : (<>
+                    <Text style={styles.searchHint}>
+                      {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune
+                    </Text>
+                    {searchResults.map((r: SearchResult, i: number) => (
+                      <TouchableOpacity
+                        key={i}
+                        style={styles.searchRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          setSearchQuery('');
+                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode);
+                          else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
+                        }}
+                      >
+                        <Text style={styles.searchFreq}>
+                          {r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}
+                        </Text>
+                        <Text style={styles.searchMode}>
+                          {r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}
+                        </Text>
+                        <Text style={styles.searchName} numberOfLines={1}>
+                          {r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </>)}
+                </View>
+              )}
             </View>
 
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
@@ -1011,6 +1076,41 @@ const styles = StyleSheet.create({
   vtsInfo:  { flex: 1, alignItems: 'center', gap: 3 },
   vtsName:  { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, letterSpacing: 1 },
   vtsFreq:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 },
+  searchWrap: { paddingTop: 6, paddingBottom: 2 },
+  searchInput: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', borderRadius: 8,
+    color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
+    paddingHorizontal: 12, paddingVertical: 9,
+  },
+  searchDrop: {
+    marginTop: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.45)', overflow: 'hidden',
+  },
+  searchHint: {
+    color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 11, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  searchMsg: {
+    color: 'rgba(255,255,255,0.55)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 13, paddingHorizontal: 10, paddingVertical: 10,
+  },
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 9,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)',
+  },
+  searchFreq: {
+    color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
+    width: 92,
+  },
+  searchMode: {
+    color: 'rgba(255,255,255,0.50)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 11, width: 42,
+  },
+  searchName: {
+    flex: 1, color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13,
+  },
 
   sliderRow:   { paddingVertical: 4, gap: 4 },
   sliderLabel: { color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 1, width: 90, flexShrink: 0 },

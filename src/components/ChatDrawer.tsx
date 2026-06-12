@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
+import type { ChatUserRow } from '../services/DecoderClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,18 @@ export interface ChatDrawerProps {
   onClose:    () => void;
   onMute?:    () => void;
   muted?:     boolean;
+  /** Active user list (chat_active_users) + tune/zoom sync controls */
+  users?:            ChatUserRow[];
+  syncedUser?:       string | null;
+  zoomSync?:         boolean;
+  onToggleSync?:     (username: string) => void;
+  onToggleZoomSync?: () => void;
+  onUserTap?:        (user: ChatUserRow) => void;
+}
+
+function fmtUserFreq(hz?: number): string {
+  if (!hz || hz <= 0) return '';
+  return (hz / 1_000_000).toFixed(hz % 1000 === 0 ? 3 : 4) + ' MHz';
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -79,6 +92,8 @@ export default function ChatDrawer({
   visible, messages, myCallsign,
   onJoin, onSend, onClose,
   onMute, muted = false,
+  users = [], syncedUser = null, zoomSync = false,
+  onToggleSync, onToggleZoomSync, onUserTap,
 }: ChatDrawerProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -102,6 +117,7 @@ export default function ChatDrawer({
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [nameInput, setNameInput] = useState('');
   const [msgInput,  setMsgInput]  = useState('');
+  const [showUsers, setShowUsers] = useState(false);
   const listRef = useRef<FlatList>(null);
   const nameRef = useRef<TextInput>(null);
   const msgRef  = useRef<TextInput>(null);
@@ -134,8 +150,11 @@ export default function ChatDrawer({
     }
   }, [messages.length, visible]);
 
+  // Server username rules: 1–15 chars, letters/digits plus - _ / inside,
+  // NO spaces, mixed case preserved (capitals not required)
   const handleJoin = useCallback(() => {
-    const cs = (nameInput.trim().toUpperCase() || 'STUEY3D').slice(0, 12);
+    const cs = nameInput.replace(/[^A-Za-z0-9\-_\/]/g, '').slice(0, 15);
+    if (!cs) return;
     onJoin(cs);
     setNameInput('');
   }, [nameInput, onJoin]);
@@ -174,8 +193,20 @@ export default function ChatDrawer({
           {/* Header */}
           <View style={[cd.header, { borderBottomColor: cc.border }]}>
             <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
-              {myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
+              {showUsers
+                ? `USERS · ${users.length}`
+                : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
             </Text>
+            {!!myCallsign && (
+              <TouchableOpacity style={cd.hbtn} onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8}>
+                <Text style={[cd.hbtnTxt, { color: cc.btnText }, showUsers && cd.hbtnActive]}>👥</Text>
+              </TouchableOpacity>
+            )}
+            {showUsers && (
+              <TouchableOpacity style={cd.hbtn} onPress={onToggleZoomSync} hitSlop={8}>
+                <Text style={[cd.hbtnTxt, { color: cc.btnText }, !zoomSync && cd.hbtnMuted]}>🔍</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={cd.hbtn} onPress={onMute} hitSlop={8}>
               <Text style={[cd.hbtnTxt, { color: cc.btnText }, muted && cd.hbtnMuted]}>{muted ? '🔇' : '🔔'}</Text>
             </TouchableOpacity>
@@ -195,12 +226,12 @@ export default function ChatDrawer({
                   ref={nameRef}
                   style={[cd.nameInp, { borderColor: cc.inputBdr, color: cc.inputCl, fontFamily: t.font }]}
                   value={nameInput}
-                  onChangeText={(v: string) => setNameInput(v.toUpperCase())}
-                  placeholder="CALLSIGN / HANDLE"
+                  onChangeText={(v: string) => setNameInput(v.replace(/\s+/g, ''))}
+                  placeholder="Callsign / handle"
                   placeholderTextColor={isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
-                  autoCapitalize="characters"
+                  autoCapitalize="none"
                   autoCorrect={false}
-                  maxLength={12}
+                  maxLength={15}
                   returnKeyType="done"
                   onSubmitEditing={handleJoin}
                 />
@@ -214,8 +245,50 @@ export default function ChatDrawer({
             </View>
           )}
 
+          {/* Active users — tap a row to jump to their tune once, SYNC to
+              follow continuously; 🔍 in the header also mirrors their zoom */}
+          {!!myCallsign && showUsers && (
+            <FlatList
+              data={users}
+              keyExtractor={(u: ChatUserRow) => u.username}
+              style={cd.msgList}
+              contentContainerStyle={cd.msgContent}
+              renderItem={({ item: u }: { item: ChatUserRow }) => {
+                const isMe = u.username === myCallsign;
+                const isSynced = syncedUser === u.username;
+                return (
+                  <TouchableOpacity
+                    style={[cd.userRow, u.is_idle && cd.userRowIdle]}
+                    activeOpacity={0.7}
+                    disabled={isMe}
+                    onPress={() => onUserTap?.(u)}
+                  >
+                    <Text style={[cd.userName, { color: isMe ? cc.ownCl : cc.userCl, fontFamily: t.font }]} numberOfLines={1}>
+                      {u.username}{u.country_code ? `  ·${u.country_code}` : ''}{u.tx ? ' 📡TX' : ''}
+                    </Text>
+                    <Text style={[cd.userFreq, { color: cc.textCl, fontFamily: t.font }]} numberOfLines={1}>
+                      {fmtUserFreq(u.frequency)}{u.mode ? ` ${u.mode.toUpperCase()}` : ''}
+                      {u.is_idle && u.idle_minutes ? `  idle ${u.idle_minutes}m` : ''}
+                    </Text>
+                    {!isMe && (
+                      <TouchableOpacity
+                        style={[cd.syncBtn, isSynced && cd.syncBtnOn]}
+                        onPress={() => onToggleSync?.(u.username)}
+                        hitSlop={6}
+                      >
+                        <Text style={[cd.syncBtnTxt, { fontFamily: t.font }, isSynced && cd.syncBtnTxtOn]}>
+                          {isSynced ? 'SYNCED' : 'SYNC'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          )}
+
           {/* Message list */}
-          {!!myCallsign && (
+          {!!myCallsign && !showUsers && (
             <FlatList
               ref={listRef}
               data={messages}
@@ -296,9 +369,28 @@ const cd = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8, gap: 6 },
   title:  { flex: 1, color: 'rgba(255,160,0,0.60)', fontFamily: FONT, fontSize: 11, letterSpacing: 2 },
   hbtn:   { padding: 4 },
-  hbtnTxt:   { color: 'rgba(255,160,0,0.55)', fontSize: 16 },
-  hbtnMuted: { color: 'rgba(255,160,0,0.25)' },
-  hbtnClose: { color: '#e05050' },
+  hbtnTxt:    { color: 'rgba(255,160,0,0.55)', fontSize: 16 },
+  hbtnMuted:  { opacity: 0.35 },
+  hbtnActive: { opacity: 1 },
+  hbtnClose:  { color: '#e05050' },
+
+  userRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.msgBdr,
+  },
+  userRowIdle: { opacity: 0.45 },
+  userName: { flexShrink: 1, fontSize: 13, fontWeight: 'bold', letterSpacing: 0.5 },
+  userFreq: { flex: 1, fontSize: 11, textAlign: 'right' },
+  syncBtn: {
+    borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)', borderRadius: 5,
+    paddingHorizontal: 8, paddingVertical: 4, flexShrink: 0,
+  },
+  syncBtnOn: {
+    borderColor: 'rgba(80,220,100,0.70)', backgroundColor: 'rgba(80,220,100,0.12)',
+  },
+  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: 'rgba(255,184,51,0.80)' },
+  syncBtnTxtOn: { color: 'rgba(120,235,140,0.95)' },
 
   setupWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
   setupLbl:  { color: 'rgba(200,180,100,0.75)', fontFamily: FONT, fontSize: 11, letterSpacing: 1.5, textAlign: 'center' },

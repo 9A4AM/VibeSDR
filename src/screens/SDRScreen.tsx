@@ -38,7 +38,8 @@ import type { RootStackParamList }     from '../../App';
 import { UberSDRClient, MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
-         type SpotRow, type SpotsKind }                from '../services/DecoderClient';
+         type SpotRow, type SpotsKind,
+         type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { MIN_HZ, MAX_HZ, STEPS }                       from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
@@ -61,6 +62,13 @@ import DecoderPanel,
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import BrowserOverlay from '../components/BrowserOverlay';
+import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import {
+  fetchBookmarks, fetchBands, findNearest, findNextBookmark,
+  fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
+  VTS_ON_HZ, type ServerBookmark, type ServerBand,
+} from '../services/stations';
+import { getBandsAtRegion, type Band } from '../constants/bandPlan';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -107,6 +115,13 @@ function nowUTCStr() {
 let _msgId = 0;
 function mkMsg(type: ChatMessage['type'], text: string, user?: string): ChatMessage {
   return { id: String(++_msgId), type, text, user, ts: nowUTCStr() };
+}
+
+/** RFC3339 server timestamp → "HHMMz" (falls back to now) */
+function chatTs(rfc: string): string {
+  const d = rfc ? new Date(rfc) : new Date();
+  if (isNaN(d.getTime())) return nowUTCStr();
+  return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}z`;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -398,26 +413,104 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [myCallsign,   setMyCallsign]   = useState<string | null>(null);
   const [chatMuted,    setChatMuted]    = useState(false);
+  const [chatUsers,    setChatUsers]    = useState<ChatUserRow[]>([]);
+  const [syncedUser,   setSyncedUser]   = useState<string | null>(null);
+  const [zoomSync,     setZoomSync]     = useState(false);
+  const myCallsignRef = useRef<string | null>(null);
+  const chatMutedRef  = useRef(false);
+  const syncedUserRef = useRef<string | null>(null);
+  const zoomSyncRef   = useRef(false);
+  useEffect(() => { myCallsignRef.current = myCallsign; }, [myCallsign]);
+  useEffect(() => { chatMutedRef.current = chatMuted; },   [chatMuted]);
+  useEffect(() => { syncedUserRef.current = syncedUser; }, [syncedUser]);
+  useEffect(() => { zoomSyncRef.current = zoomSync; },     [zoomSync]);
 
-  const addChatMsg = useCallback((msg: ChatMessage) => {
+  /** quiet=true (history replay / muted) — render without the unread pulse */
+  const addChatMsg = useCallback((msg: ChatMessage, quiet = false) => {
     setChatMessages((prev: ChatMessage[]) => [...prev.slice(-99), msg]);
-    // If drawer is closed and not muted, mark unread
+    if (quiet || chatMutedRef.current) return;
     setChatOpen((open: boolean) => {
       if (!open) setChatUnread(true);
       return open;
     });
   }, []);
 
+  // Username rules (server SetUsername): 1–15 chars, letters/digits plus
+  // - _ / inside; NO spaces; case preserved (need not be capitals).
+  const sanitizeCallsign = useCallback((raw: string): string =>
+    raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
+
   const handleChatJoin = useCallback((cs: string) => {
-    setMyCallsign(cs);
-    addChatMsg(mkMsg('system', `${cs} joined the chat`));
-  }, [addChatMsg]);
+    const clean = sanitizeCallsign(cs);
+    if (!clean) return;
+    setMyCallsign(clean);
+    decoderClient.current?.joinChat(clean);
+    AsyncStorage.setItem('lsv_chat_callsign:' + baseUrl, clean).catch(() => {});
+  }, [sanitizeCallsign, baseUrl]);
 
   const handleChatSend = useCallback((text: string) => {
     if (!myCallsign) return;
-    addChatMsg(mkMsg('own', text, myCallsign));
-    // TODO: send via UberSDR chat WebSocket
-  }, [myCallsign, addChatMsg]);
+    decoderClient.current?.sendChat(text);
+    // Own messages echo back via the broadcast — rendered then (deduped),
+    // matching the skin: what you see is what the server accepted.
+  }, [myCallsign]);
+
+  // Tune/zoom sync OUT: report our freq/mode/BW edges/zoom to chat so other
+  // users can see and sync to us (debounced 1s — the drum emits fast)
+  useEffect(() => {
+    if (!myCallsign || !status.frequency) return;
+    const t = setTimeout(() => {
+      const view = client.current?.getView();
+      decoderClient.current?.sendChatStatus({
+        frequency: status.frequency,
+        mode:      status.mode,
+        bw_low:    status.bandwidthLow,
+        bw_high:   status.bandwidthHigh,
+        zoom_bw:   view?.binBandwidth ?? 0,
+      });
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [myCallsign, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
+
+  // Tune/zoom sync IN: follow another user's tune (skin syncToUser)
+  const applyChatSync = useCallback((u: ChatUserRow) => {
+    if (!u.frequency || !u.mode) return;
+    onTuneHzRef.current?.(u.frequency);
+    const m = u.mode.toLowerCase();
+    if (m in MODE_BANDWIDTHS) onModeRef.current?.(m as SDRMode);
+    if (typeof u.bw_low === 'number' && typeof u.bw_high === 'number') {
+      onFilterBothRef.current?.(u.bw_low, u.bw_high);
+    }
+    if (zoomSyncRef.current && u.zoom_bw && u.zoom_bw > 0) {
+      client.current?.zoom(u.frequency, u.zoom_bw);
+    }
+  }, []);
+
+  const toggleUserSync = useCallback((username: string) => {
+    setSyncedUser((prev: string | null) => {
+      const next = prev === username ? null : username;
+      if (next) {
+        const u = chatUsersRef.current.find((x: ChatUserRow) => x.username === next);
+        if (u) applyChatSync(u);
+      }
+      return next;
+    });
+  }, [applyChatSync]);
+
+  // One-shot: tap a user row to jump to their frequency without following
+  const chatUserTap = useCallback((u: ChatUserRow) => {
+    applyChatSync(u);
+  }, [applyChatSync]);
+
+  const chatUsersRef = useRef<ChatUserRow[]>([]);
+  useEffect(() => { chatUsersRef.current = chatUsers; }, [chatUsers]);
+  const chatIdRef = useRef(0);
+
+  // Handler refs — the decoder-client effect below builds its callbacks once
+  // per connect, but tune/mode/filter handlers are declared later in the file
+  const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
+  const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
+  const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
 
   // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
   // the button stays live for the unread pulse, but opening demands portrait.
@@ -434,6 +527,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const openChat = useCallback(() => {
     if (isLandscape) { showChatRotateHint(); return; }
+    // Prime the chat stream (history replay arrives quiet) even before join
+    decoderClient.current?.subscribeChat();
     setChatOpen(true);
     setChatUnread(false);
   }, [isLandscape, showChatRotateHint]);
@@ -490,9 +585,66 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (s.kind !== spotsKindRef.current) return;
         spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
       },
+      // ── Chat (same WS) — replayed history arrives quiet (no unread pulse),
+      //    duplicates are dropped in DecoderClient before reaching here ──────
+      onChatMessage: (user: string, text: string, ts: string, isHistory: boolean) => {
+        const own = user === myCallsignRef.current;
+        setChatMessages((prev: ChatMessage[]) => [
+          ...prev.slice(-99),
+          { id: 'c' + String(++chatIdRef.current),
+            type: own ? 'own' : 'other', user, text, ts: chatTs(ts) },
+        ]);
+        if (!isHistory && !own && !chatMutedRef.current) {
+          setChatOpen((open: boolean) => {
+            if (!open) setChatUnread(true);
+            return open;
+          });
+        }
+      },
+      onChatJoined: (username: string, isHistory: boolean) => {
+        if (!isHistory) addChatMsg(mkMsg('system', `${username} joined the chat`), true);
+        decoderClient.current?.requestChatUsers();
+      },
+      onChatLeft: (username: string, isHistory: boolean) => {
+        if (!isHistory) addChatMsg(mkMsg('system', `${username} left the chat`), true);
+        setChatUsers((prev: ChatUserRow[]) => prev.filter((u: ChatUserRow) => u.username !== username));
+        setSyncedUser((prev: string | null) => (prev === username ? null : prev));
+      },
+      onChatUsers: (users: ChatUserRow[]) => setChatUsers(users),
+      onChatUserUpdate: (u: ChatUserRow) => {
+        setChatUsers((prev: ChatUserRow[]) => {
+          const i = prev.findIndex((x: ChatUserRow) => x.username === u.username);
+          if (i < 0) return [...prev, u];
+          const next = [...prev];
+          next[i] = { ...next[i], ...u };
+          return next;
+        });
+        // Following this user → mirror their tune
+        if (u.username === syncedUserRef.current) applyChatSync(u);
+      },
+      onChatError: (msg: string) => {
+        addChatMsg(mkMsg('system', `⚠ ${msg}`), true);
+        // Join rejected (taken/invalid/profane) → back to the join flow
+        if (/username|callsign/i.test(msg)) {
+          setMyCallsign(null);
+          AsyncStorage.removeItem('lsv_chat_callsign:' + baseUrl).catch(() => {});
+        }
+      },
     });
     decoderClient.current = dc;
-    return () => { dc.destroy(); decoderClient.current = null; };
+
+    // Saved callsign → auto-join on connect (skin autoLogin parity); the
+    // chat stream then stays live for unread pulses without opening the
+    // drawer. Runs here so the client exists before joinChat fires.
+    let cancelled = false;
+    AsyncStorage.getItem('lsv_chat_callsign:' + baseUrl).then((cs: string | null) => {
+      if (cancelled || !cs) return;
+      setMyCallsign(cs);
+      dc.joinChat(cs);
+    }).catch(() => {});
+
+    return () => { cancelled = true; dc.destroy(); decoderClient.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, sessionUuid]);
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
@@ -638,7 +790,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const dspSeen = useRef(false);
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
+    // Both platforms expose VibePowerModule with the same events now
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeTuned', (e: { frequency: number; mode: string }) => {
       client.current?.syncFrequency(e.frequency, e.mode as SDRMode);
@@ -688,7 +840,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // mount; retries cover slow connects). No dsp_filters reply / available:
   // false ⇒ section stays hidden.
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
     const tries = [2000, 6000, 12000].map((ms) => setTimeout(() => {
       if (!dspSeen.current) sendAudioCmd({ type: 'get_dsp_filters' });
     }, ms));
@@ -1072,19 +1223,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp
   //    paths were sending into the void) ──────────────────────────────────────
   const sendAudioCmd = useCallback((obj: Record<string, unknown>) => {
-    if (Platform.OS === 'ios') VibePowerModule?.sendAudioCommand(JSON.stringify(obj));
+    VibePowerModule?.sendAudioCommand(JSON.stringify(obj));
   }, []);
 
   // ── NR cycle: off → nr → nr2 — native Swift DSP (VibeDSP.swift skin ports)
   const onNrMode = useCallback((mode: 'off'|'nr'|'nr2') => {
     setNrMode(mode);
-    if (Platform.OS === 'ios') VibePowerModule?.setNrMode(mode);
+    VibePowerModule?.setNrMode(mode);  // Android: accepted no-op (port pending)
   }, []);
 
   // ── NB toggle — native Swift noise blanker ────────────────────────────────
   const onNb = useCallback((on: boolean) => {
     setNb(on);
-    if (Platform.OS === 'ios') VibePowerModule?.setNoiseBlanker(on);
+    VibePowerModule?.setNoiseBlanker(on);  // Android: accepted no-op (port pending)
   }, []);
 
   // ── SNR squelch (audio gate) ──────────────────────────────────────────────
@@ -1135,7 +1286,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                      filter: dspFilterRef.current, params: dspParamsRef.current });
       // Server NR replaces client NR — the menu NR button locks to SERV
       setNrMode('off');
-      if (Platform.OS === 'ios') VibePowerModule?.setNrMode('off');
+      VibePowerModule?.setNrMode('off');
     } else {
       sendAudioCmd({ type: 'set_dsp', enabled: false });
     }
@@ -1173,6 +1324,166 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
+
+  // Late-bound handler refs for the chat-sync engine (declared above the
+  // decoder-client effect, which captures them in its callbacks)
+  useEffect(() => {
+    onTuneHzRef.current    = onTuneHz;
+    onModeRef.current      = onMode;
+    onFilterBothRef.current = onFilterBoth;
+  });
+
+  // ── VTS (station/band steward — a11y popup bar only, no tuning guide) ─────
+  // Stations come from /api/bookmarks (static config + live EiBi schedule);
+  // popup shows the station name when within 150kHz (green when within 99Hz),
+  // and band-plan info when crossing a band boundary. Menu arrows jump
+  // bookmarks; an arrow jump defers any band notif 3s so the station name
+  // shows first (skin VTS_ARROW_BOOKMARK_MS).
+  const ituRegion = useMemo(
+    () => deriveItuRegion(route.params.serverLongitude),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const vtsBookmarks = useRef<ServerBookmark[]>([]);
+  const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
+  const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
+  const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
+  const vtsKey            = useRef(0);
+  const vtsLastStation    = useRef('');
+  const vtsBandKey        = useRef<string | null>(null);
+  const vtsBandInit       = useRef(false);
+  const vtsArrowJumpUntil = useRef(0);
+  const vtsDeferredBand   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [vtsMenuName, setVtsMenuName] = useState('');
+  const [vtsMenuFreq, setVtsMenuFreq] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchBookmarks(baseUrl)
+        .then((b: ServerBookmark[]) => {
+          if (cancelled) return;
+          vtsBookmarks.current = b;
+          setSearchBookmarks(b);
+        })
+        .catch(() => {});
+    };
+    load();
+    fetchBands(baseUrl)
+      .then((b: ServerBand[]) => { if (!cancelled) setSearchBands(b); })
+      .catch(() => {});
+    refreshBandSnr(baseUrl);
+    // EiBi augmentation is time-of-day dependent — refresh periodically
+    const iv = setInterval(load, 10 * 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [baseUrl]);
+
+  const showBandNotif = useCallback((bands: Band[]) => {
+    if (!bands.length) return;
+    const primary = bands[0];
+    const range = `${fmtBandFreq(primary.lo)}–${fmtBandFreq(primary.hi)}`;
+    let cond: string | null = null;
+    let color: string | undefined;
+    if (primary.type === 'ham') {
+      const snr = getBandSnrDb(baseUrl, primary.bandLabel);
+      cond = propCondition(snr);
+      if (snr !== null) {
+        color = snr >= 30 ? 'rgba(60,220,90,0.95)'
+              : snr >= 20 ? 'rgba(140,220,90,0.95)'
+              : snr >= 6  ? 'rgba(255,200,80,0.95)'
+              :             'rgba(235,90,80,0.95)';
+      }
+    }
+    const primaryMsg = `BAND: ${range} · ${primary.name}`
+      + (cond ? ` · Conditions: ${cond}` : '')
+      + (bands.length > 1 && ituRegion ? ` (ITU R${ituRegion})` : '');
+    const secondary = bands.slice(1).map((b: Band) => b.name).join('  │  ');
+    vtsKey.current++;
+    setVtsNotif({
+      key: vtsKey.current, name: primaryMsg,
+      secondary: secondary || undefined, kind: 'band', color,
+    });
+  }, [baseUrl, ituRegion]);
+
+  const vtsCheck = useCallback((hz: number) => {
+    // Band crossing
+    const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+    const bands = getBandsAtRegion(hz, ituRegion)
+      .sort((a: Band, b: Band) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+    const key = bands.length ? bands.map((b: Band) => b.name).join('|') : null;
+    if (!vtsBandInit.current) {
+      vtsBandInit.current = true;
+      vtsBandKey.current = key;
+    } else if (key !== vtsBandKey.current) {
+      vtsBandKey.current = key;
+      if (vtsDeferredBand.current) { clearTimeout(vtsDeferredBand.current); vtsDeferredBand.current = null; }
+      if (bands.length) {
+        if (Date.now() < vtsArrowJumpUntil.current) {
+          vtsDeferredBand.current = setTimeout(() => {
+            vtsDeferredBand.current = null;
+            showBandNotif(bands);
+          }, 3000);
+        } else {
+          showBandNotif(bands);
+        }
+      }
+    }
+    // Nearest station
+    const nearest = findNearest(vtsBookmarks.current, hz);
+    if (!nearest) {
+      setVtsMenuName('');
+      setVtsMenuFreq(undefined);
+      vtsLastStation.current = '';
+      return;
+    }
+    setVtsMenuName(nearest.name);
+    setVtsMenuFreq(nearest.hz);
+    // Popup ONLY when ON a station (≤99Hz) — the off-tune offset-arrow
+    // variant is the skin's tuning guide, which was erratic on the popup
+    // bar and is intentionally not ported. Off-tune resets the latch so
+    // re-landing on the same station pops again.
+    const onTune = Math.abs(nearest.offset) <= VTS_ON_HZ;
+    if (!onTune) {
+      vtsLastStation.current = '';
+    } else if (nearest.name !== vtsLastStation.current) {
+      vtsLastStation.current = nearest.name;
+      vtsKey.current++;
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on' });
+    }
+  }, [ituRegion, showBandNotif]);
+
+  // Watch the tuned frequency (debounced — the drum emits many per second)
+  useEffect(() => {
+    const hz = status.frequency;
+    if (!hz) return;
+    const t = setTimeout(() => vtsCheck(hz), 250);
+    return () => clearTimeout(t);
+  }, [status.frequency, vtsCheck]);
+
+  useEffect(() => () => {
+    if (vtsDeferredBand.current) clearTimeout(vtsDeferredBand.current);
+  }, []);
+
+  // Menu arrows: jump to next/previous bookmark (sets the bookmark's mode too)
+  const onVtsJump = useCallback((dir: 'left' | 'right') => {
+    const c = client.current; if (!c) return;
+    const bm = findNextBookmark(vtsBookmarks.current, c.getStatus().frequency, dir);
+    if (!bm) return;
+    vtsArrowJumpUntil.current = Date.now() + 3000;
+    onTuneHz(bm.frequency);
+    const m = bm.mode?.toLowerCase();
+    if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
+  }, [onTuneHz, onMode]);
+  const onVtsPrev = useCallback(() => onVtsJump('left'),  [onVtsJump]);
+  const onVtsNext = useCallback(() => onVtsJump('right'), [onVtsJump]);
+
+  // Search result tap: tune (+mode when the bookmark has one) and close menu
+  const onSearchTune = useCallback((hz: number, mode?: string | null) => {
+    setMenuOpen(false);
+    onTuneHz(Math.round(hz));
+    const m = mode?.toLowerCase();
+    if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
+  }, [onTuneHz, onMode]);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed
@@ -1346,9 +1657,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
       </View>}
 
+      {/* VTS popup — station / band-crossing notifications above the pill */}
+      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} />}
+
       {/* Menu sheet */}
       <MenuSheet
         visible={menuOpen}
+        vtsName={vtsMenuName}
+        vtsFreq={vtsMenuFreq}
+        onVtsPrev={onVtsPrev}
+        onVtsNext={onVtsNext}
+        searchBookmarks={searchBookmarks}
+        searchBands={searchBands}
+        onSearchTune={onSearchTune}
         colormap={colormap}
         dbMin={dbMin}
         dbMax={dbMax}
@@ -1489,6 +1810,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={closeChat}
         onMute={() => setChatMuted((p: boolean) => !p)}
         muted={chatMuted}
+        users={chatUsers}
+        syncedUser={syncedUser}
+        zoomSync={zoomSync}
+        onToggleSync={toggleUserSync}
+        onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
+        onUserTap={chatUserTap}
       />
 
       {/* Audio player (renderless) */}

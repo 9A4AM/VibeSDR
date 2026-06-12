@@ -1,16 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
 
-const VibeStreamModule = NativeModules.VibeStreamModule as
-  | {
-      startStream:    (url: string, title: string, artist: string) => void;
-      stop:           () => void;
-      updateMetadata: (title: string, artist: string) => void;
-      resume:         () => void;
-    }
-  | undefined;
-
+// Both platforms expose the SAME native surface as "VibePowerModule"
+// (iOS: VibePowerModule.swift; Android: VibeStreamModule.kt getName()).
+// Recording/NR methods are iOS-only — Android stubs them.
 export const VibePowerModule = NativeModules.VibePowerModule as
   | {
       startAudioEngine:  (baseUrl: string, frequency: number, mode: string, uuid: string) => void;
@@ -42,10 +36,6 @@ export interface AudioPlayerProps {
   uuid?:         string;
 }
 
-function nowPlayingTitle(frequency: number, mode: string): string {
-  return `${(frequency / 1_000_000).toFixed(3)} MHz ${mode.toUpperCase()}`;
-}
-
 export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
@@ -56,22 +46,6 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   useEffect(() => {
     if (baseUrl === activeUrl.current) return;
     activeUrl.current = baseUrl;
-
-    if (Platform.OS === 'android') {
-      if (baseUrl) {
-        const streamUrl = `${baseUrl}/audio/stream?user_session_id=${uuid.current}`;
-        VibeStreamModule?.startStream(
-          streamUrl,
-          nowPlayingTitle(frequency, mode),
-          instanceName ?? baseUrl,
-        );
-        activeFreq.current = frequency;
-        activeMode.current = mode;
-      } else {
-        VibeStreamModule?.stop();
-      }
-      return;
-    }
 
     if (!VibePowerModule) {
       console.error('[AudioPlayer] VibePowerModule not found in NativeModules');
@@ -87,39 +61,27 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       VibePowerModule?.stopAudioEngine();
     }
 
-    return () => {
-      if (Platform.OS === 'ios') VibePowerModule?.stopAudioEngine();
-      else                       VibeStreamModule?.stop();
-    };
+    return () => { VibePowerModule?.stopAudioEngine(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
-  // Sync tune / metadata when frequency or mode changes
+  // Sync tune when frequency or mode changes (native owns now-playing metadata)
   useEffect(() => {
     if (!activeUrl.current) return;
     if (frequency === activeFreq.current && mode === activeMode.current) return;
     activeFreq.current = frequency;
     activeMode.current = mode;
-
-    if (Platform.OS === 'android') {
-      VibeStreamModule?.updateMetadata(
-        nowPlayingTitle(frequency, mode),
-        instanceName ?? activeUrl.current ?? '',
-      );
-    } else {
-      VibePowerModule?.sendTuneCommand(frequency, mode);
-    }
+    VibePowerModule?.sendTuneCommand(frequency, mode);
   }, [frequency, mode]);
 
-  // iOS: sync step to native for lock screen skip buttons
+  // Sync step to native for lock-screen / notification skip buttons
   useEffect(() => {
-    if (Platform.OS !== 'ios' || step == null) return;
+    if (step == null) return;
     VibePowerModule?.setStep(step);
   }, [step]);
 
-  // iOS: sync instance name
+  // Sync instance name
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
     VibePowerModule?.setInstanceName(instanceName ?? '');
   }, [instanceName]);
 

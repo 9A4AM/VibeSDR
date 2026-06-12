@@ -109,6 +109,31 @@ export interface DecoderCallbacks {
   onError?:     (msg: string) => void;
   /** Digital/CW spots stream (after startSpots). */
   onSpot?:      (spot: SpotRow) => void;
+  /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
+   *  isHistory=true for the server's buffer replay after subscribe_chat —
+   *  render silently, no unread pulse. Already-seen messages are deduped
+   *  before this fires (reconnects replay the buffer every time). */
+  onChatMessage?:    (user: string, text: string, ts: string, isHistory: boolean) => void;
+  onChatUsers?:      (users: ChatUserRow[], count: number) => void;
+  onChatUserUpdate?: (user: ChatUserRow) => void;
+  onChatJoined?:     (username: string, isHistory: boolean) => void;
+  onChatLeft?:       (username: string, isHistory: boolean) => void;
+  onChatError?:      (msg: string) => void;
+}
+
+export interface ChatUserRow {
+  username:      string;
+  is_idle?:      boolean;
+  idle_minutes?: number;
+  country?:      string;
+  country_code?: string;
+  frequency?:    number;
+  mode?:         string;
+  bw_low?:       number;
+  bw_high?:      number;
+  zoom_bw?:      number;
+  cat?:          boolean;
+  tx?:           boolean;
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -180,10 +205,103 @@ export class DecoderClient {
     }));
   }
 
+  // ── Chat ────────────────────────────────────────────────────────────────────
+  // subscribe_chat gates ALL chat traffic and triggers the server's message
+  // buffer replay — on EVERY (re)connect. chatSeen dedupes the replays so a
+  // reconnect never re-notifies; messages within the history window after a
+  // subscribe are flagged isHistory (render silently, no unread pulse).
+
+  private chatSubscribed = false;     // user-level intent (survives reconnects)
+  private chatUser: string | null = null;
+  private chatSubscribedAt = 0;
+  private chatSeen = new Set<string>();
+  private lastChatStatus = '';
+
+  private static readonly CHAT_HISTORY_MS = 3000;
+
+  /** Open the chat stream (history replay arrives immediately). */
+  subscribeChat() {
+    this.chatSubscribed = true;
+    if (this.ws?.readyState === WebSocket.OPEN) this._chatSubscribe();
+    else this._open();
+  }
+
+  /** Join with a username (server: 1–15 chars, alnum plus -_/ inside). */
+  joinChat(username: string) {
+    this.chatUser = username;
+    this.chatSubscribed = true;
+    if (this.ws?.readyState === WebSocket.OPEN) this._chatSubscribe();
+    else this._open();
+  }
+
+  leaveChat() {
+    if (this.chatUser && this.ws?.readyState === WebSocket.OPEN) {
+      try { this.ws.send(JSON.stringify({ type: 'chat_leave' })); } catch {}
+    }
+    this.chatUser = null;
+  }
+
+  sendChat(text: string) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'chat_message', message: text }));
+  }
+
+  /** Report our tune so other users can see/sync to us. Deduped client-side
+   *  (skin sendFrequencyMode parity). zoom_bw = spectrum binBandwidth. */
+  sendChatStatus(s: { frequency: number; mode: string; bw_low: number; bw_high: number; zoom_bw?: number }) {
+    if (!this.chatUser || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const key = `${s.frequency}|${s.mode}|${s.bw_low}|${s.bw_high}|${s.zoom_bw ?? 0}`;
+    if (key === this.lastChatStatus) return;
+    this.lastChatStatus = key;
+    this.ws.send(JSON.stringify({
+      type: 'chat_set_frequency_mode',
+      frequency: s.frequency,
+      mode: s.mode.toLowerCase(),
+      bw_low: s.bw_low,
+      bw_high: s.bw_high,
+      ...(s.zoom_bw && s.zoom_bw > 0 ? { zoom_bw: s.zoom_bw } : {}),
+    }));
+  }
+
+  requestChatUsers() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'chat_request_users' }));
+  }
+
+  private _chatSubscribe() {
+    if (!this.ws) return;
+    this.chatSubscribedAt = Date.now();
+    this.ws.send(JSON.stringify({ type: 'subscribe_chat' }));
+    if (this.chatUser) {
+      this.ws.send(JSON.stringify({ type: 'chat_set_username', username: this.chatUser }));
+      this.ws.send(JSON.stringify({ type: 'chat_request_users' }));
+      this.lastChatStatus = '';  // force a status resend after (re)join
+    }
+  }
+
+  private _chatIsHistory(): boolean {
+    return Date.now() - this.chatSubscribedAt < DecoderClient.CHAT_HISTORY_MS;
+  }
+
+  private _chatSeenBefore(key: string): boolean {
+    if (this.chatSeen.has(key)) return true;
+    this.chatSeen.add(key);
+    if (this.chatSeen.size > 500) {
+      // Sets iterate in insertion order — trim the oldest entries
+      for (const k of this.chatSeen) {
+        this.chatSeen.delete(k);
+        if (this.chatSeen.size <= 400) break;
+      }
+    }
+    return false;
+  }
+
   destroy() {
     this.destroyed = true;
     this.stop();
     this.stopSpots();
+    this.leaveChat();
+    this.chatSubscribed = false;
     this.ws?.close();
     this.ws = null;
   }
@@ -202,6 +320,7 @@ export class DecoderClient {
       this.retries = 0;
       if (this.active) this._attach();
       if (this.spotsKind) this._subscribeSpots();
+      if (this.chatSubscribed) this._chatSubscribe();
     };
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {
@@ -245,6 +364,41 @@ export class DecoderClient {
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
               country: String(d.country ?? ''),
             });
+          } else if (m.type === 'chat_message' && m.data) {
+            const d = m.data;
+            const user = String(d.username ?? '');
+            const text = String(d.message ?? '');
+            const ts   = String(d.timestamp ?? '');
+            // Dedupe across buffer replays (server re-sends history on every
+            // subscribe — reconnects must never re-notify)
+            if (!this._chatSeenBefore(`m|${user}|${ts}|${text}`)) {
+              this.cb.onChatMessage?.(user, text, ts, this._chatIsHistory());
+            }
+          } else if (m.type === 'chat_user_joined' && m.data) {
+            const user = String(m.data.username ?? '');
+            const ts   = String(m.data.timestamp ?? '');
+            if (user && !this._chatSeenBefore(`j|${user}|${ts}`)) {
+              this.cb.onChatJoined?.(user, this._chatIsHistory());
+            }
+          } else if (m.type === 'chat_user_left' && m.data) {
+            const user = String(m.data.username ?? '');
+            const ts   = String(m.data.timestamp ?? '');
+            if (user && !this._chatSeenBefore(`l|${user}|${ts}`)) {
+              this.cb.onChatLeft?.(user, this._chatIsHistory());
+            }
+          } else if (m.type === 'chat_active_users' && m.data) {
+            this.cb.onChatUsers?.(
+              (m.data.users ?? []) as ChatUserRow[],
+              Number(m.data.count ?? 0),
+            );
+          } else if (m.type === 'chat_user_update' && m.data) {
+            this.cb.onChatUserUpdate?.(m.data as ChatUserRow);
+          } else if (m.type === 'chat_idle_updates' && m.data?.users) {
+            for (const u of m.data.users as ChatUserRow[]) {
+              this.cb.onChatUserUpdate?.(u);
+            }
+          } else if (m.type === 'chat_error') {
+            this.cb.onChatError?.(String(m.error ?? 'chat error'));
           }
         } catch {}
       }
@@ -252,7 +406,12 @@ export class DecoderClient {
     ws.onclose = () => {
       if (this.destroyed) return;
       this.ws = null;
-      if ((this.active || this.spotsKind) && this.retries < 5) {
+      // Chat is long-lived — keep retrying indefinitely while subscribed;
+      // decoders/spots alone keep the original 5-try cap
+      if (this.chatSubscribed) {
+        if (this.active || this.spotsKind) this.cb.onStatus('waiting for ws…');
+        setTimeout(() => this._open(), 3000);
+      } else if ((this.active || this.spotsKind) && this.retries < 5) {
         this.retries++;
         this.cb.onStatus('waiting for ws…');
         setTimeout(() => this._open(), 2000);

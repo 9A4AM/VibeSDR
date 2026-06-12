@@ -56,3 +56,18 @@ export function getPrimaryBandAt(hz: number): Band | null {
   const ham = bands.find(b => b.type === 'ham');
   return ham ?? bands[0];
 }
+
+/** Region-aware lookup (skin getBandsAt): bands restricted to other ITU
+ *  regions are skipped, duplicates by name+type collapsed. region 0 = unknown
+ *  → no filtering. */
+export function getBandsAtRegion(hz: number, region: number): Band[] {
+  const seen: Record<string, boolean> = {};
+  const out: Band[] = [];
+  for (const b of BAND_PLAN) {
+    if (hz < b.lo || hz > b.hi) continue;
+    if (b.regions && b.regions.length && region && !b.regions.includes(region)) continue;
+    const key = b.name + '|' + b.type;
+    if (!seen[key]) { seen[key] = true; out.push(b); }
+  }
+  return out;
+}
