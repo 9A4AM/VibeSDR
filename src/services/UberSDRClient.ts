@@ -320,12 +320,17 @@ export class UberSDRClient {
     this.spectrumWs = null;
   }
 
-  /** Resume spectrum display (app foregrounded). */
+  /** Resume spectrum display (app foregrounded). Always opens a FRESH socket:
+   *  after a deep suspension (e.g. another audio app reaped our session) the old
+   *  spectrumWs can be a stale/half-open object that never fired onclose, so the
+   *  previous `!this.spectrumWs` guard would skip the reopen and leave the
+   *  waterfall frozen. Callers sequence this AFTER the native audio revive so the
+   *  spectrum subscribes to a session that exists again (see SDRScreen AppState). */
   resumeSpectrum() {
     this.pausedByApp = false;
-    if (!this.destroyed && !this.spectrumWs) {
-      this._openSpectrumWs();
-    }
+    if (this.destroyed) return;
+    if (this.spectrumWs) { try { this.spectrumWs.close(); } catch { /* already dead */ } this.spectrumWs = null; }
+    this._openSpectrumWs();
   }
 
   destroy() {

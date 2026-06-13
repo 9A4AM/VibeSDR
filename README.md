@@ -60,13 +60,32 @@ A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native c
 - **Instance picker** — browse public UberSDR receivers, location-aware sorting, country flags, favourites, and an auto-connect default
 - **Bookmark & band-plan search** with live (session-dynamic) EiBi schedules, in a scrollable result list
 - **User bookmarks** — per-instance or global, UberSDR-compatible import/export
-- **Voice Tuning System (VTS)** — spoken station/band announcements and bookmark skipping
+- **Visual Tuning System (VTS)** — on-screen nearby-station bar, band-crossing and on-tune popups, and station/bookmark skipping
 - **Live chat** with user list, mute, and zoom/tune sync
 - **Share** a tuned station as a tappable deep link
 - **Admin pages in-app** — Admin, Noise Floor, Band Conditions, Listeners
 
+### In the car
+- **Android Auto** — browsable **Bookmarks** and **Band Plan** lists on the head unit (tap to tune), plus Now Playing + skip controls
+- **Band-aware tuning** — picking a band, or crossing a band edge via remote controls, sets the right demodulator and step (e.g. 20m → USB/500 Hz, AM broadcast → AM/9–10 kHz by region)
+- **Data Saver** — after a chosen spell muted (lock screen / AirPods out / pause) the stream disconnects to save mobile data and battery; the media controls show a countdown, then reconnect on Play
+- CarPlay browsing is built and ready, pending Apple's CarPlay-audio entitlement
+
 ### Accessibility
 - Atkinson Hyperlegible UI typeface and an accessibility-oriented menu with larger touch targets
+
+## Enabling Android Auto
+
+VibeSDR is sideloaded (not on the Play Store), and Android Auto only trusts Play Store apps by default — so you must turn on **Unknown sources** for it to appear in the car:
+
+1. Install the **`.apk`** from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) on the phone.
+2. Open **Android Auto settings** (phone Settings → *Connected devices → Android Auto*; on some phones it's a standalone "Android Auto" app).
+3. Scroll to the bottom and tap **"Version"** about **10 times** until developer mode unlocks.
+4. Tap the **⋮ menu → Developer settings**, and turn on **"Unknown sources"** (sometimes "Add new cars to Android Auto" / "Add unknown apps").
+5. **Open VibeSDR and connect to a server once** — this loads your bookmarks and pushes the browse lists to the car (they're also cached for later).
+6. Connect to the head unit; **VibeSDR** appears in the car's media apps with the **Bookmarks** and **Band Plan** folders.
+
+If it doesn't show up, it's almost always step 3–4 (Unknown sources). If it appears but the lists are empty, open the app and connect to a server, then reconnect Android Auto.
 - Tested down to 4-inch screens (iPhone SE in Display Zoom mode)
 
 ---
