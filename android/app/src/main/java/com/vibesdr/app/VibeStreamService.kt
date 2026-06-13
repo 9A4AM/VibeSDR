@@ -167,6 +167,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // Media skip routing: "step" = native tune±step; "bookmark" = emit
     // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
     @Volatile var skipMode = "step"
+    // Data saver (mute idle timeout): -1 off, 0 instant, >0 seconds muted → drop
+    // the SDR WS to save data/battery. muteSinceMs is wall-clock so a suspension
+    // past the timeout disconnects on the next wake.
+    @Volatile private var muteTimeoutSec = -1
+    @Volatile private var muteSinceMs = 0L
+    @Volatile private var dataSaverDisconnected = false
+    private var muteTick: Runnable? = null
     // Composited album art (app icon + server-type logo inset), cached
     private var npArtwork: android.graphics.Bitmap? = null
     private var npArtworkType = ""
@@ -326,12 +333,93 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
         mainHandler.post {
+            if (m) {
+                armMuteCountdown()
+            } else {
+                cancelMuteCountdown()
+                if (dataSaverDisconnected) resumeFromDataSaver()
+            }
             updatePlaybackState(
                 if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING
             )
             updateMetadataSession()
             updateNotification()
         }
+    }
+
+    // ── Data saver (mute idle timeout) ───────────────────────────────────────
+
+    /** JS pushes the user's choice: -1 off, 0 instant, >0 seconds. */
+    fun setMuteTimeoutNative(seconds: Int) {
+        muteTimeoutSec = seconds
+        mainHandler.post {
+            if (muted && !dataSaverDisconnected) armMuteCountdown()
+            else if (!muted) cancelMuteCountdown()
+        }
+    }
+
+    /** In-app interaction while muted restarts the countdown. */
+    fun resetMuteTimerNative() {
+        if (muted && !dataSaverDisconnected) {
+            muteSinceMs = System.currentTimeMillis()
+            mainHandler.post { updateMetadataSession(); updateNotification() }
+        }
+    }
+
+    private fun armMuteCountdown() {
+        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+        if (muteTimeoutSec < 0 || dataSaverDisconnected) return     // off
+        if (muteTimeoutSec == 0) { triggerDataSaverDisconnect(); return }  // instant
+        if (muteSinceMs == 0L) muteSinceMs = System.currentTimeMillis()
+        val r = object : Runnable {
+            override fun run() {
+                if (!muted || dataSaverDisconnected || muteTimeoutSec <= 0) { muteTick = null; return }
+                val elapsed = (System.currentTimeMillis() - muteSinceMs) / 1000
+                if (elapsed >= muteTimeoutSec) {
+                    triggerDataSaverDisconnect()
+                } else {
+                    updateMetadataSession(); updateNotification()
+                    muteTick = this
+                    mainHandler.postDelayed(this, 15_000)
+                }
+            }
+        }
+        muteTick = r
+        updateMetadataSession(); updateNotification()  // immediate countdown text
+        mainHandler.postDelayed(r, 15_000)
+    }
+
+    private fun cancelMuteCountdown() {
+        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+        muteSinceMs = 0L
+    }
+
+    private fun triggerDataSaverDisconnect() {
+        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+        dataSaverDisconnected = true
+        // Stop the DATA: close the audio WS (watchdog is guarded). Keep the
+        // foreground service + decode thread idle so the notification stays and
+        // Play can resume instantly.
+        ws?.close(1001, "data saver"); ws = null
+        packetQueue.clear()
+        mainHandler.post {
+            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+            updateMetadataSession(); updateNotification()
+        }
+        emitEvent("VibeDataSaverDisconnect") { }
+    }
+
+    private fun resumeFromDataSaver() {
+        if (!dataSaverDisconnected) return
+        dataSaverDisconnected = false
+        muteSinceMs = 0L
+        lastPacketAt = SystemClock.elapsedRealtime()
+        openWs()
+        mainHandler.post {
+            updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+            updateMetadataSession(); updateNotification()
+        }
+        emitEvent("VibeDataSaverResume") { }
     }
 
     fun setVolumeNative(v: Float) {
@@ -484,7 +572,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun reviveIfDead(staleAfterMs: Long) {
-        if (!running) return
+        if (!running || dataSaverDisconnected) return  // data saver owns the closed WS
         val stale = SystemClock.elapsedRealtime() - lastPacketAt
         if (stale <= staleAfterMs && ws != null) return
         Log.i(TAG, "watchdog: stale=${stale}ms — reviving audio WS")
@@ -1083,6 +1171,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // ── Notification / MediaSession ──────────────────────────────────────────
 
     private fun nowPlayingTitle(): String {
+        if (dataSaverDisconnected) return "Disconnected · Open App to Resume"
         val base = npTitle ?: run {
             val mhz = String.format("%.3f MHz", currentFreq / 1_000_000.0)
             "$mhz ${currentMode.uppercase()}"
@@ -1090,8 +1179,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         return base + (if (muted) " ·muted·" else "")
     }
 
-    private fun nowPlayingArtist(): String =
-        npArtist ?: instanceName.ifEmpty { currentBase }
+    private fun nowPlayingArtist(): String {
+        if (dataSaverDisconnected) return "VibeSDR: Disconnected"
+        if (muted && muteTimeoutSec > 0 && muteSinceMs > 0L) {
+            val remain = muteTimeoutSec - ((System.currentTimeMillis() - muteSinceMs) / 1000).toInt()
+            return if (remain >= 60) "VibeSDR: Muted · ${Math.ceil(remain / 60.0).toInt()} min to disconnect"
+                   else "VibeSDR: Muted · under 1 min to disconnect"
+        }
+        return npArtist ?: instanceName.ifEmpty { currentBase }
+    }
 
     /** VTS-aware now-playing strings from JS (empty string clears). */
     fun setNowPlayingNative(title: String, artist: String) {

@@ -175,6 +175,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
   const [isMuted, setIsMuted] = useState(false);
+  // True when the data saver has dropped the SDR stream after a muted spell.
+  const [dataSaverOff, setDataSaverOff] = useState(false);
   const unmute = useCallback(() => {
     (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(false);
     setIsMuted(false);
@@ -607,6 +609,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.setMediaSkipMode(mediaSkip);
   }, [mediaSkip, connected]);
 
+  // ── Data saver: drop the SDR stream after a spell muted ───────────────────
+  // Seconds of mute before disconnecting to save cellular data + battery:
+  // -1 = off, 0 = instant, else the timeout. Default 10 min. The countdown +
+  // disconnect run NATIVE (JS is suspended in the background); JS just owns the
+  // setting + reconnects the spectrum when native resumes.
+  const [muteTimeout, setMuteTimeout] = useState(600);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_mute_timeout').then((v: string | null) => {
+      const n = v == null ? NaN : parseInt(v, 10);
+      if (!Number.isNaN(n)) setMuteTimeout(n);
+    }).catch(() => {});
+  }, []);
+  const onMuteTimeout = useCallback((sec: number) => {
+    setMuteTimeout(sec);
+    AsyncStorage.setItem('lsv_mute_timeout', String(sec)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    VibePowerModule?.setMuteTimeout?.(muteTimeout);
+  }, [muteTimeout, connected]);
+
+  // markInteract pings native to reset the mute countdown while muted (see below)
+  const isMutedRef = useRef(false);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
   // Car-connected flag (iOS car-audio route / Android Auto client), updated by
   // the VibeCarConnected native event. Band-aware auto mode/step no longer gates
   // on this (it now fires for all non-hands-on tuning — see vtsCheck); kept for
@@ -947,6 +973,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
         onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
       });
+    // Data saver dropped the stream — tear down the spectrum too (native already
+    // closed the audio WS) and surface the reconnect prompt.
+    const subDsOff = emitter.addListener('VibeDataSaverDisconnect', () => {
+      setDataSaverOff(true);
+      client.current?.pauseSpectrum();
+    });
+    // Native resumed the audio WS (Play / unmute) — reopen the spectrum after the
+    // session re-registers, same audio-first ordering as the foreground revive.
+    const subDsOn = emitter.addListener('VibeDataSaverResume', () => {
+      setDataSaverOff(false);
+      setTimeout(() => client.current?.resumeSpectrum(), 1200);
+    });
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
       let msg: { type?: string; info?: Record<string, unknown> };
@@ -982,7 +1020,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSkip.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove();
+      subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1152,8 +1190,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [status.frequency, status.mode, baseUrl]);
 
   useEffect(() => {
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (state: string) => {
       if (state !== 'active') {
+        if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         client.current?.pauseSpectrum();
       } else {
         // Instant zombie-socket check — after a background suspension the
@@ -1161,10 +1201,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         // errors) leaving audio+spectrum dead until relaunch. The native
         // watchdog also catches this within ~8s; this makes it immediate.
         (NativeModules.VibePowerModule as { revive?: () => void })?.revive?.();
-        client.current?.resumeSpectrum();
+        // Reopen the spectrum only AFTER the audio session re-registers
+        // server-side: the spectrum WS subscribes to that same session, so if it
+        // reopens first it gets no frames and the waterfall stays frozen (the bug
+        // where you had to back out to instances and reconnect). connect() uses
+        // the same audio-first-then-1s ordering; mirror it here.
+        if (resumeTimer) clearTimeout(resumeTimer);
+        resumeTimer = setTimeout(() => { resumeTimer = null; client.current?.resumeSpectrum(); }, 1200);
       }
     });
-    return () => sub.remove();
+    return () => { if (resumeTimer) clearTimeout(resumeTimer); sub.remove(); };
   }, []);
 
   // ── Smooth tune / idle saver ──────────────────────────────────────────────
@@ -1183,6 +1229,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       idleActiveRef.current = false;
       client.current?.setRate(1); // wake: full data rate immediately
     }
+    // Actively tuning on mute → restart the data-saver countdown so we don't
+    // drop someone who's mid-session.
+    if (isMutedRef.current) VibePowerModule?.resetMuteTimer?.();
   }, []);
 
   useEffect(() => {
@@ -2012,10 +2061,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Muted banner — media-control pause (AirPods) maps to mute */}
-      {isMuted && (
+      {isMuted && !dataSaverOff && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={unmute} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>🔇 MUTED — TAP TO UNMUTE</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Data saver dropped the stream — tap reconnects (native reopens the WS) */}
+      {dataSaverOff && (
+        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          onPress={unmute} activeOpacity={0.85}>
+          <Text style={styles.mutedBannerText}>💤 DATA SAVER — TAP TO RECONNECT</Text>
         </TouchableOpacity>
       )}
 
@@ -2173,6 +2230,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         frameRate={frameRate}           onFrameRate={onFrameRate}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
+        muteTimeout={muteTimeout}       onMuteTimeout={onMuteTimeout}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}

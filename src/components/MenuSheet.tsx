@@ -186,6 +186,9 @@ export interface MenuSheetProps {
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
   onIdleSlow?:        (v: boolean) => void;
+  /** Data-saver mute timeout in seconds: -1 off, 0 instant, else the timeout. */
+  muteTimeout?:       number;
+  onMuteTimeout?:     (sec: number) => void;
   onSpecRatio?:       () => void;
 }
 
@@ -421,6 +424,7 @@ export default function MenuSheet({
   peakHold = false, onPeakHold,
   frameRate = '20fps', onFrameRate,
   smoothTune = true, onSmoothTune, idleSlow = true, onIdleSlow,
+  muteTimeout = 600, onMuteTimeout,
   onSpecRatio,
 }: MenuSheetProps) {
 
@@ -947,6 +951,20 @@ export default function MenuSheet({
                   <Btn label="SMOOTH TUNE" active={smoothTune} onPress={() => onSmoothTune?.(!smoothTune)} />
                   <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
+
+                {/* Data saver — disconnect the SDR after this long muted (lock
+                    screen / AirPods / pause) to stop wasting data + battery. */}
+                <SubLabel label="Data Saver — disconnect when muted" small />
+                <OptRow>
+                  {([['OFF', -1], ['INSTANT', 0], ['5m', 300]] as const).map(([l, v]) => (
+                    <Btn key={v} label={l} active={muteTimeout === v} onPress={() => onMuteTimeout?.(v)} />
+                  ))}
+                </OptRow>
+                <OptRow>
+                  {([['10m', 600], ['15m', 900], ['30m', 1800]] as const).map(([l, v]) => (
+                    <Btn key={v} label={l} active={muteTimeout === v} onPress={() => onMuteTimeout?.(v)} />
+                  ))}
+                </OptRow>
 
               </View>
             )}

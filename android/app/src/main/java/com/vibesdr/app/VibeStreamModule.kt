@@ -106,6 +106,17 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setBrowseItemsNative(json)
     }
 
+    /** Data saver: -1 off, 0 instant, >0 seconds muted before dropping the WS. */
+    @ReactMethod
+    fun setMuteTimeout(seconds: Double) {
+        VibeStreamService.instance?.setMuteTimeoutNative(seconds.toInt())
+    }
+
+    @ReactMethod
+    fun resetMuteTimer() {
+        VibeStreamService.instance?.resetMuteTimerNative()
+    }
+
     /** One-shot coarse location for nearest-first instance sorting. JS must
      *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
     @ReactMethod

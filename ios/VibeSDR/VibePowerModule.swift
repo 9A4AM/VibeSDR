@@ -46,7 +46,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // MARK: - RCTEventEmitter
 
   override func supportedEvents() -> [String]! {
-    return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune"]
+    return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
+            "VibeDataSaverDisconnect", "VibeDataSaverResume"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -114,6 +115,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastSrCycleAt = Date(timeIntervalSince1970: 0)
   private var isRunning     = false
   private var isMuted       = false
+  // Data saver: drop the SDR stream after a spell muted to stop wasting
+  // cellular data + battery. -1 = off, 0 = instant, >0 = seconds of mute before
+  // disconnect. muteSince is wall-clock so a suspension that outlasts the
+  // timeout disconnects on the next wake.
+  private var muteTimeoutSec: Int = -1
+  private var muteSince: Date?
+  private var muteTimer: Timer?
+  private var dataSaverDisconnected = false
   private var currentFreq:  Int    = 14_074_000
   private var currentMode:  String = "usb"
   private var currentBase:  String = ""
@@ -206,7 +215,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   private func reviveIfDead(staleAfter: TimeInterval) {
-    guard isRunning else { return }
+    guard isRunning, !dataSaverDisconnected else { return }  // data saver owns the closed WS
     let stale  = Date().timeIntervalSince(lastPacketAt)
     let wsDead = (wsTask?.state != .running)
     guard stale > staleAfter || wsDead else { return }
@@ -365,7 +374,80 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // JS shows a MUTED banner — media-control pause (AirPods squeeze) maps to
     // mute, which is otherwise invisible in the UI.
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
+    DispatchQueue.main.async {
+      if muted {
+        self.armMuteCountdown()
+      } else {
+        self.cancelMuteCountdown()
+        if self.dataSaverDisconnected { self.resumeFromDataSaver() }
+      }
+      self.updateNowPlaying()
+    }
+  }
+
+  // ── Data saver (mute idle timeout) ───────────────────────────────────────
+
+  /// JS pushes the user's choice: -1 off, 0 instant, >0 seconds.
+  @objc func setMuteTimeout(_ seconds: Int) {
+    muteTimeoutSec = seconds
+    DispatchQueue.main.async {
+      if self.isMuted && !self.dataSaverDisconnected { self.armMuteCountdown() }
+      else if !self.isMuted { self.cancelMuteCountdown() }
+    }
+  }
+
+  /// In-app interaction while muted restarts the countdown (don't drop someone
+  /// who's actively tuning on mute).
+  @objc func resetMuteTimer() {
+    guard isMuted, !dataSaverDisconnected else { return }
+    muteSince = Date()
     DispatchQueue.main.async { self.updateNowPlaying() }
+  }
+
+  private func armMuteCountdown() {
+    muteTimer?.invalidate(); muteTimer = nil
+    guard muteTimeoutSec >= 0, !dataSaverDisconnected else { return }  // off
+    if muteTimeoutSec == 0 { triggerDataSaverDisconnect(); return }    // instant
+    if muteSince == nil { muteSince = Date() }
+    let t = Timer(timeInterval: 15, repeats: true) { [weak self] _ in self?.tickMute() }
+    RunLoop.main.add(t, forMode: .common)
+    muteTimer = t
+  }
+
+  private func tickMute() {
+    guard isMuted, !dataSaverDisconnected, let since = muteSince, muteTimeoutSec > 0 else {
+      muteTimer?.invalidate(); muteTimer = nil; return
+    }
+    if Date().timeIntervalSince(since) >= Double(muteTimeoutSec) { triggerDataSaverDisconnect() }
+    else { updateNowPlaying() }  // refresh the countdown text
+  }
+
+  private func cancelMuteCountdown() {
+    muteTimer?.invalidate(); muteTimer = nil
+    muteSince = nil
+  }
+
+  private func triggerDataSaverDisconnect() {
+    muteTimer?.invalidate(); muteTimer = nil
+    dataSaverDisconnected = true
+    // Stop the DATA: close the audio WS + watchdog. Keep the AVAudioSession +
+    // engine alive (silence) so Now Playing stays on the lock screen and Play
+    // can resume instantly.
+    healthTimer?.invalidate(); healthTimer = nil
+    wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil; wsSession = nil
+    DispatchQueue.main.async { self.updateNowPlaying() }
+    sendEvent(withName: "VibeDataSaverDisconnect", body: [:])
+  }
+
+  private func resumeFromDataSaver() {
+    guard dataSaverDisconnected else { return }
+    dataSaverDisconnected = false
+    muteSince = nil
+    lastPacketAt = Date()
+    startHealthTimer()
+    openAudioWs(baseUrl: currentBase, frequency: currentFreq, mode: currentMode, uuid: currentUuid)
+    DispatchQueue.main.async { self.updateNowPlaying() }
+    sendEvent(withName: "VibeDataSaverResume", body: [:])
   }
 
   @objc func setVolume(_ volume: Double) {
@@ -850,13 +932,26 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let mhz = String(format: "%.3f MHz", Double(currentFreq) / 1_000_000)
     let fallbackTitle  = "\(mhz) \(currentMode.uppercased())"
     let fallbackArtist = instanceName.isEmpty ? currentBase : instanceName
-    let title  = (npTitleOverride ?? fallbackTitle) + (isMuted ? " ·muted·" : "")
-    let artist = npArtistOverride ?? fallbackArtist
+    let title: String
+    let artist: String
+    if dataSaverDisconnected {
+      title  = "Disconnected · Open App to Resume"
+      artist = "VibeSDR: Disconnected"
+    } else if isMuted, muteTimeoutSec > 0, let since = muteSince {
+      let remain = max(0, muteTimeoutSec - Int(Date().timeIntervalSince(since)))
+      title  = npTitleOverride ?? fallbackTitle
+      artist = remain >= 60
+        ? "VibeSDR: Muted · \(Int(ceil(Double(remain) / 60.0))) min to disconnect"
+        : "VibeSDR: Muted · under 1 min to disconnect"
+    } else {
+      title  = (npTitleOverride ?? fallbackTitle) + (isMuted ? " ·muted·" : "")
+      artist = npArtistOverride ?? fallbackArtist
+    }
     var info: [String: Any] = [
       MPMediaItemPropertyTitle:             title,
       MPMediaItemPropertyArtist:            artist,
       MPMediaItemPropertyAlbumTitle:        "VibeSDR",
-      MPNowPlayingInfoPropertyPlaybackRate: isMuted ? 0.0 : 1.0,
+      MPNowPlayingInfoPropertyPlaybackRate: (isMuted || dataSaverDisconnected) ? 0.0 : 1.0,
       MPNowPlayingInfoPropertyIsLiveStream: true,
     ]
     if let art = npArtwork { info[MPMediaItemPropertyArtwork] = art }
