@@ -19,14 +19,15 @@ export interface Band {
 // `mode`/`step` drive the band-aware tuning (explicit band selection always;
 // boundary crossing only in a car). Conventions: SW broadcast = AM/1 kHz; MW/AM
 // broadcast = AM with 9 kHz (ITU R1) or 10 kHz (R2/3) spacing; HF ham phone =
-// LSB below 10 MHz, USB at/above, 500 Hz; LF/MF ham + 30m = CW (data/CW only,
-// no phone), 100 Hz; CB = AM/10 kHz. Utility/beacon ranges are left undefined
-// so they never auto-retune. Steps must be members of STEPS (sdrTypes.ts).
+// LSB below 10 MHz, USB at/above, 500 Hz; 60m is USB (the odd one below 10 MHz);
+// LF/MF ham + 30m = CW (data/CW only, no phone), 100 Hz; utility/beacon = USB
+// 500 Hz; CB is receiver-region split (R1/R3 = NFM, R2 = AM, 10 kHz). Steps must
+// be members of STEPS (sdrTypes.ts).
 export const BAND_PLAN: Band[] = [
   { lo: 9000,      hi: 148500,    name: 'LW Broadcast Band',         type: 'broadcast', mode: 'am',  step: 9000 },
   { lo: 135700,    hi: 137800,    name: '2200m Ham Band',             type: 'ham',  bandLabel: '2200m', mode: 'cwu', step: 100 },
-  { lo: 148500,    hi: 283500,    name: 'NDB / Navigational Beacons', type: 'utility' },
-  { lo: 283500,    hi: 525000,    name: 'NDB / Maritime Beacons',     type: 'utility' },
+  { lo: 148500,    hi: 283500,    name: 'NDB / Navigational Beacons', type: 'utility', mode: 'usb', step: 500 },
+  { lo: 283500,    hi: 525000,    name: 'NDB / Maritime Beacons',     type: 'utility', mode: 'usb', step: 500 },
   { lo: 472000,    hi: 479000,    name: '630m Ham Band',              type: 'ham',  bandLabel: '630m', mode: 'cwu', step: 100 },
   { lo: 525000,    hi: 1605000,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [2, 3], mode: 'am', step: 10000 },
   { lo: 525000,    hi: 1705000,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [1], mode: 'am', step: 9000 },
@@ -55,7 +56,8 @@ export const BAND_PLAN: Band[] = [
   { lo: 21000000,  hi: 21450000,  name: '15m Ham Band',               type: 'ham',  bandLabel: '15m', mode: 'usb', step: 500 },
   { lo: 21450000,  hi: 21850000,  name: '13m Broadcast Band',         type: 'broadcast', mode: 'am', step: 1000 },
   { lo: 24890000,  hi: 24990000,  name: '12m Ham Band',               type: 'ham',  bandLabel: '12m', mode: 'usb', step: 500 },
-  { lo: 26965000,  hi: 27405000,  name: '11m CB Band',                type: 'utility', mode: 'am', step: 10000 },
+  { lo: 26965000,  hi: 27405000,  name: '11m CB Band',                type: 'utility', regions: [1, 3], mode: 'nfm', step: 10000 },
+  { lo: 26965000,  hi: 27405000,  name: '11m CB Band',                type: 'utility', regions: [2], mode: 'am', step: 10000 },
   { lo: 28000000,  hi: 29700000,  name: '10m Ham Band',               type: 'ham',  bandLabel: '10m', mode: 'usb', step: 500 },
 ];
 
