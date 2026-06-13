@@ -32,6 +32,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import { APP_VERSION } from '../constants/version';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1212,7 +1213,7 @@ export default function MenuSheet({
                 KiwiSDR/OpenWebRX later), so it's keyed by server type. ── */}
             <View style={styles.footerRow}>
               <TouchableOpacity onPress={onAbout} hitSlop={8}>
-                <Text style={styles.footerBrand}>VibeSDR V2</Text>
+                <Text style={styles.footerBrand}>VibeSDR v{APP_VERSION}</Text>
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
               <View style={styles.footerServer}>
