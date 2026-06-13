@@ -447,12 +447,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func triggerDataSaverDisconnect() {
     muteTimer?.invalidate(); muteTimer = nil
     dataSaverDisconnected = true
-    // Stop the DATA: close the audio WS + watchdog. Keep the AVAudioSession +
-    // engine alive (silence) so Now Playing stays on the lock screen and Play
-    // can resume instantly.
+    // Tear the session down completely and RELEASE the media controls back to the
+    // OS — a lingering "paused" VibeSDR control with a half-working Play button
+    // is just confusing. The user resumes by reopening the app (full reconnect).
     healthTimer?.invalidate(); healthTimer = nil
     wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil; wsSession = nil
-    DispatchQueue.main.async { self.updateNowPlaying() }
+    isRunning = false
+    playerNode?.stop(); audioEngine?.stop()
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    DispatchQueue.main.async {
+      MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+      MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
     sendEvent(withName: "VibeDataSaverDisconnect", body: [:])
   }
 
@@ -962,11 +968,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       title  = "Disconnected · Open App to Resume"
       artist = "VibeSDR: Disconnected"
     } else if isMuted, muteTimeoutSec > 0, let since = muteSince {
-      let remain = max(0, muteTimeoutSec - Int(Date().timeIntervalSince(since)))
+      // Static "disconnects at HH:MM" (the app may be suspended, so a live tick
+      // can't run) — computed once from when the mute began.
+      let offAt = since.addingTimeInterval(Double(muteTimeoutSec))
+      let f = DateFormatter(); f.timeStyle = .short
       title  = npTitleOverride ?? fallbackTitle
-      artist = remain >= 60
-        ? "VibeSDR: Muted · \(Int(ceil(Double(remain) / 60.0))) min to disconnect"
-        : "VibeSDR: Muted · under 1 min to disconnect"
+      artist = "VibeSDR: Muted · auto-disconnect at \(f.string(from: offAt)) to save data & power"
     } else {
       title  = (npTitleOverride ?? fallbackTitle) + (isMuted ? " ·muted·" : "")
       artist = npArtistOverride ?? fallbackArtist
@@ -1010,11 +1017,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastArtworkKey = ""
   private func refreshArtwork() {
     guard let base = UIImage(named: "artwork_base") else { return }
-    let mins: Int? = (isMuted && muteTimeoutSec > 0 && muteSince != nil)
-      ? max(0, Int(ceil(Double(max(0, muteTimeoutSec - Int(Date().timeIntervalSince(muteSince!)))) / 60.0)))
-      : nil
     let key = dataSaverDisconnected ? "disc"
-            : isMuted ? "mute-\(mins.map(String.init) ?? "x")"
+            : isMuted ? "mute"
             : "play-\(npArtworkType)"
     guard key != lastArtworkKey else { return }
     lastArtworkKey = key
@@ -1029,15 +1033,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       if dataSaverDisconnected {
         drawSymbol("wifi.slash", in: rect, tint: UIColor(red: 0.92, green: 0.32, blue: 0.28, alpha: 1))
       } else if isMuted {
-        if let m = mins {
-          // glyph in the top ~⅔, the "Nm" countdown beneath it
-          let g = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.62)
-          drawSymbol("speaker.slash.fill", in: g, tint: UIColor(white: 0.95, alpha: 1))
-          drawCountdown("\(m)m", in: CGRect(x: rect.minX, y: rect.midY + rect.height * 0.12,
-                                            width: rect.width, height: rect.height * 0.36))
-        } else {
-          drawSymbol("speaker.slash.fill", in: rect, tint: UIColor(white: 0.95, alpha: 1))
-        }
+        drawSymbol("speaker.slash.fill", in: rect, tint: UIColor(white: 0.95, alpha: 1))
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         overlay.draw(in: rect)
       }
@@ -1053,16 +1049,6 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let s = min(rect.width / sym.size.width, rect.height / sym.size.height)
     let w = sym.size.width * s, h = sym.size.height * s
     sym.draw(in: CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
-  }
-
-  private func drawCountdown(_ text: String, in rect: CGRect) {
-    let p = NSMutableParagraphStyle(); p.alignment = .center
-    let attrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: rect.height * 0.9, weight: .bold),
-      .foregroundColor: UIColor(white: 0.95, alpha: 1),
-      .paragraphStyle: p,
-    ]
-    (text as NSString).draw(in: rect, withAttributes: attrs)
   }
 
   private func setupRemoteCommands() {
