@@ -420,16 +420,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun triggerDataSaverDisconnect() {
         muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
         dataSaverDisconnected = true
-        // Stop the DATA: close the audio WS (watchdog is guarded). Keep the
-        // foreground service + decode thread idle so the notification stays and
-        // Play can resume instantly.
-        ws?.close(1001, "data saver"); ws = null
-        packetQueue.clear()
-        mainHandler.post {
-            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
-            updateMetadataSession(); updateNotification()
-        }
+        // Tear the session down and RELEASE the media controls back to the OS —
+        // a lingering "paused" VibeSDR notification with a half-working Play
+        // button is just confusing. The user resumes by reopening the app (full
+        // reconnect via fresh startAudioEngine).
         emitEvent("VibeDataSaverDisconnect") { }
+        stopEngine()  // closes WS, abandons audio focus, stops foreground + notification
     }
 
     private fun resumeFromDataSaver() {
@@ -1230,9 +1226,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun nowPlayingArtist(): String {
         if (dataSaverDisconnected) return "VibeSDR: Disconnected"
         if (muted && muteTimeoutSec > 0 && muteSinceMs > 0L) {
-            val remain = muteTimeoutSec - ((System.currentTimeMillis() - muteSinceMs) / 1000).toInt()
-            return if (remain >= 60) "VibeSDR: Muted · ${Math.ceil(remain / 60.0).toInt()} min to disconnect"
-                   else "VibeSDR: Muted · under 1 min to disconnect"
+            // Static "auto-disconnect at HH:MM" computed from when the mute began.
+            val offAt = java.util.Date(muteSinceMs + muteTimeoutSec * 1000L)
+            val t = android.text.format.DateFormat.getTimeFormat(this).format(offAt)
+            return "VibeSDR: Muted · auto-disconnect at $t to save data & power"
         }
         return npArtist ?: instanceName.ifEmpty { currentBase }
     }
@@ -1257,12 +1254,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // data saver drops the stream. Keyed so it only recomposites on change.
     private var lastArtworkKey = ""
     private fun refreshArtwork() {
-        val mins = if (muted && muteTimeoutSec > 0 && muteSinceMs > 0L)
-            Math.ceil(((muteTimeoutSec - (System.currentTimeMillis() - muteSinceMs) / 1000)
-                .coerceAtLeast(0)).toDouble() / 60.0).toInt() else -1
         val key = when {
             dataSaverDisconnected -> "disc"
-            muted -> "mute-${if (mins >= 0) mins else "x"}"
+            muted -> "mute"
             else -> "play-$npArtworkType"
         }
         if (key == lastArtworkKey) return
@@ -1279,7 +1273,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 composed.width - pad, composed.height - pad)
             when {
                 dataSaverDisconnected -> drawInsetGlyph(canvas, dst, "⛔", null)
-                muted -> drawInsetGlyph(canvas, dst, "🔇", if (mins >= 0) "${mins}m" else null)
+                muted -> drawInsetGlyph(canvas, dst, "🔇", null)
                 else -> {
                     val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {

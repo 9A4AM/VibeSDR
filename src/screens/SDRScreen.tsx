@@ -996,6 +996,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // zoom, no audio), so do a FULL from-scratch reconnect with a fresh uuid.
     const subDsOn = emitter.addListener('VibeDataSaverResume', () => {
       setDataSaverOff(false);
+      setIsMuted(false);
       fullReconnect();
     });
     // Server-NR protocol messages arrive as text on the native audio WS
@@ -1212,6 +1213,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Opened the app after a data-saver disconnect (the Play event may not
         // survive suspension): do a full from-scratch reconnect.
         setDataSaverOff(false);
+        setIsMuted(false);
         fullReconnect();
       } else {
         // Instant zombie-socket check — after a background suspension the
