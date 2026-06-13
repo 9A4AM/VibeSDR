@@ -517,6 +517,7 @@ export default function MenuSheet({
           <ScrollView style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
+            keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
 
             {/* Display settings is its OWN view — it REPLACES the main menu
@@ -562,6 +563,9 @@ export default function MenuSheet({
                     <Text style={styles.searchHint}>
                       {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune
                     </Text>
+                    <ScrollView style={styles.searchScroll} nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={true}>
                     {searchResults.map((r: SearchResult, i: number) => (
                       <TouchableOpacity
                         key={i}
@@ -584,6 +588,7 @@ export default function MenuSheet({
                         </Text>
                       </TouchableOpacity>
                     ))}
+                    </ScrollView>
                   </>)}
                 </View>
               )}
@@ -949,8 +954,8 @@ export default function MenuSheet({
             <View style={styles.bwMirrorRow}>
               <Text style={styles.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
               <Slider style={styles.bwHalfSlider}
-                minimumValue={-8000} maximumValue={0} step={50}
-                value={Math.min(0, filterLow)}
+                minimumValue={-6000} maximumValue={0} step={50}
+                value={Math.max(-6000, Math.min(0, filterLow))}
                 onValueChange={(v: number) => {
                   if (bwSync) onFilterBoth?.(v, -v);
                   else        onFilterBoth?.(v, filterHigh);
@@ -963,8 +968,8 @@ export default function MenuSheet({
                 <Text style={[styles.btnText, bwSync && styles.btnTextActive]}>SYNC</Text>
               </TouchableOpacity>
               <Slider style={styles.bwHalfSlider}
-                minimumValue={0} maximumValue={8000} step={50}
-                value={Math.max(0, filterHigh)}
+                minimumValue={0} maximumValue={6000} step={50}
+                value={Math.min(6000, Math.max(0, filterHigh))}
                 onValueChange={(v: number) => {
                   if (bwSync) onFilterBoth?.(-v, v);
                   else        onFilterBoth?.(filterLow, v);
@@ -1370,6 +1375,7 @@ const styles = StyleSheet.create({
     marginTop: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
     borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.45)', overflow: 'hidden',
   },
+  searchScroll: { maxHeight: 240 },
   searchHint: {
     color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
     fontSize: 11, paddingHorizontal: 10, paddingVertical: 6,
