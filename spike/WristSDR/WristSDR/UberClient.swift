@@ -354,6 +354,11 @@ final class UberClient: ObservableObject {
     // WKBackgroundModes=[audio] and .longFormAudio are FOR.
     specSock.cancel()
     specOpened = false
+    // Drop the delayed rows too — on resume we start fresh, and a second of pre-pause
+    // spectrum flashing up before the live feed catches on would be worse than the brief
+    // "syncing" refill.
+    specQueue.removeAll()
+    spectrumSyncing = true
     status = "background · audio only"
   }
 
@@ -490,8 +495,38 @@ final class UberClient: ObservableObject {
     let dec = decimate(row, to: WaterfallBuffer.width)
     // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
     // with a healthy frame count is exactly what that looks like.
-    if dec.count == WaterfallBuffer.width { rowsPushed += 1 }
-    waterfall.push(row: dec)
+    // DELAY THE ROW instead of drawing it now. The audio runs a ~1s cushion for stability,
+    // so a live spectrum sits ~1s AHEAD of the sound — you see a signal, then hear it a beat
+    // later, which with a trace on screen is glaring. Hold each row the same ~1s and the two
+    // line up. Drained on the main actor from the render tick (see drainSpectrum).
+    if dec.count == WaterfallBuffer.width {
+      rowsPushed += 1
+      specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+    }
+  }
+
+  // ── Spectrum delay (audio-sync) ─────────────────────────────────────────────
+  private var specQueue: [(t: Double, row: [UInt8])] = []
+  private var lastSpecPush: Double = 0
+  /// Match the audio cushion (WatchAudio.targetQueued), less the spectrum's own inherent
+  /// latency, so signal and sound arrive together.
+  private let spectrumDelay: Double = 0.75
+  /// True while the delay buffer is refilling after a resume — nothing old enough to draw
+  /// yet, so the UI says "syncing" rather than showing a frozen picture.
+  @Published var spectrumSyncing = false
+
+  /// Push every row that has now waited out the delay. MUST be called on the main actor
+  /// (the WaterfallBuffer is drawn from a non-isolated Canvas closure — pushing from there
+  /// would trap). ContentView calls this from its 20fps driver tick.
+  func drainSpectrum(now: Double) {
+    while let first = specQueue.first, now - first.t >= spectrumDelay {
+      waterfall.push(row: first.row)
+      specQueue.removeFirst()
+      lastSpecPush = now
+    }
+    // Refilling after a pause: rows are arriving but none has aged in yet, and we haven't
+    // drawn for a moment. Say so.
+    spectrumSyncing = !specQueue.isEmpty && (now - lastSpecPush) > 0.3
   }
 
   /// UberSDR sends 1024 bins; the watch draws 256. So three quarters of every frame is

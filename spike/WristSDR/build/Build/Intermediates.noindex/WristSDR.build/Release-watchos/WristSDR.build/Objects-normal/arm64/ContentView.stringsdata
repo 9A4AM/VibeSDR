@@ -4,10 +4,18 @@
     "Localizable": [
       {
         "comment": "",
+        "key": "SYNCING…",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 133
+        }
+      },
+      {
+        "comment": "",
         "key": "STEP %@",
         "location": {
           "startingColumn": 18,
-          "startingLine": 157
+          "startingLine": 168
         }
       },
       {
@@ -15,7 +23,7 @@
         "key": "HOLD ▸ MENU",
         "location": {
           "startingColumn": 18,
-          "startingLine": 159
+          "startingLine": 170
         }
       },
       {
@@ -23,7 +31,7 @@
         "key": "CROWN: ZOOM",
         "location": {
           "startingColumn": 29,
-          "startingLine": 155
+          "startingLine": 166
         }
       },
       {
@@ -31,7 +39,7 @@
         "key": "CROWN: TUNE",
         "location": {
           "startingColumn": 45,
-          "startingLine": 155
+          "startingLine": 166
         }
       },
       {
@@ -39,7 +47,7 @@
         "key": "AUDIO",
         "location": {
           "startingColumn": 14,
-          "startingLine": 210
+          "startingLine": 221
         }
       },
       {
@@ -47,7 +55,7 @@
         "key": "Volume: side-swipe → Control Centre.\nwatchOS has no in-app volume slider for SwiftUI.",
         "location": {
           "startingColumn": 14,
-          "startingLine": 217
+          "startingLine": 228
         }
       }
     ]

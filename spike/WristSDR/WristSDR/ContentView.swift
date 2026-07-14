@@ -126,6 +126,17 @@ struct ContentView: View {
         .frame(width: 1.5)
         .ignoresSafeArea()
 
+      // Wrist-raise refill: the spectrum is deliberately held ~1s to line up with the audio,
+      // so on resume the delay buffer is empty for a beat. Say "syncing" rather than showing a
+      // frozen picture — honest, and it clears itself the instant the buffer fills.
+      if client.spectrumSyncing {
+        Text("SYNCING…")
+          .font(.system(size: 11, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white.opacity(0.85))
+          .padding(.horizontal, 10).padding(.vertical, 4)
+          .background(.black.opacity(0.6), in: Capsule())
+      }
+
       VStack(spacing: 0) {
         Spacer()
 
@@ -255,7 +266,12 @@ struct ContentView: View {
       if zoomMode { client.zoom(delta: delta) }
       else        { client.tune(delta: delta, step: stepHz) }
     }
-    .onReceive(driver) { _ in frame &+= 1 }
+    .onReceive(driver) { _ in
+      frame &+= 1
+      // Drain the spectrum delay queue on the MAIN actor (the Canvas draw closure is not
+      // main-isolated and pushing the waterfall from there would trap).
+      client.drainSpectrum(now: ProcessInfo.processInfo.systemUptime)
+    }
     // WRIST UP → check the sockets are still alive. watchOS suspended us while the screen
     // was off and the WebSockets died with it; without this the waterfall never comes back.
     .onChange(of: scenePhase) { _, phase in
