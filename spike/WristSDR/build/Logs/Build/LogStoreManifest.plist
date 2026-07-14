@@ -48,7 +48,7 @@
 			<key>uniqueIdentifier</key>
 			<string>2BF43B9B-383F-4548-AC96-87BF8A3E4194</string>
 		</dict>
-		<key>A451792C-A8B0-48C9-96C4-F66BA4FF5C18</key>
+		<key>AE5D391F-0676-4A63-82C7-3EBCBACC3CBA</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -57,7 +57,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>A451792C-A8B0-48C9-96C4-F66BA4FF5C18.xcactivitylog</string>
+			<string>AE5D391F-0676-4A63-82C7-3EBCBACC3CBA.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -82,13 +82,13 @@
 			<key>signature</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>805763188.43105102</real>
+			<real>805764110.44612396</real>
 			<key>timeStoppedRecording</key>
-			<real>805763193.38521898</real>
+			<real>805764115.53183401</real>
 			<key>title</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>A451792C-A8B0-48C9-96C4-F66BA4FF5C18</string>
+			<string>AE5D391F-0676-4A63-82C7-3EBCBACC3CBA</string>
 		</dict>
 	</dict>
 </dict>

@@ -33,6 +33,11 @@
     "llvm-bc" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/SignalProcessor.bc",
     "object" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/SignalProcessor.o"
   },
+  "/Users/stuey3d/VibeSDR/spike/WristSDR/WristSDR/SpikeMenu.swift" : {
+    "index-unit-output-path" : "/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/SpikeMenu.o",
+    "llvm-bc" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/SpikeMenu.bc",
+    "object" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/SpikeMenu.o"
+  },
   "/Users/stuey3d/VibeSDR/spike/WristSDR/WristSDR/UberClient.swift" : {
     "index-unit-output-path" : "/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/UberClient.o",
     "llvm-bc" : "/Users/stuey3d/VibeSDR/spike/WristSDR/build/Build/Intermediates.noindex/WristSDR.build/Release-watchos/WristSDR.build/Objects-normal/arm64/UberClient.bc",

@@ -510,7 +510,10 @@ final class UberClient: ObservableObject {
   private var lastSpecPush: Double = 0
   /// Match the audio cushion (WatchAudio.targetQueued), less the spectrum's own inherent
   /// latency, so signal and sound arrive together.
-  private let spectrumDelay: Double = 0.75
+  /// 0.625s: dialled in by ear against the buzzer (UVB-76). The audio cushion breathes a
+  /// little with network jitter, so no fixed delay is always perfect — this is the value that
+  /// minimises the average error (0.75 read slightly late, 0.5 slightly early).
+  private let spectrumDelay: Double = 0.625
   /// True while the delay buffer is refilling after a resume — nothing old enough to draw
   /// yet, so the UI says "syncing" rather than showing a frozen picture.
   @Published var spectrumSyncing = false
