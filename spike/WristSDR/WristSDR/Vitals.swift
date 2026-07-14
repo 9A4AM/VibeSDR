@@ -70,18 +70,17 @@ final class Vitals: ObservableObject {
   /// (Signal handlers should only call async-signal-safe functions. This one does not — but
   /// a diagnostic that usually works beats a diagnosis we cannot make at all, and we are
   /// dying anyway.)
-  nonisolated static func installDeathWatch() {
-    NSSetUncaughtExceptionHandler { ex in
-      Vitals.crumb("*** DIED: uncaught exception \(ex.name.rawValue): \(ex.reason ?? "-")")
-    }
-    for sig in [SIGILL, SIGTRAP, SIGABRT, SIGSEGV, SIGBUS, SIGFPE] {
-      signal(sig) { s in
-        Vitals.crumb("*** DIED: signal \(s) (4=ILL 5=TRAP 6=ABRT 11=SEGV 10=BUS 8=FPE)")
-        signal(s, SIG_DFL)
-        raise(s)
-      }
-    }
-  }
+  /// (There was a home-made crash catcher here. It CRASHED — installing the signal handler
+  /// itself trapped — so the diagnostic became the bug, and the app would not launch at all.
+  /// It was never needed: the REAL crash reports are right there on the device and come
+  /// symbolicated, which beats anything we can write in-process:
+  ///
+  ///   xcrun devicectl device copy from --device <id> --domain-type systemCrashLogs \
+  ///     --source . --destination /tmp/wcrash
+  ///   xcrun atos -o build/.../WristSDR.app.dSYM/Contents/Resources/DWARF/WristSDR \
+  ///     -arch arm64 -l <base> <base+imageOffset>
+  ///
+  /// Use that. Do not re-invent this.
 
   nonisolated static func crumb(_ s: String) {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

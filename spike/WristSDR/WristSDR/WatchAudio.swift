@@ -297,6 +297,12 @@ final class WatchAudio {
     ) { [weak self] _ in
       guard let self else { return }
       self.q.async {
+        // STOP THE KEEPER FIRST. It fires every 100ms on this same queue, and the graph is
+        // about to be torn down and rebuilt — a buffer scheduled mid-surgery is a trap, not
+        // an error. (startSilenceKeeper() below restarts it and re-primes the cushion.)
+        self.keeper?.cancel()
+        self.keeper = nil
+
         self.converter = nil
         self.srcFormat = nil
         self.dstFormat = nil
@@ -307,9 +313,10 @@ final class WatchAudio {
         if !self.engine.isRunning { try? self.engine.start() }
         self.player.play()
         self.started = true
-        // A route change zeroes the queue above — so the cushion is gone, and an empty node
-        // is exactly what gets us suspended. Rebuild it before the next packet is late.
-        self.topUp(to: self.targetQueued)
+        // A route change zeroed the queue above — so the cushion is gone, and an empty node
+        // is exactly what lets the engine shut the hardware down. Restart the keeper against
+        // the NEW format (it re-primes the cushion as it starts).
+        self.startSilenceKeeper()
       }
     }
   }
@@ -350,8 +357,19 @@ final class WatchAudio {
   }
 
   /// Schedule silence until the queue holds `seconds`. Caller must be on `q`.
+  ///
+  /// NEVER USE A CACHED FORMAT HERE. `dstFormat` is the converter's destination, captured
+  /// when the converter was last built — and the output format is NOT a constant. Switch
+  /// AirPods -> speaker and the engine reconfigures underneath us: Bluetooth is 48k STEREO,
+  /// the built-in speaker is 48k MONO. A keeper firing every 100ms would then hand a stereo
+  /// buffer to a node that is now mono, and `scheduleBuffer` does not return an error for
+  /// that — IT TRAPS. (It killed the app on a manual route switch. Same trap the audio path
+  /// already learned once; I reintroduced it here.)
+  ///
+  /// So ask the PLAYER what it is actually connected with, every single time.
   private func topUp(to seconds: Double) {
-    let fmt = dstFormat ?? engine.outputNode.outputFormat(forBus: 0)
+    guard engine.isRunning else { return }
+    let fmt = player.outputFormat(forBus: 0)
     guard fmt.sampleRate > 0, fmt.channelCount > 0 else { return }
     while queuedSeconds < seconds {
       let want = min(0.1, seconds - queuedSeconds)             // 100 ms chunks
