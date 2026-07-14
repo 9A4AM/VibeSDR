@@ -643,7 +643,19 @@ final class UberClient: ObservableObject {
     sendView(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
 
-  func setMode(_ m: String) { mode = m; sendTune() }
+  func setMode(_ m: String) {
+    guard m != mode else { return }
+    mode = m
+    // REOPEN THE AUDIO SOCKET — do NOT just send a `tune`. The server builds its Opus
+    // encoder ONCE, when the socket opens, at the sample rate that suits the mode (SSB is
+    // narrower than AM/FM). A mid-session tune changes the DEMOD but not the encoder, so the
+    // stream keeps carrying the OLD rate in its header while the audio behind it is the new
+    // rate: the decoder plays it back too fast — chipmunks. A fresh socket = a fresh encoder
+    // at the right rate, and the OpusDecoder re-inits itself from the new header. (The audio
+    // URL bakes mode+frequency into the query string, so no separate tune message is needed.)
+    audioSock.cancel()
+    openAudio()
+  }
 
   /// Absolute tune, for the numpad — jump straight from 648 kHz AM to the 40m band
   /// without spinning the crown across 6 MHz.

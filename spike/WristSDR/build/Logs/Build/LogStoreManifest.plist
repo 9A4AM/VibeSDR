@@ -6,6 +6,48 @@
 	<integer>13</integer>
 	<key>logs</key>
 	<dict>
+		<key>63D32581-26F7-480F-9953-8C4C3047BA4E</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>63D32581-26F7-480F-9953-8C4C3047BA4E.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>4</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>WristSDR project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>WristSDR</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>805762798.75863504</real>
+			<key>timeStoppedRecording</key>
+			<real>805762803.74984801</real>
+			<key>title</key>
+			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>63D32581-26F7-480F-9953-8C4C3047BA4E</string>
+		</dict>
 		<key>DF19A77C-D9D9-4BEA-8541-54B64DCD1253</key>
 		<dict>
 			<key>className</key>
