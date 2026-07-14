@@ -56,6 +56,33 @@ final class Vitals: ObservableObject {
   /// BREADCRUMBS. A Release build on a watch gives you no console and no crash log you can
   /// reach — so the app writes down where it got to, and the LAST LINE BEFORE IT DIED is
   /// the answer. Cheap, ugly, and it works when nothing else does.
+  /// SUSPENDED OR DEAD? The log cannot tell them apart, and they need opposite fixes.
+  ///
+  /// Both look identical from the outside: the ticks stop, and the audio fades as the
+  /// headphones drain a buffer nobody is filling. We have spent an evening fixing a
+  /// background-audio bug on the assumption watchOS was suspending us — but a suspended app
+  /// COMES BACK when the wrist comes up, and this one never does. That is not a suspension.
+  ///
+  /// So catch the death and write it down. If a crumb appears, we crashed and the whole
+  /// background-audio theory was chasing a ghost. If the log simply stops with no crumb, we
+  /// really were suspended.
+  ///
+  /// (Signal handlers should only call async-signal-safe functions. This one does not — but
+  /// a diagnostic that usually works beats a diagnosis we cannot make at all, and we are
+  /// dying anyway.)
+  nonisolated static func installDeathWatch() {
+    NSSetUncaughtExceptionHandler { ex in
+      Vitals.crumb("*** DIED: uncaught exception \(ex.name.rawValue): \(ex.reason ?? "-")")
+    }
+    for sig in [SIGILL, SIGTRAP, SIGABRT, SIGSEGV, SIGBUS, SIGFPE] {
+      signal(sig) { s in
+        Vitals.crumb("*** DIED: signal \(s) (4=ILL 5=TRAP 6=ABRT 11=SEGV 10=BUS 8=FPE)")
+        signal(s, SIG_DFL)
+        raise(s)
+      }
+    }
+  }
+
   nonisolated static func crumb(_ s: String) {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let u = docs.appendingPathComponent("jr-vitals.log")

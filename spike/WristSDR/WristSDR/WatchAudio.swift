@@ -39,7 +39,32 @@ final class WatchAudio {
   /// permanently behind live — you hear the backlog, and tuning feels laggy. (Learned on
   /// the phone, 2026-06-11; the same trap is waiting here.)
   private var queuedSeconds: Double = 0
-  private let maxQueued: Double = 0.6
+  /// Feeds the player node silence whenever the stream is late, so the audio hardware
+  /// never idles — see startSilenceKeeper(). Idle hardware = suspended app = dead socket.
+  private var keeper: DispatchSourceTimer?
+  /// THE CUSHION. There was only ever a CEILING here — drop packets if the queue grows too
+  /// deep — and no FLOOR. So the queue sat wherever the network left it, which on a flaky
+  /// tunnel is sometimes empty, and an empty queue on watchOS is fatal (see
+  /// startSilenceKeeper: idle hardware -> suspended app -> dead socket).
+  ///
+  /// So hold a deliberate head start. Real audio then rides ON TOP of it, and a late packet
+  /// eats into the cushion instead of starving the node — nothing is heard, nothing is
+  /// suspended. The silence keeper stops being a thing that patches audible holes and
+  /// becomes a thing that should essentially never fire.
+  ///
+  /// The price is latency, and we pay it DELIBERATELY. A second of cushion means a second
+  /// between the air and your ear — but a watch radio is for listening on a walk, not for
+  /// chasing a weak signal, and a stall costs far more than a second of delay ever will.
+  /// (The phone runs ~0.25s on a LAN; the watch is talking over a tunnel to a server on the
+  /// internet, from a wrist, over Bluetooth. It needs the room.)
+  ///
+  /// Tuning latency is the thing this costs, and it is recoverable later: flush the queue on
+  /// retune and re-prime, so the dial stays instant while steady listening stays solid.
+  private let targetQueued: Double = 1.00
+  /// Below this we are about to run dry — top back up to the cushion.
+  private let floorQueued: Double = 0.20
+  /// Above this, a delivery burst is just building latency for no benefit. Drop it.
+  private let maxQueued: Double = 1.60
 
   private(set) var lastError: String = ""
   private(set) var route: String = "—"
@@ -79,6 +104,30 @@ final class WatchAudio {
 
     session.activate(options: []) { [weak self] ok, err in
       guard let self else { return }
+
+      // SAY EXACTLY WHAT WE GOT, because the difference between "audio is playing" and
+      // "audio is playing WITH A BACKGROUND GRANT" is invisible until the wrist drops —
+      // and then it is too late to ask. Apple's rules for a long-form route on watchOS:
+      //
+      //   * Bluetooth always qualifies.
+      //   * The BUILT-IN SPEAKER qualifies too — but only on watchOS 11+, only on a
+      //     speaker-capable watch, and **NOT WHILE THE WATCH IS CHARGING**. On the
+      //     charger, long-form simply cannot use the speaker, so there is no background
+      //     grant and the app is suspended the instant you look away. Nothing in the app
+      //     can fix that, and you will chase it for hours if you do not log it.
+      //   * On a speaker-capable watch with no Bluetooth around, the system routes to the
+      //     speaker AUTOMATICALLY and shows NO PICKER. The absent picker is not a bug —
+      //     it is the system telling you the speaker was accepted.
+      let dev = WKInterfaceDevice.current()
+      let route = AVAudioSession.sharedInstance().currentRoute.outputs
+        .map { $0.portType.rawValue.replacingOccurrences(of: "AVAudioSessionPort", with: "") }
+        .joined(separator: "+")
+      Vitals.crumb(
+        "AUDIO activate ok=\(ok) err=\(err?.localizedDescription ?? "-") "
+        + "route=[\(route.isEmpty ? "NONE" : route)] "
+        + "batt=\(Int(dev.batteryLevel * 100))% state=\(dev.batteryState.rawValue) "
+        + "(0=unknown 1=unplugged 2=charging 3=full) model=\(dev.model) sys=\(dev.systemVersion)")
+
       guard ok else {
         // watchOS says no route. On older watches with no headphones connected this is
         // the EXPECTED answer, and it is the whole reason JR has a device-class question.
@@ -197,13 +246,47 @@ final class WatchAudio {
     // and fighting the engine over formats is how you get silence.
     let out = engine.outputNode.outputFormat(forBus: 0)
     engine.connect(player, to: engine.mainMixerNode, format: out)
+
+    // ── THIS IS THE WRIST-DOWN BUG, AND YOU CANNOT SWITCH IT OFF. ─────────────────
+    //
+    // AVAudioEngine auto-shutdown: "when the Engine detects it's running idle for a
+    // certain duration, it stops the audio hardware" — and Apple built it FOR watchOS:
+    // "on watchOS especially, not all apps properly pause or stop the Engine"
+    // (WWDC 2017 §501).
+    //
+    // On iOS you would set `isAutoShutdownEnabled = false` and be done. On watchOS that
+    // property is UNAVAILABLE — the compiler refuses it. Auto-shutdown is mandatory here.
+    // Which is the whole bug:
+    //
+    //   one late Opus packet -> the player node has nothing to render
+    //     -> the engine idles and powers the audio hardware DOWN
+    //       -> watchOS no longer observes audio rendering. And the background grant is
+    //          NOT the Info.plist key — it is a RUNTIME state, held only while the system
+    //          can see audio actually flowing.
+    //         -> the assertion evaporates -> the app is SUSPENDED
+    //           -> the socket dies with it -> the packet we were waiting for can never
+    //              arrive. The failure feeds itself, which is exactly why this looked like
+    //              a hard platform ban rather than a starved buffer.
+    //
+    // It even explains the shape of the symptom: a FADE (the hardware draining its last
+    // buffer) and only THEN the suspension, ~14s later.
+    //
+    // Everything else was right all along — WKBackgroundModes=[audio], .longFormAudio, the
+    // Bluetooth route, Now Playing — and all of it was useless while the engine was free to
+    // switch the hardware off underneath it.
+    //
+    // Since we cannot stop the engine idling, WE MUST NEVER BE IDLE. See
+    // startSilenceKeeper(): the moment the queue runs dry, feed it silence. That is not a
+    // workaround for a missing flag; on watchOS it IS the mechanism.
+
     engine.prepare()
     try engine.start()
     player.play()
     started = true
+    startSilenceKeeper()
     watchSession()
     becomeNowPlaying()
-    Vitals.crumb("AUDIO engine started · out=\(out)")
+    Vitals.crumb("AUDIO engine started · out=\(out) · silence-keeper ON")
 
     // WHEN THE ENGINE RECONFIGURES, THE GRAPH IS ALREADY TORN DOWN. AVAudioEngine posts this
     // on a route change (speaker → Bluetooth, headphones pulled) and every cached format,
@@ -224,11 +307,74 @@ final class WatchAudio {
         if !self.engine.isRunning { try? self.engine.start() }
         self.player.play()
         self.started = true
+        // A route change zeroes the queue above — so the cushion is gone, and an empty node
+        // is exactly what gets us suspended. Rebuild it before the next packet is late.
+        self.topUp(to: self.targetQueued)
+      }
+    }
+  }
+
+  /// NEVER LET THE PLAYER NODE RUN DRY.
+  ///
+  /// Turning off auto-shutdown stops the engine powering the hardware down on its own, but
+  /// an `AVAudioPlayerNode` with nothing scheduled still renders nothing — and "nothing
+  /// rendering" is precisely what watchOS reads as "not actively streaming audio". Over a
+  /// radio link a late packet is not an edge case, it is Tuesday: one stall on a flaky
+  /// tunnel and the background grant is gone, and with it the socket that would have
+  /// delivered the very packet we were waiting for. The failure feeds itself.
+  ///
+  /// So when the queue runs empty, feed the node SILENCE. It costs nothing, it is
+  /// inaudible, and it keeps the hardware rendering — which keeps us alive to receive the
+  /// audio that is merely late rather than gone. Silence is only ever scheduled while
+  /// genuinely starved, so it adds no latency to a healthy stream.
+  private func startSilenceKeeper() {
+    keeper?.cancel()
+    // Prime the cushion up front. This is the "wait a moment on connect for a stable stream"
+    // trade, and it is silence rather than a stall — the hardware starts rendering
+    // IMMEDIATELY, so the background grant exists from the first instant, before a single
+    // Opus packet has arrived.
+    q.async { [weak self] in self?.topUp(to: self?.targetQueued ?? 1.0) }
+
+    let t = DispatchSource.makeTimerSource(queue: q)
+    t.schedule(deadline: .now() + 0.1, repeating: 0.1)
+    t.setEventHandler { [weak self] in
+      guard let self, self.started, self.engine.isRunning else { return }
+      guard self.queuedSeconds < self.floorQueued else { return }   // healthy — leave it alone
+      // Running dry. Rebuild the whole cushion, not a token 50 ms: if the stream has stalled
+      // we want to survive the WHOLE stall, and if it is merely late we want the head start
+      // back so the next hiccup is absorbed too.
+      self.topUp(to: self.targetQueued)
+    }
+    t.resume()
+    keeper = t
+  }
+
+  /// Schedule silence until the queue holds `seconds`. Caller must be on `q`.
+  private func topUp(to seconds: Double) {
+    let fmt = dstFormat ?? engine.outputNode.outputFormat(forBus: 0)
+    guard fmt.sampleRate > 0, fmt.channelCount > 0 else { return }
+    while queuedSeconds < seconds {
+      let want = min(0.1, seconds - queuedSeconds)             // 100 ms chunks
+      let frames = AVAudioFrameCount(fmt.sampleRate * want)
+      guard frames > 0, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames)
+      else { return }
+      buf.frameLength = frames
+      // AVAudioPCMBuffer does NOT zero its storage — silence has to be written, or you
+      // schedule whatever was in that memory. (Which is noise, and loud.)
+      if let ch = buf.floatChannelData {
+        for c in 0..<Int(fmt.channelCount) { ch[c].update(repeating: 0, count: Int(frames)) }
+      }
+      let dur = Double(frames) / fmt.sampleRate
+      queuedSeconds += dur
+      player.scheduleBuffer(buf) { [weak self] in
+        self?.q.async { self?.queuedSeconds -= dur }
       }
     }
   }
 
   func stop() {
+    keeper?.cancel()
+    keeper = nil
     player.stop()
     engine.stop()
     started = false
