@@ -17,6 +17,7 @@
 		90E549E2A30949199198FC09 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4C0C76743B617E12A64820 /* Vitals.swift */; };
 		69D646D0771B72D36CA66784 /* Viridis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F57836F2C7A9B1047326AF1 /* Viridis.swift */; };
 		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
+		2293BEDBD7549587BB6769F6 /* SpikeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75AAAC32661B48A631296209 /* SpikeMenu.swift */; };
 		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
 /* End PBXBuildFile section */
 
@@ -32,6 +33,7 @@
 		5C4C0C76743B617E12A64820 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Vitals.swift"; sourceTree = "<group>"; };
 		9F57836F2C7A9B1047326AF1 /* Viridis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viridis.swift"; sourceTree = "<group>"; };
 		925623A77CBA453D1DCBC89C /* Gzip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Gzip.swift"; sourceTree = "<group>"; };
+		75AAAC32661B48A631296209 /* SpikeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpikeMenu.swift"; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
 		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
@@ -72,6 +74,7 @@
 				5C4C0C76743B617E12A64820 /* Vitals.swift */,
 				9F57836F2C7A9B1047326AF1 /* Viridis.swift */,
 				925623A77CBA453D1DCBC89C /* Gzip.swift */,
+				75AAAC32661B48A631296209 /* SpikeMenu.swift */,
 				9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */,
 				1C35F1528A85321526664EFB /* Info.plist */,
 				FA1EA5780940B5B8F774A00E /* opus */,
@@ -168,6 +171,7 @@
 				90E549E2A30949199198FC09 /* Vitals.swift in Sources */,
 				69D646D0771B72D36CA66784 /* Viridis.swift in Sources */,
 				2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */,
+				2293BEDBD7549587BB6769F6 /* SpikeMenu.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

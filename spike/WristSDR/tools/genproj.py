@@ -17,6 +17,7 @@ SOURCES = [
     "WristSDRApp.swift", "ContentView.swift", "UberClient.swift",
     "SignalProcessor.swift", "WaterfallBuffer.swift", "OpusDecoder.swift",
     "WatchAudio.swift", "AudioSocket.swift", "Vitals.swift", "Viridis.swift", "Gzip.swift",
+    "SpikeMenu.swift",
 ]
 
 def uid(s):

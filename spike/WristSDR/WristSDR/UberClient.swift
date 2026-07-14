@@ -108,6 +108,24 @@ final class UberClient: ObservableObject {
   /// The predicted view, exactly as the phone does it: gestures must move the picture NOW,
   /// not one round-trip later.
   private var viewCenterHz: Double = 0
+
+  /// SPECTRUM ALIGNMENT ACROSS A RECONNECT.
+  ///
+  /// Every binary frame carries its own centre `freq`, so the centre is always right. The
+  /// SPAN it is drawn at is `binBandwidth`, which arrives SEPARATELY in a `config` JSON
+  /// message. On a fresh socket the two are briefly out of step: binary rows can land before
+  /// the new config does, so they get painted at the PREVIOUS session's scale — signals show
+  /// up in the wrong place until config catches up ("wrong, then snaps right").
+  ///
+  /// So gate the paint: bump `specSubscribeSeq` every time we (re)subscribe, stamp
+  /// `specConfigSeq` when a config arrives, and don't paint a row until the two match — the
+  /// scale we would draw with is the scale the server just confirmed. Frames are still
+  /// COUNTED (the watchdog needs that); we simply hold the picture until it is trustworthy.
+  private var specSubscribeSeq = 0
+  private var specConfigSeq = -1
+  /// Fail-open: if the server never volunteers a config, don't blank forever. After this many
+  /// gated frames (~2s at 10fps) accept the scale we have and paint.
+  private var gatedFrames = 0
   private var viewBinBw: Double = 0
 
   private var frameCount = 0
@@ -447,6 +465,17 @@ final class UberClient: ObservableObject {
 
     centerHz = freq
 
+    // GATE ON A FRESH CONFIG. Until the server has confirmed the scale for THIS subscription,
+    // any row we draw would use a span left over from the last one — the reconnect-misalignment
+    // bug. Hold the paint (frames are already counted above, so the watchdog still sees life).
+    // Fail open after ~2s so a server that never re-sends config can't blank us forever.
+    if specConfigSeq != specSubscribeSeq {
+      gatedFrames += 1
+      if gatedFrames < 20 { return }
+      specConfigSeq = specSubscribeSeq          // give up waiting; draw with what we have
+    }
+    gatedFrames = 0
+
     // ── THE COST JR PAYS. Unwrap, then the full DSP, then the paint. Every frame.
     let n = bins.count
     guard n > 1 else { return }
@@ -504,6 +533,8 @@ final class UberClient: ObservableObject {
     if let bc = j["binCount"] as? Int { binCount = bc }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }
+    // The server has confirmed the scale for the current subscription — rows may paint now.
+    specConfigSeq = specSubscribeSeq
     if viewBinBw == 0, binBandwidth > 0 {
       viewBinBw = binBandwidth
       viewCenterHz = centerHz
@@ -524,6 +555,10 @@ final class UberClient: ObservableObject {
   private func sendView(_ freq: Double, _ binBw: Double) {
     viewCenterHz = freq
     viewBinBw = binBw
+    // New subscription state — hold the paint until the server confirms the scale (see the
+    // gate in onSpectrumBinary). Reset the fail-open counter for this fresh wait.
+    specSubscribeSeq &+= 1
+    gatedFrames = 0
     let msg: [String: Any] = ["type": "zoom",
                               "frequency": Int(freq.rounded()),
                               "binBandwidth": binBw]
@@ -609,6 +644,16 @@ final class UberClient: ObservableObject {
   }
 
   func setMode(_ m: String) { mode = m; sendTune() }
+
+  /// Absolute tune, for the numpad — jump straight from 648 kHz AM to the 40m band
+  /// without spinning the crown across 6 MHz.
+  func tuneTo(_ hz: Double) {
+    let f = max(10_000, min(30_000_000, hz))
+    guard f != frequency else { return }
+    frequency = f
+    sendTune()
+    sendView(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
+  }
 
   /// FRAME RATE, in our back pocket.
   ///

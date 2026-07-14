@@ -6,7 +6,7 @@
 	<integer>13</integer>
 	<key>logs</key>
 	<dict>
-		<key>29B6C866-87AA-41F6-A3AA-4553A9EED959</key>
+		<key>DF19A77C-D9D9-4BEA-8541-54B64DCD1253</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -15,17 +15,17 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>29B6C866-87AA-41F6-A3AA-4553A9EED959.xcactivitylog</string>
+			<string>DF19A77C-D9D9-4BEA-8541-54B64DCD1253.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
 			<dict>
 				<key>highLevelStatus</key>
-				<string>W</string>
+				<string>E</string>
 				<key>totalNumberOfAnalyzerIssues</key>
 				<integer>0</integer>
 				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
+				<integer>2</integer>
 				<key>totalNumberOfTestFailures</key>
 				<integer>0</integer>
 				<key>totalNumberOfWarnings</key>
@@ -40,15 +40,15 @@
 			<key>signature</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>805760754.68534195</real>
+			<real>805762485.13911605</real>
 			<key>timeStoppedRecording</key>
-			<real>805760759.53880298</real>
+			<real>805762488.36925602</real>
 			<key>title</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>29B6C866-87AA-41F6-A3AA-4553A9EED959</string>
+			<string>DF19A77C-D9D9-4BEA-8541-54B64DCD1253</string>
 		</dict>
-		<key>2F894C1F-EDBB-48DB-86B0-F12B99B57FBB</key>
+		<key>FC8850A7-5CC2-46E3-81CC-2268CE389C86</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -57,7 +57,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>2F894C1F-EDBB-48DB-86B0-F12B99B57FBB.xcactivitylog</string>
+			<string>FC8850A7-5CC2-46E3-81CC-2268CE389C86.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -82,55 +82,13 @@
 			<key>signature</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>timeStartedRecording</key>
-			<real>805760872.64517796</real>
+			<real>805762509.77279103</real>
 			<key>timeStoppedRecording</key>
-			<real>805760876.939219</real>
+			<real>805762514.94291699</real>
 			<key>title</key>
 			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
 			<key>uniqueIdentifier</key>
-			<string>2F894C1F-EDBB-48DB-86B0-F12B99B57FBB</string>
-		</dict>
-		<key>5313E4F7-5A9B-45ED-80E2-02E5973C645A</key>
-		<dict>
-			<key>className</key>
-			<string>IDECommandLineBuildLog</string>
-			<key>documentTypeString</key>
-			<string>&lt;nil&gt;</string>
-			<key>domainType</key>
-			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
-			<key>fileName</key>
-			<string>5313E4F7-5A9B-45ED-80E2-02E5973C645A.xcactivitylog</string>
-			<key>hasPrimaryLog</key>
-			<true/>
-			<key>primaryObservable</key>
-			<dict>
-				<key>highLevelStatus</key>
-				<string>W</string>
-				<key>totalNumberOfAnalyzerIssues</key>
-				<integer>0</integer>
-				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
-				<key>totalNumberOfTestFailures</key>
-				<integer>0</integer>
-				<key>totalNumberOfWarnings</key>
-				<integer>4</integer>
-			</dict>
-			<key>schemeIdentifier-containerName</key>
-			<string>WristSDR project</string>
-			<key>schemeIdentifier-schemeName</key>
-			<string>WristSDR</string>
-			<key>schemeIdentifier-sharedScheme</key>
-			<integer>1</integer>
-			<key>signature</key>
-			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
-			<key>timeStartedRecording</key>
-			<real>805761245.24259305</real>
-			<key>timeStoppedRecording</key>
-			<real>805761249.93169498</real>
-			<key>title</key>
-			<string>Building project WristSDR with scheme WristSDR and configuration Release</string>
-			<key>uniqueIdentifier</key>
-			<string>5313E4F7-5A9B-45ED-80E2-02E5973C645A</string>
+			<string>FC8850A7-5CC2-46E3-81CC-2268CE389C86</string>
 		</dict>
 	</dict>
 </dict>
