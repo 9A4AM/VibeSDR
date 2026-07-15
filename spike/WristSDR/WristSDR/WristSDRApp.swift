@@ -1,24 +1,31 @@
 import SwiftUI
 
-/// WristSDR — the VibeSDR JR feasibility spike.
+/// WristSDR — the VibeSDR JR standalone wrist receiver.
 ///
 /// A DIRECT UberSDR client running entirely on the watch: its own sockets, its own DSP,
 /// its own Opus decode, its own audio. No phone in the chain at any point.
 ///
-/// It exists to answer one question that no amount of reasoning can settle — the shipped
-/// companion app costs ~34% of a core just to DRAW rows the phone has already computed, and
-/// JR would add the network link, the spectrum DSP and the audio decode on top of that.
-/// Either the watch can carry all three inside its thermal and battery budget or it cannot,
-/// and the only honest way to find out is to build it and look at the number.
+/// The UI is a pixel-faithful clone of the shipping COMPANION watch app (waterfall, spectrum
+/// trace, orange VFO, Sonar Green palette, control menu, numpad), but wired to `SpikeLink` —
+/// a `WatchLink`-shaped adapter over the spike's own `UberClient` — instead of a WCSession
+/// pipe to a phone.
 ///
-/// Deliberately a separate Xcode project with its own bundle identifier, so it cannot
-/// collide with VibeSDR or its watch app on the device — you can have both installed and
-/// they will not know about each other.
+/// A separate Xcode project with its own bundle identifier, so it cannot collide with VibeSDR
+/// or its watch app on the device.
 @main
 struct WristSDRApp: App {
+  @StateObject private var link = SpikeLink()
+
   var body: some Scene {
     WindowGroup {
-      ContentView()
+      // NavigationStack so the numpad and control menu can be PUSHED, exactly as the
+      // companion does — a sheet's mandatory header steals ~100pt on a watch.
+      NavigationStack {
+        ContentView()
+          .environmentObject(link)
+          .navigationBarHidden(true)
+      }
+      .onAppear { link.start() }
     }
   }
 }

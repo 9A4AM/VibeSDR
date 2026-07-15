@@ -39,7 +39,13 @@ final class UberClient: ObservableObject {
   /// with no actor isolation. The buffer itself is built for this: rows go in from the data
   /// path, pixels come out on the render clock, and it has been doing that on the wrist for
   /// weeks.
-  nonisolated(unsafe) let waterfall = WaterfallBuffer()
+  nonisolated(unsafe) let waterfall: WaterfallBuffer
+
+  /// The waterfall buffer is INJECTED by `SpikeLink` so the adapter and the client share one
+  /// instance — the processed rows the client pushes land in the exact buffer the UI draws.
+  init(waterfall: WaterfallBuffer = WaterfallBuffer()) {
+    self.waterfall = waterfall
+  }
 
   /// A STABLE session id, persisted across launches.
   ///
@@ -135,7 +141,7 @@ final class UberClient: ObservableObject {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   func start() {
-    waterfall.setLUT(Viridis.lut)
+    // The LUT (Sonar Green) is set by SpikeLink on the shared buffer before start().
     waterfall.contrast = 0          // the DSP does the contrast; the buffer just paints
     waterfall.brightness = 0
     proc.autoContrast = 5           // 10 (UberSDR's own) crushes the noise floor to black
@@ -513,7 +519,7 @@ final class UberClient: ObservableObject {
   /// 0.625s: dialled in by ear against the buzzer (UVB-76). The audio cushion breathes a
   /// little with network jitter, so no fixed delay is always perfect — this is the value that
   /// minimises the average error (0.75 read slightly late, 0.5 slightly early).
-  private let spectrumDelay: Double = 0.625
+  private let spectrumDelay: Double = 0.35
   /// True while the delay buffer is refilling after a resume — nothing old enough to draw
   /// yet, so the UI says "syncing" rather than showing a frozen picture.
   @Published var spectrumSyncing = false
@@ -573,9 +579,40 @@ final class UberClient: ObservableObject {
     if let cf = j["centerFreq"] as? Double { centerHz = cf }
     // The server has confirmed the scale for the current subscription — rows may paint now.
     specConfigSeq = specSubscribeSeq
+
+    // VFO-LOCKED CENTRE. drawVFO puts the needle at the display centre, so the view must stay
+    // centred on the tuned frequency. A config whose centre has drifted from it — the wide
+    // default a FRESH session starts at (spectrum shows mid-band with the needle stuck centre
+    // until a zoom nudges it, the "starts centre not at 648 kHz" bug), or a reset — must be
+    // forced back to the VFO. The bin-width tolerance absorbs the server snapping the centre
+    // to its bin grid, so a legitimately-acked centre doesn't ping-pong.
+    if abs(centerHz - frequency) > max(binBandwidth, 1) {
+      sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
+      return
+    }
+
+    // PRESERVE THE ZOOM ACROSS A RECONNECT. A fresh/reconnected server session starts at
+    // FULL SPAN, so a config that arrives at a different scale than the zoom we want — with
+    // no request of ours just sent — is a session reset, NOT a real change. Re-assert our
+    // view instead of adopting the wide default (the "waterfall snaps zoomed-out after a
+    // blip" bug — present on the UberSDR site too). Ported from the phone client's onConfig
+    // unsolicited-change handling (UberSDRClient.ts).
+    //
+    // The recent-send guard is essential: the server snaps binBandwidth to a ladder, so the
+    // config that ACKs our OWN zoom can differ slightly from what we asked. Adopt that (it's
+    // the truth); only re-assert when the mismatch is NOT the echo of a request we just made.
+    let recentlyRequested = ProcessInfo.processInfo.systemUptime - lastViewSentAt < 1.5
     if viewBinBw == 0, binBandwidth > 0 {
-      viewBinBw = binBandwidth
+      viewBinBw = binBandwidth          // first config of the session — adopt
       viewCenterHz = centerHz
+    } else if recentlyRequested {
+      viewBinBw = binBandwidth          // ack of our own zoom (ladder-snapped) — adopt
+      viewCenterHz = centerHz
+    } else if viewBinBw > 0, abs(binBandwidth - viewBinBw) > viewBinBw * 1e-3 {
+      // Unsolicited reset to full span after a blip — force our zoom back and hold the paint
+      // (sendView bumps the subscribe seq, so the gate won't draw the wide frame).
+      sendView(viewCenterHz > 0 ? viewCenterHz : frequency, viewBinBw)
+      return
     }
 
     // RE-ASSERT THE RATE. A binBandwidth change means the session may have MIGRATED between
@@ -590,9 +627,40 @@ final class UberClient: ObservableObject {
   }
   private var lastRateBinBw: Double = 0
 
+  /// When we last asked the server for a view. A config arriving within a short window of
+  /// this is the ACK of our own request (possibly ladder-snapped) and must be adopted;
+  /// a config arriving OUTSIDE it at the wrong scale is an unsolicited reset to re-assert
+  /// against. See onSpectrumJSON.
+  private var lastViewSentAt: Double = 0
+
+  // ── Coalesced view sends (rapid gestures) ─────────────────────────────────────
+  private var pendingView: (freq: Double, binBw: Double)?
+  private var viewFlushWork: DispatchWorkItem?
+
+  /// For RAPID gestures (crown zoom, drum tune). Update the local view IMMEDIATELY — so the
+  /// zoom factor compounds detent-to-detent and the needle math stays right — but DEBOUNCE the
+  /// network send + the paint gate. A fast spin fired one sendView per detent, each
+  /// re-subscribing and re-arming the paint gate, which froze the waterfall mid-spin then
+  /// snapped it ("gets stuck, then jumps"). This collapses the flurry into one clean
+  /// re-subscribe once the gesture settles.
+  private func sendViewCoalesced(_ freq: Double, _ binBw: Double) {
+    viewCenterHz = freq
+    viewBinBw = binBw
+    pendingView = (freq, binBw)
+    viewFlushWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, let p = self.pendingView else { return }
+      self.pendingView = nil
+      self.sendView(p.freq, p.binBw)
+    }
+    viewFlushWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+  }
+
   private func sendView(_ freq: Double, _ binBw: Double) {
     viewCenterHz = freq
     viewBinBw = binBw
+    lastViewSentAt = ProcessInfo.processInfo.systemUptime
     // New subscription state — hold the paint until the server confirms the scale (see the
     // gate in onSpectrumBinary). Reset the fail-open counter for this fresh wait.
     specSubscribeSeq &+= 1
@@ -678,8 +746,12 @@ final class UberClient: ObservableObject {
     guard f != frequency else { return }
     frequency = f
     sendTune()
-    sendView(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
+    sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
+
+  /// App playback gain (0…1), forwarded to the audio engine's master mixer — the only volume a
+  /// watch app can actually set (no system-volume API on watchOS).
+  func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
 
   func setMode(_ m: String) {
     guard m != mode else { return }
@@ -702,7 +774,7 @@ final class UberClient: ObservableObject {
     guard f != frequency else { return }
     frequency = f
     sendTune()
-    sendView(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
+    sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
 
   /// FRAME RATE, in our back pocket.
@@ -732,7 +804,13 @@ final class UberClient: ObservableObject {
     let factor = pow(2.0, -Double(delta) / 6.0)
     let n = Double(max(binCount, 256))
     let bb = max(6_000 / n, min(viewBinBw * factor, 30_000_000 / n))
-    sendView(viewCenterHz != 0 ? viewCenterHz : frequency, bb)
+    // Anchor the zoom on the TUNED frequency, not viewCenterHz. viewCenterHz gets
+    // overwritten by the server's reported frame centre (see line ~578), which can
+    // drift a touch from where we're actually tuned — so zooming off viewCenterHz
+    // pulled the spectrum to a stale centre and it only snapped back on the next
+    // tune nudge (which resets viewCenterHz to the truth). The VFO is always the
+    // source of truth here, exactly as the phone anchors zoom on the tuned freq.
+    sendViewCoalesced(frequency, bb)
   }
 
   var spanHz: Double { binBandwidth * Double(max(binCount, 1)) }

@@ -15,9 +15,12 @@
 		BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA18D942D5BEDA2D586530E /* WatchAudio.swift */; };
 		427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */; };
 		90E549E2A30949199198FC09 /* Vitals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4C0C76743B617E12A64820 /* Vitals.swift */; };
-		69D646D0771B72D36CA66784 /* Viridis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F57836F2C7A9B1047326AF1 /* Viridis.swift */; };
 		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
-		2293BEDBD7549587BB6769F6 /* SpikeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75AAAC32661B48A631296209 /* SpikeMenu.swift */; };
+		27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967BF6CB775E6B40E9E614BA /* SpikeLink.swift */; };
+		AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0192327755EB9D29ED557A5 /* ControlMenu.swift */; };
+		F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82634AF74EECC78CED58ED93 /* NumpadView.swift */; };
+		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
+		39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */; };
 		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
 /* End PBXBuildFile section */
 
@@ -31,9 +34,12 @@
 		DDA18D942D5BEDA2D586530E /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WatchAudio.swift"; sourceTree = "<group>"; };
 		95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioSocket.swift"; sourceTree = "<group>"; };
 		5C4C0C76743B617E12A64820 /* Vitals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Vitals.swift"; sourceTree = "<group>"; };
-		9F57836F2C7A9B1047326AF1 /* Viridis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viridis.swift"; sourceTree = "<group>"; };
 		925623A77CBA453D1DCBC89C /* Gzip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Gzip.swift"; sourceTree = "<group>"; };
-		75AAAC32661B48A631296209 /* SpikeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpikeMenu.swift"; sourceTree = "<group>"; };
+		967BF6CB775E6B40E9E614BA /* SpikeLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpikeLink.swift"; sourceTree = "<group>"; };
+		A0192327755EB9D29ED557A5 /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlMenu.swift"; sourceTree = "<group>"; };
+		82634AF74EECC78CED58ED93 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NumpadView.swift"; sourceTree = "<group>"; };
+		7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CpuMeter.swift"; sourceTree = "<group>"; };
+		F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VolumeControl.swift"; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
 		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
@@ -72,9 +78,12 @@
 				DDA18D942D5BEDA2D586530E /* WatchAudio.swift */,
 				95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */,
 				5C4C0C76743B617E12A64820 /* Vitals.swift */,
-				9F57836F2C7A9B1047326AF1 /* Viridis.swift */,
 				925623A77CBA453D1DCBC89C /* Gzip.swift */,
-				75AAAC32661B48A631296209 /* SpikeMenu.swift */,
+				967BF6CB775E6B40E9E614BA /* SpikeLink.swift */,
+				A0192327755EB9D29ED557A5 /* ControlMenu.swift */,
+				82634AF74EECC78CED58ED93 /* NumpadView.swift */,
+				7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */,
+				F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */,
 				9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */,
 				1C35F1528A85321526664EFB /* Info.plist */,
 				FA1EA5780940B5B8F774A00E /* opus */,
@@ -169,9 +178,12 @@
 				BDECEB72319CA3A97B96D106 /* WatchAudio.swift in Sources */,
 				427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */,
 				90E549E2A30949199198FC09 /* Vitals.swift in Sources */,
-				69D646D0771B72D36CA66784 /* Viridis.swift in Sources */,
 				2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */,
-				2293BEDBD7549587BB6769F6 /* SpikeMenu.swift in Sources */,
+				27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */,
+				AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */,
+				F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */,
+				84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */,
+				39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

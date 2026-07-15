@@ -16,8 +16,10 @@ TEAM = "6PV2X6THHM"
 SOURCES = [
     "WristSDRApp.swift", "ContentView.swift", "UberClient.swift",
     "SignalProcessor.swift", "WaterfallBuffer.swift", "OpusDecoder.swift",
-    "WatchAudio.swift", "AudioSocket.swift", "Vitals.swift", "Viridis.swift", "Gzip.swift",
-    "SpikeMenu.swift",
+    "WatchAudio.swift", "AudioSocket.swift", "Vitals.swift", "Gzip.swift",
+    # The companion UI, ported and rewired to SpikeLink (the WatchLink-shaped adapter).
+    "SpikeLink.swift", "ControlMenu.swift", "NumpadView.swift", "CpuMeter.swift",
+    "VolumeControl.swift",   # native WKInterfaceVolumeControl bridge
 ]
 
 def uid(s):

@@ -60,7 +60,7 @@ final class WatchAudio {
   ///
   /// Tuning latency is the thing this costs, and it is recoverable later: flush the queue on
   /// retune and re-prime, so the dial stays instant while steady listening stays solid.
-  private let targetQueued: Double = 1.00
+  private let targetQueued: Double = 0.55
   /// Below this we are about to run dry — top back up to the cushion.
   private let floorQueued: Double = 0.20
   /// Above this, a delivery burst is just building latency for no benefit. Drop it.
@@ -407,6 +407,15 @@ final class WatchAudio {
   /// counter, no lock — that is a data race, and it is the kind that corrupts rather than
   /// merely miscounts. AVAudioEngine's graph mutation is not thread-safe either.
   private let q = DispatchQueue(label: "wristsdr.audio")
+
+  /// App output gain, 0…1. watchOS exposes NO API to set the SYSTEM volume slider, so on the
+  /// standalone watch "volume" means the engine's master output gain — which genuinely changes
+  /// how loud the app plays (there's no phone here to defer real volume to, unlike the
+  /// companion). Set on the audio queue alongside the other node ops.
+  func setVolume(_ v: Float) {
+    let g = max(0, min(1, v))
+    q.async { [weak self] in self?.engine.mainMixerNode.outputVolume = g }
+  }
 
   /// Feed one decoded packet. Interleaved Int16 at the server's rate.
   func play(pcm: [Int16], rate: Int32, channels: Int32) {
