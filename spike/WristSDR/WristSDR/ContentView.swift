@@ -123,6 +123,25 @@ struct ContentView: View {
   /// the ControlMenu; the same @AppStorage key drives both.
   @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
 
+  // ── Control lock (Walkman-style hold) ─────────────────────────────────────────
+  /// When locked, the app ignores its OWN inputs — crown (tune/zoom), the long-press menu,
+  /// and the frequency tap — so an accidental wrist-nudge can't retune. The padlock stays
+  /// tappable to unlock. OS gestures (side button, crown-press-home) are deliberately NOT
+  /// blocked. Session-only (not persisted): a fresh launch is always unlocked.
+  @State private var locked = false
+  @State private var lockPill: String? = nil
+  @State private var lockPillWork: DispatchWorkItem?
+
+  private func toggleLock() {
+    locked.toggle()
+    WKInterfaceDevice.current().play(locked ? .stop : .click)
+    lockPill = locked ? "Controls locked" : "Controls unlocked"
+    lockPillWork?.cancel()
+    let work = DispatchWorkItem { withAnimation(.easeOut(duration: 0.3)) { lockPill = nil } }
+    lockPillWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+  }
+
   /// How far you must turn for one step. watchOS's OWN sensitivity, not a divisor of
   /// our own: it changes how many detents a rotation produces, so the HAPTIC CLICKS
   /// STAY IN STEP WITH THE TUNING. (A divisor was tried — it kept 1 click = 1 detent
@@ -267,13 +286,43 @@ struct ContentView: View {
         // belonged all along.
         bandLabel
         ticker
-        Button { showNumpad = true } label: { readout }
+        Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
       }
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
 
-      if crownMode != .tune { crownOverlay }
+      if crownMode != .tune && !locked { crownOverlay }
+
+      // Control lock (Walkman hold): a floating padlock, bottom-left above the ticker. Always
+      // tappable — it's the one control that still works while locked.
+      VStack {
+        Spacer()
+        HStack {
+          Button(action: toggleLock) {
+            Image(systemName: locked ? "lock.fill" : "lock.open")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(locked ? .orange : .white.opacity(0.85))
+              .frame(width: 30, height: 30)
+              .background(Circle().fill(.black.opacity(0.55)))
+          }
+          .buttonStyle(.plain)
+          Spacer()
+        }
+        .padding(.leading, 8)
+        .padding(.bottom, 78)   // clear of the ticker/readout
+      }
+
+      // Transient confirmation pill, centred — same language as the crown HUDs.
+      if let lockPill {
+        Text(lockPill)
+          .font(.system(size: 13, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 13).padding(.vertical, 7)
+          .background(.black.opacity(0.78), in: Capsule())
+          .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
+          .transition(.opacity)
+      }
 
       // THE COACH, once. Gated on everGotRow so it lands on a WORKING waterfall — a
       // tutorial over a black boot screen teaches you the app is broken. It also sits
@@ -353,7 +402,7 @@ struct ContentView: View {
       //
       // Swallow the delta but KEEP tracking lastDetent, or the accumulated rotation
       // would be applied in one lump the moment the screen closes.
-      guard !showMenu && !showNumpad else { return }
+      guard !showMenu && !showNumpad && !locked else { return }
 
       switch crownMode {
       case .tune: link.tune(delta: delta)
@@ -371,8 +420,9 @@ struct ContentView: View {
     // SwiftUI focus lets that control become the sole crown consumer. Every other mode keeps
     // the crown here for tuning/zoom/brightness/contrast.
     .onChange(of: crownMode) { _, m in crownFocused = (m != .volume) }
-    // Long-press anywhere on the waterfall for the control grid.
+    // Long-press anywhere on the waterfall for the control grid. Suppressed while locked.
     .onLongPressGesture(minimumDuration: 0.45) {
+      guard !locked else { return }
       WKInterfaceDevice.current().play(.click)
       showMenu = true
     }
@@ -462,7 +512,9 @@ struct ContentView: View {
       _ = frame        // read so SwiftUI must redraw; see `driver`
 
       let wf = link.waterfall
-      wf.tick(at: ProcessInfo.processInfo.systemUptime)
+      let now = ProcessInfo.processInfo.systemUptime
+      wf.tickTrace(at: now)
+      wf.tickScroll(at: now)   // both every frame — smooth scroll restored (throttling it neither cut CPU nor was worth the judder)
 
       // The spectrum gets a BAND of its own — the top third — and the waterfall
       // takes the rest. A floating overlay was cheaper in pixels, but the trace has

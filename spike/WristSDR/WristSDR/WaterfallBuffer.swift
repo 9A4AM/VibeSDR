@@ -301,6 +301,7 @@ final class WaterfallBuffer {
     subStep = 0
     accum = 0
     lastTick = 0
+    scrollLastTick = 0
     lastArrivalAt = 0
     arrivals = 0
     prefilling = true
@@ -346,12 +347,28 @@ final class WaterfallBuffer {
     }
   }
 
-  func tick(at now: CFTimeInterval) {
+  /// Advance the TRACE only. Called EVERY render frame so the spectrum trace stays smooth —
+  /// it's cheap (an EMA + a Path). The expensive part (the waterfall image rebuild) is split
+  /// out into tickScroll so it can run slower.
+  func tickTrace(at now: CFTimeInterval) {
     defer { lastTick = now }
-    guard lastTick > 0, interval > 0 else { return }
+    guard lastTick > 0 else { return }
     let dt = min(0.25, now - lastTick)   // a long gap (app resumed) must not fling
     if dt > 0 { renderFps += 0.1 * (1.0 / dt - renderFps) }
     advanceTrace(dt: dt)
+  }
+
+  private var scrollLastTick: CFTimeInterval = 0
+
+  /// Advance the WATERFALL scroll (emit synthesised sub-rows → invalidate the image cache =
+  /// the CGImage REBUILD, the render hotspot). Called at a REDUCED rate: it uses its OWN clock
+  /// so the scroll keeps pace in slightly bigger steps, which is invisible next to the smooth
+  /// trace but halves the image rebuilds. (Waterfall smoothness matters far less than the
+  /// trace's — the spectrum needs to stay smooth, the scroll does not.)
+  func tickScroll(at now: CFTimeInterval) {
+    defer { scrollLastTick = now }
+    guard scrollLastTick > 0, interval > 0 else { return }
+    let dt = min(0.25, now - scrollLastTick)
 
     // Hold still until the buffer has banked enough to drain smoothly.
     if prefilling {
@@ -360,7 +377,7 @@ final class WaterfallBuffer {
     }
 
     // Drain rate tracks queue pressure: run slightly fast when backing up, slow
-    // when running dry. Keeps the scroll smooth across a feed whose true rate
+    // when running dry. Keeps the scroll pacing across a feed whose true rate
     // drifts (foreground vs locked) without ever stalling or visibly fast-forwarding.
     let depth = Double(queue.count) + (target != nil ? 1 : 0)
     let rate: Double

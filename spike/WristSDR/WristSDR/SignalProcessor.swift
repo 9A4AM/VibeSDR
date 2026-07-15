@@ -42,6 +42,10 @@ final class SignalProcessor {
   private var maxHistory: [(v: Double, t: Double)] = []
   private(set) var actualMinDb: Double = -120
   private(set) var actualMaxDb: Double = -20
+  /// Signal readout, near-free from the auto-range pass: passband (centre-window) peak minus
+  /// the noise floor. snrDb is the SNR in dB; level is that mapped to a 0…1 bar fill.
+  private(set) var snrDb: Double = 0
+  private(set) var level: Double = 0
   private var prevCenterHz: Double = 0
 
   /// One raw dBFS frame in, one 0–255 intensity row out.
@@ -70,6 +74,7 @@ final class SignalProcessor {
     for i in 0..<300 { hist[i] = 0 }
     var absoluteMax = -Double.infinity
     var count = 0
+    var floorDb = -120.0
     for i in 0..<n {
       let db = Double(bins[i])
       guard db.isFinite else { continue }
@@ -82,7 +87,6 @@ final class SignalProcessor {
     if count > 0 {
       let target = Int(Double(count) * noisePercentile)
       var acc = 0
-      var floorDb: Double = -120
       for b in 0..<300 {
         acc += Int(hist[b])
         if acc > target { floorDb = Double(b - 280); break }
@@ -107,6 +111,20 @@ final class SignalProcessor {
       actualMaxDb = mid + 5
     }
     let dbRange = actualMaxDb - actualMinDb
+
+    // ── SNR readout (near-free): peak of the PASSBAND — a small window around the centre,
+    //    since we're VFO-locked so the tuned signal sits dead centre — minus the noise floor
+    //    just found. A handful of bin reads on top of the histogram we already ran.
+    let cmid = n / 2
+    let cwin = max(3, n / 24)
+    var pbPeak = -Double.infinity
+    for i in max(0, cmid - cwin)..<min(n, cmid + cwin + 1) {
+      let d = Double(bins[i]); if d.isFinite, d > pbPeak { pbPeak = d }
+    }
+    let snr = (pbPeak.isFinite ? pbPeak : absoluteMax) - floorDb
+    // Light EMA so the bar doesn't jitter frame to frame.
+    snrDb = snrDb * 0.7 + snr * 0.3
+    level = min(1, max(0, snrDb / 40))          // 0–40 dB SNR → 0…1 fill
 
     dbAvg = bins
 

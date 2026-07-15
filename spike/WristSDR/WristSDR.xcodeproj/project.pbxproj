@@ -21,6 +21,8 @@
 		F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82634AF74EECC78CED58ED93 /* NumpadView.swift */; };
 		84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */; };
 		39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */; };
+		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
+		EFFBFE3DA8A548A9B1A5906C /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D363E607DCD2E02F223F5B09 /* BandPlan.swift */; };
 		B4FC4C2FBF67F067BBF9A574 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D2612D8B2F2F9E65D120DA64 /* libopus.a */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +42,8 @@
 		82634AF74EECC78CED58ED93 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NumpadView.swift"; sourceTree = "<group>"; };
 		7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CpuMeter.swift"; sourceTree = "<group>"; };
 		F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VolumeControl.swift"; sourceTree = "<group>"; };
+		1D4434780FAA0BCA12A4738A /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BandwidthView.swift"; sourceTree = "<group>"; };
+		D363E607DCD2E02F223F5B09 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BandPlan.swift"; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "WristSDR-Bridging-Header.h"; sourceTree = "<group>"; };
 		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
@@ -84,6 +88,8 @@
 				82634AF74EECC78CED58ED93 /* NumpadView.swift */,
 				7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */,
 				F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */,
+				1D4434780FAA0BCA12A4738A /* BandwidthView.swift */,
+				D363E607DCD2E02F223F5B09 /* BandPlan.swift */,
 				9A5D67A7413AEF7C6E981725 /* WristSDR-Bridging-Header.h */,
 				1C35F1528A85321526664EFB /* Info.plist */,
 				FA1EA5780940B5B8F774A00E /* opus */,
@@ -184,6 +190,8 @@
 				F355C6C0E98F807BB2349430 /* NumpadView.swift in Sources */,
 				84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */,
 				39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */,
+				4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */,
+				EFFBFE3DA8A548A9B1A5906C /* BandPlan.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

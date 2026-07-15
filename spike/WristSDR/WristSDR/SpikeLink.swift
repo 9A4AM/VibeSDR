@@ -108,6 +108,16 @@ final class SpikeLink: ObservableObject {
     // before the first frame lands.
     frequency = client.frequency
     mode = client.mode
+    updateBand()
+  }
+
+  /// Band label + boundary edges for the ticker, from the tuned frequency (Region 1 HF plan).
+  private func updateBand() {
+    let b = BandPlan.band(for: frequency)
+    bandName = b?.name ?? ""
+    bandColor = b?.color
+    bandLo = b?.lo ?? 0
+    bandHi = b?.hi ?? 0
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -123,10 +133,18 @@ final class SpikeLink: ObservableObject {
   func driverTick(now: Double) {
     client.drainSpectrum(now: now)
 
-    if frequency != client.frequency { frequency = client.frequency }
+    if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode { mode = client.mode }
     let sp = client.spanHz
     if span != sp { span = sp }
+    // Passband edges → the VFO's dashed LSB/USB lines (drawVFO), and the bandwidth UI.
+    if filtLo != client.bwLow { filtLo = client.bwLow }
+    if filtHi != client.bwHigh { filtHi = client.bwHigh }
+    // Signal meter — bar fill + SNR text, computed for free by the spectrum DSP. Round the
+    // text so it doesn't invalidate the view on sub-dB jitter.
+    if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
+    let mt = "\(Int(client.signalDb.rounded()))dB"
+    if meter != mt { meter = mt }
 
     // A new row was drawn → the spectrum is alive.
     if client.rowsPushed != lastRowsPushed {
@@ -190,6 +208,26 @@ final class SpikeLink: ObservableObject {
   }
 
   func setStep(_ hz: Double) { step = hz }
+
+  /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi
+  /// (which drive the VFO's dashed sideband lines).
+  func setBandwidth(_ low: Double, _ high: Double) {
+    client.setBandwidth(low, high)
+    filtLo = low; filtHi = high
+  }
+
+  /// Crown step per demod: fine for voice (0.1 kHz), coarse for wide FM. Hz.
+  func bwStep() -> Double {
+    switch mode {
+    case "wfm":               return 5_000
+    case "fm", "nfm":         return 500
+    default:                  return 100     // am/sam/usb/lsb/cw — 0.1 kHz
+    }
+  }
+
+  /// Symmetric-sideband modes default to SYNC ON (adjusting one edge mirrors the other);
+  /// SSB is asymmetric so it defaults OFF. The user can override either way.
+  var symmetricMode: Bool { !(mode == "usb" || mode == "lsb") }
 
   /// Absolute tune, from the numpad.
   func tune(toHz hz: Double) {

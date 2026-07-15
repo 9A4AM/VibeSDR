@@ -241,6 +241,7 @@ struct ControlMenu: View {
   @State private var showSteps = false
   @State private var showCrown = false
   @State private var showWrist = false
+  @State private var showBw = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
@@ -326,6 +327,8 @@ struct ControlMenu: View {
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+          // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
+          tile(name: "BW", value: bwLabel, h: h) { showBw = true }
           // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
           // running with the wrist down (costs power); the timed options drop it after N and
           // reconnect on the way back.
@@ -388,6 +391,15 @@ struct ControlMenu: View {
         showWrist = false; dismiss()
       }
     }
+    .sheet(isPresented: $showBw) {
+      BandwidthView().environmentObject(link)
+    }
+  }
+
+  /// Total passband width in kHz, for the BW tile readout.
+  private var bwLabel: String {
+    let k = (link.filtHi - link.filtLo) / 1000
+    return k >= 10 ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
   }
 
   /// Off (never drop) + the timed steps. Kept here so ContentView and the picker agree.

@@ -20,6 +20,8 @@ SOURCES = [
     # The companion UI, ported and rewired to SpikeLink (the WatchLink-shaped adapter).
     "SpikeLink.swift", "ControlMenu.swift", "NumpadView.swift", "CpuMeter.swift",
     "VolumeControl.swift",   # native WKInterfaceVolumeControl bridge
+    "BandwidthView.swift",   # LSB/USB passband crown editor
+    "BandPlan.swift",        # HF band plan → ticker label + dividers
 ]
 
 def uid(s):

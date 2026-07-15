@@ -20,11 +20,28 @@ final class UberClient: ObservableObject {
   @Published var status = "starting"
   @Published var frequency: Double = 648_000        // Radio Caroline
   @Published var mode = "am"
+  /// Passband edges as Hz offsets from the carrier (low negative = below). Mirrors the phone's
+  /// MODE_BANDWIDTHS server defaults; the UI edits them and setBandwidth pushes them.
+  @Published var bwLow: Double  = -5_000            // am default
+  @Published var bwHigh: Double =  5_000
+
+  /// Server-side per-mode defaults (websocket.go, verbatim — matches UberSDRClient.ts).
+  static let modeBW: [String: (low: Double, high: Double)] = [
+    "usb": (50, 2_700),      "lsb": (-2_700, -50),
+    "am":  (-5_000, 5_000),  "sam": (-5_000, 5_000),
+    "cwu": (-200, 200),      "cwl": (-200, 200),
+    "fm":  (-6_000, 6_000),  "nfm": (-5_000, 5_000),
+    "wfm": (-100_000, 100_000),
+  ]
   @Published var binCount = 0
   @Published var binBandwidth: Double = 0
   @Published var centerHz: Double = 0
   @Published var audioRoute = "—"
   @Published var audioLive = false
+  /// Signal readout from the spectrum DSP (near-free — see SignalProcessor). signalDb = SNR in
+  /// dB (for the meter text), signalLevel = 0…1 fill for the bar behind the frequency pill.
+  @Published var signalLevel: Double = 0
+  @Published var signalDb: Double = 0
   @Published var framesPerSec: Double = 0
   @Published var audioPerSec: Double = 0
 
@@ -498,6 +515,8 @@ final class UberClient: ObservableObject {
     for i in 0..<half { unwrapped[half + i] = bins[i] }
 
     let row = proc.process(unwrapped, centerHz: freq, bwHz: binBandwidth * Double(n))
+    signalLevel = proc.level      // SNR bar — computed for free inside process()
+    signalDb    = proc.snrDb
     let dec = decimate(row, to: WaterfallBuffer.width)
     // WaterfallBuffer DROPS rows that aren't exactly its width, silently. A blank waterfall
     // with a healthy frame count is exactly what that looks like.
@@ -753,9 +772,23 @@ final class UberClient: ObservableObject {
   /// watch app can actually set (no system-volume API on watchOS).
   func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
 
+  /// Set the passband edges (Hz offsets from the carrier) and push them to the server. Sent as
+  /// a `tune` message carrying bandwidthLow/High on the AUDIO socket — the exact message the
+  /// phone's native path emits (VibePowerModule.swift `sendWsJson(["type":"tune", ...])`).
+  func setBandwidth(_ low: Double, _ high: Double) {
+    bwLow = low
+    bwHigh = high
+    audioSock.send(json: ["type": "tune",
+                          "bandwidthLow":  Int(low.rounded()),
+                          "bandwidthHigh": Int(high.rounded())])
+  }
+
   func setMode(_ m: String) {
     guard m != mode else { return }
     mode = m
+    // A mode change resets the passband to that mode's server default (the fresh socket below
+    // applies the same default server-side; we just mirror it for the VFO lines / UI).
+    if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
     // REOPEN THE AUDIO SOCKET — do NOT just send a `tune`. The server builds its Opus
     // encoder ONCE, when the socket opens, at the sample rate that suits the mode (SSB is
     // narrower than AM/FM). A mid-session tune changes the DEMOD but not the encoder, so the
