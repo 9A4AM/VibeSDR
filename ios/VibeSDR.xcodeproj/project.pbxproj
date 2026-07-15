@@ -22,6 +22,7 @@
 		AA000002000000000000CC0D /* VibeSDRWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AA000002000000000000CC02 /* VibeSDRWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA000002000000000000DA11 /* VibeSDRWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA01 /* VibeSDRWatchApp.swift */; };
 		AA000002000000000000DA12 /* WatchLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA02 /* WatchLink.swift */; };
+		AA000002000000000000DA1C /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA0C /* CpuMeter.swift */; };
 		AA000002000000000000DA13 /* WaterfallBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA03 /* WaterfallBuffer.swift */; };
 		AA000002000000000000DA14 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA04 /* ContentView.swift */; };
 		AA000002000000000000DA17 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA07 /* NumpadView.swift */; };
@@ -52,6 +53,7 @@
 		AA000002000000000000CC02 /* VibeSDRWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibeSDRWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000002000000000000DA01 /* VibeSDRWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeSDRWatchApp.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA02 /* WatchLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLink.swift; sourceTree = "<group>"; };
+		AA000002000000000000DA0C /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CpuMeter.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA03 /* WaterfallBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterfallBuffer.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA04 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA05 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -199,6 +201,7 @@
 				AA000002000000000000DA0B /* AircraftView.swift */,
 				AA000002000000000000DA08 /* ControlMenu.swift */,
 				AA000002000000000000DA02 /* WatchLink.swift */,
+				AA000002000000000000DA0C /* CpuMeter.swift */,
 				AA000002000000000000DA03 /* WaterfallBuffer.swift */,
 				AA000002000000000000DA05 /* Assets.xcassets */,
 				AA000002000000000000DA06 /* Info.plist */,
@@ -503,6 +506,7 @@
 				AA000002000000000000DA1B /* AircraftView.swift in Sources */,
 				AA000002000000000000DA18 /* ControlMenu.swift in Sources */,
 				AA000002000000000000DA12 /* WatchLink.swift in Sources */,
+				AA000002000000000000DA1C /* CpuMeter.swift in Sources */,
 				AA000002000000000000DA13 /* WaterfallBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -63,6 +63,10 @@ enum LinkHint: Equatable {
 /// up there would collide with it.
 struct ContentView: View {
   @EnvironmentObject var link: WatchLink
+
+  // Developer CPU comparison badge (companion vs standalone JR). Gated by
+  // CpuMeter.enabled — turn OFF before any public release.
+  @StateObject private var cpuMeter = CpuMeter()
   @Environment(\.scenePhase) private var scenePhase
 
   /// Digital Crown position, in step-detents. We only ever read the DELTA out of
@@ -192,6 +196,25 @@ struct ContentView: View {
       // — so the number you'd reach for is on the screen you're already looking at.
       // pointer-events off: it must never eat a tap meant for the waterfall.
       topStrip
+
+      // Developer CPU badge, top-left (clear of the clock/battery on the right).
+      // Same measurement as the JR spike so companion vs standalone is directly
+      // comparable. Gated by CpuMeter.enabled — a comparison overlay, not a feature.
+      if CpuMeter.enabled {
+        VStack {
+          HStack {
+            Text(String(format: "%.0f%%", cpuMeter.cpu))
+              .font(.system(size: 11, weight: .semibold, design: .monospaced))
+              .foregroundStyle(.white.opacity(0.75))
+              .padding(.leading, 8)
+              .padding(.top, 21)
+            Spacer()
+          }
+          Spacer()
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+      }
 
       // DEGRADE, DON'T BLOCK.
       //
@@ -343,6 +366,7 @@ struct ContentView: View {
       crownFocused = true
       link.ping()          // tell the phone we're here — see below
       applyTone()
+      cpuMeter.start()
     }
     // The pill's clock. Rows tick this ~16/sec while all is well; when the rows are
     // the very thing that stopped, the 4/sec state echo keeps it running — which is
