@@ -439,15 +439,24 @@ const pm = StyleSheet.create({
   snr:     { fontSize: 9, textAlign: 'center' },
 });
 
-// ── Hamburger icon ────────────────────────────────────────────────────────────
+// ── Cog icon ──────────────────────────────────────────────────────────────────
+// Replaces the hamburger on the menu button. Once the ServersChip owns "leaving",
+// this button is honestly just settings — and a cog says so, where the hamburger
+// read as "exit" and hid the way back to the instance list. Colour matches the
+// row's other glyphs (t.btnText), not a hard white, so both themes stay coherent.
+// Authored in a 24×24 space (Feather "settings"); scale to the canvas.
+const COG_GEAR   = Skia.Path.MakeFromSVGString('M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z')!;
+const COG_CENTER = Skia.Path.MakeFromSVGString('M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z')!;
 
-function Hamburger({ color, lineW }: { color: string; lineW: number }) {
+function Cog({ size, color }: { size: number; color: string }) {
+  const k = size / 24;
   return (
-    <View style={{ gap: 3 }}>
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-      <View style={{ width: lineW, height: 1.5, borderRadius: 1, backgroundColor: color }} />
-    </View>
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
+      <Group transform={[{ scale: k }]}>
+        <Path path={COG_GEAR}   color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
+        <Path path={COG_CENTER} color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
+      </Group>
+    </Canvas>
   );
 }
 
@@ -578,7 +587,6 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const BAR_PAD_H  = s.r(12);
   const BTN_H      = s.r(44); // a11y minimum touch target (was 36 — misses)
   const ICON_SZ    = s.r(20);
-  const HBURG_W    = s.r(16);
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
@@ -662,7 +670,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         >
           {menuAsBack
             ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
-            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+            : <Cog size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
 
         {/* CHAT */}
@@ -762,7 +770,6 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const MODE_PAD_V = s.r(4);
   const PILL_GAP  = s.r(4);
   const ICON_SZ   = s.r(18);
-  const HBURG_W   = s.r(14);
   const CLOCK_FONT = s.f(7);
 
   return (
@@ -800,7 +807,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         >
           {menuAsBack
             ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }}>‹</Text>
-            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+            : <Cog size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
       </View>
 

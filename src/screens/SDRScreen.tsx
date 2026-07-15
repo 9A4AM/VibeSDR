@@ -84,6 +84,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
+import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
@@ -3823,19 +3824,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   // disabled back-gesture, and the menu — opening it to show the route back to
   // the instance list. Fail-safe: always skippable; a target that can't be
   // measured falls back to a centred card.
-  // A small render of the menu's instance section — shown in the tour instead of
-  // opening the real menu (a second Modal over the coachmark wedges iOS).
-  const menuMock = (
-    <View style={{ borderRadius: 9, borderWidth: 1, borderColor: 'rgba(255,229,102,0.30)', backgroundColor: 'rgba(0,0,0,0.45)', padding: 9, gap: 7 }}>
-      <Text style={{ color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible', fontSize: 9.5, letterSpacing: 2, marginBottom: 1 }}>☰  MENU</Text>
-      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>☆  SET DEFAULT</Text>
+  // A small render of the Servers chip's dropdown — shown in the tour instead of
+  // expanding the real chip (keeps the coachmark self-contained). This is the
+  // control that fixes the "I can't find the exit" feedback, so it gets the
+  // illustration the menu step used to have.
+  const chipMock = (
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)', backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 5, minWidth: 200 }}>
+      <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
+        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to instance list</Text>
       </View>
-      <View style={{ borderWidth: 1.5, borderColor: '#ffe566', backgroundColor: 'rgba(255,229,102,0.12)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, fontWeight: 'bold', letterSpacing: 0.5 }}>←  BACK TO INSTANCE LIST</Text>
+      <View style={{ height: 1, backgroundColor: 'rgba(255,160,0,0.5)', marginHorizontal: 8 }} />
+      <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
+        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>♡  Favourite this server</Text>
       </View>
-      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>❔  REPLAY TUTORIAL</Text>
+      <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
+        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
       </View>
     </View>
   );
@@ -3844,8 +3847,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'freq', title: 'Set the frequency',
       body: 'Tap the frequency readout to type one in directly (kHz or MHz).',
       target: tourRef('freqBox') },
-    { id: 'mode', title: 'Choose the demodulator',
-      body: 'Tap the mode to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more.',
+    { id: 'mode', title: 'Demodulator & bandwidth',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall.',
@@ -3856,10 +3859,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'back', title: 'No back-swipe here',
       body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum.",
       target: tourRef('vfoDrum') },
-    { id: 'menu', title: 'Everything else: the menu',
-      body: 'Bandwidth, modes, noise reduction, the auto notch, decoders, bookmarks and settings all live here. And since Back is off, this is where you return to the server list:',
-      target: tourRef('menuBtn'), illustration: menuMock },
-  ], { storageKey: 'lsv_tour_sdr_v3' });
+    { id: 'servers', title: 'Switch receiver, or go back',
+      body: 'Tap the Servers chip (top-left) to return to the instance list — since the Back gesture is off, this is your way out. You can also favourite the current server or set it as your default from here.',
+      target: tourRef('serversChip'), illustration: chipMock },
+    { id: 'menu', title: 'Everything else: the settings cog',
+      body: 'Noise reduction, the auto notch, decoders, bookmarks, recordings and display settings all live behind the settings cog.',
+      target: tourRef('menuBtn') },
+  ], { storageKey: 'lsv_tour_sdr_v4' });
   const onReplayTour = useCallback(() => {
     setMenuOpen(false);
     setTimeout(() => sdrTour.restart(), 320);
@@ -4245,6 +4251,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           chatDisabled={isKiwi}
         />
       </View>}
+
+      {/* Servers chip — the discoverable route back to the instance list (§brief).
+          Anchored to the safe-area top (NOT specTop/wfTop, which move when the
+          spectrum toggles), and inset by insets.left so it clears the notch /
+          Dynamic Island in landscape. */}
+      {!controlsHidden && (
+        <ServersChip
+          anchorRef={tourRef('serversChip')}
+          top={insets.top + 46}
+          left={Math.max(12, insets.left + 8)}
+          serverName={instanceName ?? baseUrl}
+          isFavourite={isFavourite}
+          isDefault={isDefault}
+          canFavourite={!isLocal}
+          onBack={onBackToPicker}
+          onToggleFavourite={onToggleFavourite}
+          onSetDefault={onSetDefault}
+        />
+      )}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
       {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}

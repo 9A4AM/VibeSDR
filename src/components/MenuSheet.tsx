@@ -37,7 +37,6 @@ import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
-import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1349,19 +1348,11 @@ export default function MenuSheet({
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="INSTANCE" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
-            <BtnRow>
-              {onToggleFavourite && (
-                <Btn label={isFavourite ? '♥ FAVOURITED' : '♡ FAVOURITE'}
-                     active={isFavourite} onPress={onToggleFavourite} />
-              )}
-              <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
-                   active={isDefaultInstance} onPress={onSetDefault} />
-            </BtnRow>
-            <BtnRow>
-              <View ref={tourRef('backToList')} collapsable={false} style={{ flex: 1 }}>
-                <Btn label="← BACK TO INSTANCE LIST" full onPress={onBack ?? onClose} />
-              </View>
-            </BtnRow>
+            {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
+                (top-left of the spectrum) — they're the "which server am I on / how
+                do I leave" actions, and burying them here behind a settings-looking
+                glyph was exactly what users couldn't find. Reset stays here,
+                deliberately away from the quick exit. */}
             <BtnRow col>
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
