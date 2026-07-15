@@ -1,14 +1,23 @@
 # VibeSDR
 
+## A live SDR waterfall on your Apple Watch — the radio spectrum on your wrist, tuned with the Digital Crown.
+
+### 📡 **[→ Join the free Apple Watch beta on TestFlight](https://testflight.apple.com/join/AnKTNhuZ)**
+
+*v9.0.1 · approved by Apple for external testing · installs like a normal app (no re-signing) · needs an iPhone + Apple Watch*
+
+| ![Apple Watch — AM broadcast](screenshots/21-watch-wrist-am.jpeg) | ![Apple Watch — 40m waterfall](screenshots/22-watch-waterfall-40m.png) | ![Apple Watch — FM-DX](screenshots/23-watch-fmdx.png) |
+|:---:|:---:|:---:|
+
+The live radio spectrum, scrolling in real time, **drawn on the watch itself** — not a screenshot, not a two-button remote. Tune with the Digital Crown; switch demodulator, zoom, volume, band labels and a live signal readout, all on your wrist. Your **iPhone does the receiving and stays locked in your pocket** — the watch is the dial and the display, drawing the spectrum for about a third of one CPU core. *(A standalone, phone-free version is in the works.)*
+
+**I want as many people as possible wearing this** — [grab the beta](https://testflight.apple.com/join/AnKTNhuZ) and [tell me how it runs](https://github.com/Stuey3D/VibeSDR/issues).
+
+---
+
 ### Designed for your thumbs.
 
 **Two large weighted drums with real inertia. Spin them, flick them, let them coast. It feels like tuning a radio, because that's what it's modelled on.**
-
-![VibeSDR on an Apple Watch Ultra](screenshots/21-watch-wrist-am.jpeg)
-
-### And a waterfall you can wear.
-
-The live RF spectrum, on your wrist, tuned with the Digital Crown — as far as I can tell, the only SDR waterfall on Apple Watch on either app store. It draws its own pixels on the watch, at about a third of one CPU core.
 
 ---
 
