@@ -112,13 +112,38 @@ function flagEmoji(code: string | null): string {
   return String.fromCodePoint(127397 + cc.charCodeAt(0), 127397 + cc.charCodeAt(1));
 }
 
-type SortMode = 'nearest' | 'snr';
+/** The user's country (ISO alpha-2) from the DEVICE LOCALE — no Location permission needed.
+ *  Same Intl-locale approach SDRScreen uses for the receiver region. '' if unknown. */
+function deviceCountry(): string {
+  try {
+    const loc = Intl.DateTimeFormat().resolvedOptions().locale || '';
+    const region = loc.split('-').find(p => /^[A-Z]{2}$/.test(p)) || loc.split('-')[1] || '';
+    return /^[A-Za-z]{2}$/.test(region) ? region.toUpperCase() : '';
+  } catch { return ''; }
+}
+
+/** A displayable country name from an ISO code (Intl.DisplayNames where available, else the
+ *  code). No new dependency. */
+function countryName(code: string | null): string {
+  if (!code) return 'Unknown';
+  try {
+    // @ts-ignore — DisplayNames may be absent on some Hermes builds; caught below.
+    const dn = new Intl.DisplayNames(undefined, { type: 'region' });
+    return dn.of(code.toUpperCase()) || code.toUpperCase();
+  } catch { return code.toUpperCase(); }
+}
+
+// 'country' = collapsible groups by country (universal — no location needed).
+// 'nearest'/'snr' unchanged for now (distance-banding + SNR-tiering land next).
+type SortMode = 'nearest' | 'snr' | 'country';
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
 
-// A unified list item — either a real SDRInstance or a favourited custom URL
+// A unified list item — a real SDRInstance, a favourited custom URL, or a collapsible
+// SECTION HEADER (country/band/tier group) whose rows are hidden when collapsed.
 type ListItem =
   | { kind: 'instance'; data: SDRInstance }
-  | { kind: 'custom';   fav: Favourite };
+  | { kind: 'custom';   fav: Favourite }
+  | { kind: 'header';   groupKey: string; label: string; count: number; collapsible: boolean; collapsed: boolean };
 
 export default function InstancePickerScreen({ navigation, route }: Props) {
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
@@ -134,6 +159,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [viewMode,    setViewModeState] = useState<ViewMode>('default');
   const [modeReady,   setModeReady]     = useState(false);
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
+  // The user's country (device locale, no permission) — group heading + default-open group.
+  const userCountry = useMemo(() => deviceCountry(), []);
+  // Which collapsible groups are currently OPEN. Seeded with the user's country so their
+  // group is expanded on first paint; every other group starts collapsed (anti-overload).
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const c = deviceCountry();
+    return new Set<string>(c ? [c] : []);
+  });
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
@@ -741,56 +781,87 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   }, [navigation]);
 
-  // Build list: favourites section (pinned top) then filtered instances
+  // Build the list as explicit sections with collapsible HEADER items. Favourites first
+  // (never collapsible), then the directory grouped by the current sort mode. In 'country'
+  // mode each country is its own collapsible group (user's country open, rest collapsed);
+  // 'nearest'/'snr' remain a single flat "OTHER SERVERS" section for now.
   const listData = useMemo((): ListItem[] => {
     const q = filter.toLowerCase().trim();
+    const mFav  = (f: Favourite) => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q);
+    const mInst = (i: SDRInstance) => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q);
 
-    // Favourited custom URLs (not in the instances list)
     const instanceUrls = new Set(instances.map(i => i.url));
-    const customFavs: ListItem[] = favourites
-      .filter(f => !instanceUrls.has(f.url))
-      .filter(f => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q))
-      .map(f => ({ kind: 'custom', fav: f }));
+    const favItems: ListItem[] = [
+      ...favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav).map(f => ({ kind: 'custom' as const, fav: f })),
+      ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
+    ];
+    let rest = instances.filter(i => !isFav(i.url)).filter(mInst);
 
-    // Favourited instances (pinned to top)
-    const favInstances: ListItem[] = instances
-      .filter(i => isFav(i.url))
-      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q))
-      .map(i => ({ kind: 'instance', data: i }));
-
-    // Remaining instances (not favourited)
-    let rest = instances
-      .filter(i => !isFav(i.url))
-      .filter(i => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q));
-
-    if (sortMode === 'snr') {
-      rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+    const out: ListItem[] = [];
+    if (favItems.length) {
+      out.push({ kind: 'header', groupKey: '__fav', label: 'FAVOURITES', count: favItems.length, collapsible: false, collapsed: false });
+      out.push(...favItems);
     }
 
-    return [
-      ...customFavs,
-      ...favInstances,
-      ...rest.map(i => ({ kind: 'instance' as const, data: i })),
-    ];
-  }, [instances, favourites, filter, sortMode, isFav]);
+    if (sortMode === 'country') {
+      const groups = new Map<string, SDRInstance[]>();
+      for (const i of rest) {
+        const key = (i.countryCode || '').toUpperCase() || 'ZZ';   // unknown → sorts last
+        (groups.get(key) ?? groups.set(key, []).get(key)!).push(i);
+      }
+      const keys = [...groups.keys()].sort((a, b) => {
+        if (a === userCountry) return -1; if (b === userCountry) return 1;   // your country first
+        if (a === 'ZZ') return 1; if (b === 'ZZ') return -1;                 // unknown last
+        return countryName(a).localeCompare(countryName(b));                 // rest alphabetical
+      });
+      for (const key of keys) {
+        const rows = groups.get(key)!;
+        const open = openGroups.has(key);
+        const label = key === 'ZZ' ? 'Unknown location' : `${flagEmoji(key)} ${countryName(key)}`.trim();
+        out.push({ kind: 'header', groupKey: key, label, count: rows.length, collapsible: true, collapsed: !open });
+        if (open) out.push(...rows.map(i => ({ kind: 'instance' as const, data: i })));
+      }
+    } else {
+      if (sortMode === 'snr') rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+      if (rest.length) {
+        out.push({ kind: 'header', groupKey: '__other', label: 'OTHER SERVERS', count: rest.length, collapsible: false, collapsed: false });
+        out.push(...rest.map(i => ({ kind: 'instance' as const, data: i })));
+      }
+    }
+    return out;
+  }, [instances, favourites, filter, sortMode, isFav, userCountry, openGroups]);
+
+  // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
+  const collapsibleKeys = useMemo(
+    () => listData.flatMap(d => (d.kind === 'header' && d.collapsible ? [d.groupKey] : [])),
+    [listData],
+  );
+  const allGroupsOpen = collapsibleKeys.length > 0 && collapsibleKeys.every(k => openGroups.has(k));
+  const toggleAllGroups = useCallback(() => {
+    setOpenGroups(allGroupsOpen ? new Set() : new Set(collapsibleKeys));
+  }, [allGroupsOpen, collapsibleKeys]);
 
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item, index }: { item: ListItem; index: number }) => {
-    // Section header before first non-favourite instance
-    const favCount = listData.filter(d =>
-      d.kind === 'custom' || (d.kind === 'instance' && isFav(d.data.url))
-    ).length;
-    const showFavHeader   = index === 0 && favCount > 0;
-    const showOtherHeader = index === favCount && favCount > 0 && listData.length > favCount;
+  const renderItem = ({ item }: { item: ListItem }) => {
+    // Explicit collapsible section headers (favourites / country groups / OTHER).
+    if (item.kind === 'header') {
+      return (
+        <SectionHeader
+          label={item.count > 0 ? `${item.label}  (${item.count})` : item.label}
+          fs={fs} F={F} C={C}
+          collapsible={item.collapsible}
+          collapsed={item.collapsed}
+          onToggle={item.collapsible ? () => toggleGroup(item.groupKey) : undefined}
+        />
+      );
+    }
 
     if (item.kind === 'custom') {
       const fav = item.fav;
       const isDefault = defaultInst?.url === fav.url;
       return (
-        <>
-          {showFavHeader && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
           <TouchableOpacity
             style={[styles.row, { borderColor: C.borderBright, backgroundColor: 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
@@ -819,7 +890,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
-        </>
       );
     }
 
@@ -836,9 +906,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       : inst.users >= inst.maxUsers); // kiwi: all in use = full
 
     return (
-      <>
-        {showFavHeader  && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
-        {showOtherHeader && <SectionHeader label="ALL INSTANCES" fs={fs} F={F} C={C} />}
         <TouchableOpacity
           style={[
             styles.row,
@@ -917,7 +984,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
-      </>
     );
   };
 
@@ -1136,13 +1202,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             autoCorrect={false}
           />
           <TouchableOpacity
-            style={[styles.sortBtn, { borderColor: sortMode === 'snr' ? C.borderBright : C.border }]}
-            onPress={() => setSortMode(m => m === 'nearest' ? 'snr' : 'nearest')}
+            style={[styles.sortBtn, { borderColor: sortMode !== 'nearest' ? C.borderBright : C.border }]}
+            onPress={() => setSortMode(m => m === 'nearest' ? 'snr' : m === 'snr' ? 'country' : 'nearest')}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(9), color: sortMode === 'snr' ? C.amber : C.textDim, letterSpacing: 1 }}>
-              {sortMode === 'snr' ? '📶 SNR' : '📍 NEAR'}
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: sortMode !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
+              {sortMode === 'snr' ? '📶 SNR' : sortMode === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
             </Text>
           </TouchableOpacity>
+          {collapsibleKeys.length > 0 && (
+            <TouchableOpacity style={[styles.sortBtn, { borderColor: C.border }]} onPress={toggleAllGroups}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>
+                {allGroupsOpen ? '▾ ALL' : '▸ ALL'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         )}
 
@@ -1162,7 +1235,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           ) : (
             <FlatList
               data={listData}
-              keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
+              keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
               renderItem={renderItem}
               contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
               ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
@@ -1176,7 +1249,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         ) : (
           <FlatList
             data={listData}
-            keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
+            keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
             renderItem={renderItem}
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
@@ -1339,10 +1412,27 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   );
 }
 
-function SectionHeader({ label, fs, F, C }: { label: string; fs: (n: number) => number; F: string; C: any }) {
+function SectionHeader({ label, fs, F, C, collapsible, collapsed, onToggle }: {
+  label: string; fs: (n: number) => number; F: string; C: any;
+  collapsible?: boolean; collapsed?: boolean; onToggle?: () => void;
+}) {
+  // Collapsible group header: tappable, chevron, and BIGGER + CREAM text — the SDR audience
+  // skews older with failing eyesight, so these navigation headers lead on legibility.
+  if (collapsible) {
+    return (
+      <TouchableOpacity onPress={onToggle} activeOpacity={0.6}
+        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 11,
+                 borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border }}>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', width: fs(20) }}>{collapsed ? '▸' : '▾'}</Text>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', flex: 1, letterSpacing: 0.5 }} numberOfLines={2}>
+          {label}
+        </Text>
+      </TouchableOpacity>
+    );
+  }
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 10, paddingBottom: 4 }}>
-      <Text style={{ fontFamily: F, fontSize: fs(9), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
+      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
     </View>
   );
 }
