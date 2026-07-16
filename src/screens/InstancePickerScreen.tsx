@@ -790,12 +790,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const mFav  = (f: Favourite) => !q || f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q);
     const mInst = (i: SDRInstance) => !q || i.name.toLowerCase().includes(q) || (i.location ?? '').toLowerCase().includes(q) || (i.callsign ?? '').toLowerCase().includes(q);
 
+    // Favourites live ONLY on the first screen (the directory chooser). Inside a directory
+    // they just get in the way of that directory's actual server list (Stuart 2026-07-17).
+    const showFavs = selectedDir === null;
     const instanceUrls = new Set(instances.map(i => i.url));
-    const favItems: ListItem[] = [
+    const favItems: ListItem[] = showFavs ? [
       ...favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav).map(f => ({ kind: 'custom' as const, fav: f })),
       ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
-    ];
-    let rest = instances.filter(i => !isFav(i.url)).filter(mInst);
+    ] : [];
+    // In a directory, a favourited server still shows in its OWN group (don't vanish it) —
+    // we only pull favourites out of `rest` when they're shown separately (on the chooser).
+    let rest = instances.filter(i => showFavs ? !isFav(i.url) : true).filter(mInst);
 
     const out: ListItem[] = [];
     if (favItems.length) {
@@ -829,7 +834,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
     }
     return out;
-  }, [instances, favourites, filter, sortMode, isFav, userCountry, openGroups]);
+  }, [instances, favourites, filter, sortMode, isFav, userCountry, openGroups, selectedDir]);
 
   // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
   const collapsibleKeys = useMemo(
