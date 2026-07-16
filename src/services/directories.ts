@@ -8,6 +8,7 @@ import { SDRInstance, fetchInstances } from './instancesApi';
 import { fetchFmdxServers } from './fmdxDirectory';
 import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry no country code
 import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
+import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
 
 export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -219,12 +220,20 @@ export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number
   // CENTRAL country enrichment — applies to EVERY directory (UberSDR incl., e.g. the popular
   // Canaries server). Fill any missing countryCode from coordinates first, then from the
   // name/location text (a tiny island the world map omits, or a server with wrong GPS).
-  list = list.map(i => i.countryCode ? i : ({
-    ...i,
-    countryCode: countryForCoord(i.latitude, i.longitude)
-              || countryFromText(`${i.name} ${i.location ?? ''}`)
-              || null,
-  }));
+  list = list.map(i => {
+    if (i.countryCode) return i;
+    const text = `${i.name} ${i.location ?? ''}`;
+    let cc = countryForCoord(i.latitude, i.longitude);
+    if (!cc) {
+      // Coordinates embedded in the name (Kiwi/Receiverbook style "…/@-37.70,176.16") — some
+      // servers publish a wrong GPS field but a correct @lat,lon in their title.
+      const m = text.match(/@\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/);
+      if (m) cc = countryForCoord(parseFloat(m[1]), parseFloat(m[2]));
+    }
+    if (!cc) cc = countryFromText(text);   // an explicit country/territory word wins over…
+    if (!cc) cc = isoForCallsign(text);     // …the callsign prefix (CS8ACT→PT, EA8DJF→ES)
+    return cc ? { ...i, countryCode: cc } : i;
+  });
 
   // distance ascending when we have it, else leave source order
   if (lat != null && lon != null) {
