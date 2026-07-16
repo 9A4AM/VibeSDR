@@ -6,6 +6,7 @@
 
 import { SDRInstance, fetchInstances } from './instancesApi';
 import { fetchFmdxServers } from './fmdxDirectory';
+import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry no country code
 
 export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -102,6 +103,7 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
         url: String(url).replace(/\/+$/, ''),
         latitude: Number.isFinite(slat) ? slat : null,
         longitude: Number.isFinite(slon) ? slon : null,
+        countryCode: countryForCoord(slat, slon) || null,   // derived offline from coordinates
         distance: (lat != null && lon != null && Number.isFinite(slat) && Number.isFinite(slon))
           ? haversineKm(lat, lon, slat as number, slon as number) : null,
         version: ro?.version ?? null,
@@ -134,6 +136,7 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
         users: Number(r.users) || 0,
         maxUsers: Number(r.users_max) || 0,
         latitude: glat, longitude: glon,
+        countryCode: countryForCoord(glat, glon) || null,   // derived offline from GPS
         distance: (lat != null && lon != null && glat != null && glon != null)
           ? haversineKm(lat, lon, glat, glon) : null,
         bestSnr: snr.length ? Math.max(...snr) : null,
