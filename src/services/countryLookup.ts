@@ -41,6 +41,27 @@ export function countryForCoord(lat?: number | null, lon?: number | null): strin
     if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;   // fast bbox reject
     if (inRings(lon, lat, c.r)) { result = iso; break; }
   }
+
+  // NEAREST-COAST FALLBACK. The 110m borders are coarse, so a COASTAL receiver often lands
+  // just OUTSIDE its country's simplified coastline (and a few tiny countries are absent at
+  // this resolution) — point-in-polygon then finds nothing. Snap to the nearest country
+  // vertex within a sane radius so those don't fall into "Unknown". Coastal points are a
+  // fraction of a degree out; the radius stops mid-ocean coordinates snapping to something far.
+  if (!result) {
+    let bestD = 6.25;   // (2.5°)² — squared-degree threshold, ~275km
+    for (const iso in COUNTRY_BOUNDS) {
+      const c = COUNTRY_BOUNDS[iso];
+      const b = c.b;
+      if (lon < b[0] - 3 || lon > b[2] + 3 || lat < b[1] - 3 || lat > b[3] + 3) continue;
+      for (const ring of c.r) {
+        for (let i = 0; i < ring.length; i++) {
+          const dx = ring[i][0] - lon, dy = ring[i][1] - lat;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; result = iso; }
+        }
+      }
+    }
+  }
   cache.set(key, result);
   return result;
 }
