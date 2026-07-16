@@ -159,6 +159,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [viewMode,    setViewModeState] = useState<ViewMode>('default');
   const [modeReady,   setModeReady]     = useState(false);
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
+  // Whether we have a usable location (GPS permission granted, or a manual city/grid entered).
+  // Gates the 'nearest' sort — no location means no distances to sort by.
+  const [hasLocation, setHasLocation]   = useState(false);
   // The user's country (device locale, no permission) — group heading + default-open group.
   const userCountry = useMemo(() => deviceCountry(), []);
   // Which collapsible groups are currently OPEN. Seeded with the user's country so their
@@ -264,7 +267,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // Learn the user's location for distance sorting (used when a directory is
       // opened), but DON'T fetch any directory here — the landing view is the
       // chooser (favourites + directory cards). Directories load on tap.
-      try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
+      try { const loc = await getUserLocation(); if (!cancelled && loc) { userLocRef.current = loc; setHasLocation(true); } } catch {}
       if (!cancelled) { setLoading(false); }
 
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
@@ -787,6 +790,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   }, [navigation]);
 
+  // Which sort modes are actually usable right now. 'nearest' needs a location; 'snr' needs a
+  // directory that reports SNR (Receiverbook doesn't); 'country' always works (we derive it).
+  const hasSnr = useMemo(() => instances.some(i => Number.isFinite(i.bestSnr as number)), [instances]);
+  const availModes = useMemo<SortMode[]>(() => {
+    const m: SortMode[] = [];
+    if (hasLocation) m.push('nearest');
+    if (hasSnr)      m.push('snr');
+    m.push('country');
+    return m;
+  }, [hasLocation, hasSnr]);
+  // The user's saved preference may be unavailable in the current context — fall back to the
+  // first available mode for display WITHOUT overwriting their preference (so it returns when
+  // they open an SNR-capable directory or grant location).
+  const effectiveSort: SortMode = availModes.includes(sortMode) ? sortMode : availModes[0];
+
   // Build the list as explicit sections with collapsible HEADER items. Favourites first
   // (never collapsible), then the directory grouped by the current sort mode. In 'country'
   // mode each country is its own collapsible group (user's country open, rest collapsed);
@@ -814,7 +832,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       out.push(...favItems);
     }
 
-    if (sortMode === 'country') {
+    if (effectiveSort === 'country') {
       const groups = new Map<string, SDRInstance[]>();
       for (const i of rest) {
         const key = (i.countryCode || '').toUpperCase() || 'ZZ';   // unknown → sorts last
@@ -833,14 +851,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         if (open) out.push(...rows.map(i => ({ kind: 'instance' as const, data: i })));
       }
     } else {
-      if (sortMode === 'snr') rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+      if (effectiveSort === 'snr') rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
       if (rest.length) {
         out.push({ kind: 'header', groupKey: '__other', label: 'OTHER SERVERS', count: rest.length, collapsible: false, collapsed: false });
         out.push(...rest.map(i => ({ kind: 'instance' as const, data: i })));
       }
     }
     return out;
-  }, [instances, favourites, filter, sortMode, isFav, userCountry, openGroups, selectedDir]);
+  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir]);
 
   // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
   const collapsibleKeys = useMemo(
@@ -1213,15 +1231,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             autoCorrect={false}
           />
           <TouchableOpacity
-            style={[styles.sortBtn, { borderColor: sortMode !== 'nearest' ? C.borderBright : C.border }]}
+            style={[styles.sortBtn, { borderColor: effectiveSort !== 'nearest' ? C.borderBright : C.border },
+                    availModes.length < 2 && { opacity: 0.5 }]}
+            disabled={availModes.length < 2}
             onPress={() => {
-              const next: SortMode = sortMode === 'nearest' ? 'snr' : sortMode === 'snr' ? 'country' : 'nearest';
+              // Cycle only through the modes usable right now (skips SNR on Receiverbook, NEAR
+              // with no location). Persist so it sticks when the mode becomes available again.
+              const next = availModes[(availModes.indexOf(effectiveSort) + 1) % availModes.length];
               setSortMode(next);
-              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});   // persist the choice
+              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});
             }}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(11), color: sortMode !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
-              {sortMode === 'snr' ? '📶 SNR' : sortMode === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: effectiveSort !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
+              {effectiveSort === 'snr' ? '📶 SNR' : effectiveSort === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
             </Text>
           </TouchableOpacity>
           {collapsibleKeys.length > 0 && (
