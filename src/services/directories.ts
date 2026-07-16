@@ -7,6 +7,7 @@
 import { SDRInstance, fetchInstances } from './instancesApi';
 import { fetchFmdxServers } from './fmdxDirectory';
 import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry no country code
+import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
 
 export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -214,6 +215,17 @@ export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number
   else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
   else if (id === 'spyserver') list = await fetchSpyServers(lat, lon);
   else                       list = await fetchKiwiList(lat, lon);
+
+  // CENTRAL country enrichment — applies to EVERY directory (UberSDR incl., e.g. the popular
+  // Canaries server). Fill any missing countryCode from coordinates first, then from the
+  // name/location text (a tiny island the world map omits, or a server with wrong GPS).
+  list = list.map(i => i.countryCode ? i : ({
+    ...i,
+    countryCode: countryForCoord(i.latitude, i.longitude)
+              || countryFromText(`${i.name} ${i.location ?? ''}`)
+              || null,
+  }));
+
   // distance ascending when we have it, else leave source order
   if (lat != null && lon != null) {
     list = [...list].sort((a, b) => (a.distance ?? 1e9) - (b.distance ?? 1e9));
