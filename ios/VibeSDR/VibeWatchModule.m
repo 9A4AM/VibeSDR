@@ -17,6 +17,19 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)hi meter
                   : (NSString *)meter)
 
+RCT_EXTERN_METHOD(startWatchSpectrum
+                  : (NSString *)url binBandwidth
+                  : (nonnull NSNumber *)binBandwidth tuneHz
+                  : (nonnull NSNumber *)tuneHz filterLow
+                  : (nonnull NSNumber *)filterLow filterHigh
+                  : (nonnull NSNumber *)filterHigh brightness
+                  : (nonnull NSNumber *)brightness contrast
+                  : (nonnull NSNumber *)contrast)
+
+RCT_EXTERN_METHOD(retuneWatchSpectrum : (nonnull NSNumber *)tuneHz)
+
+RCT_EXTERN_METHOD(stopWatchSpectrum)
+
 RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendLogo : (NSString *)b64)

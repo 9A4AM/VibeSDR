@@ -60,9 +60,18 @@ final class WatchAudio {
   ///
   /// Tuning latency is the thing this costs, and it is recoverable later: flush the queue on
   /// retune and re-prime, so the dial stays instant while steady listening stays solid.
-  private let targetQueued: Double = 0.55
-  /// Below this we are about to run dry — top back up to the cushion.
-  private let floorQueued: Double = 0.20
+  ///
+  /// LOWERED 0.55 -> 0.35 (2026-07-17). The cushion was sized big to survive "connection
+  /// blips" on wrist-down — but that cause was WRONG: wrist-down drops were BEDTIME FOCUS,
+  /// not the link. And a 20-min cellular drive (incl. a known mobile black spot) proved the
+  /// link stable: a real dropout gave a little stutter and recovered. So the big cushion was
+  /// paying a permanent latency tax against a threat the link shrugs off. Tune-to-audio lag
+  /// was still noticeable at 0.55. This is a by-ear starting point; push lower (0.30/0.25) if
+  /// it holds, back off if stutter on jitter gets annoying. Keep spectrumDelay coupled.
+  private let targetQueued: Double = 0.35
+  /// Below this we are about to run dry — top back up to the cushion. Kept ~0.2s under the
+  /// target so a normal delivery gap doesn't trip a re-prime, but above the fatal-empty floor.
+  private let floorQueued: Double = 0.15
   /// Above this, a delivery burst is just building latency for no benefit. Drop it.
   private let maxQueued: Double = 1.60
 

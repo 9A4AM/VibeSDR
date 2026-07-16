@@ -2156,7 +2156,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         // unmounted by then. Plain JS + one bridge call, so it's safe to keep
         // running while backgrounded. No-ops when no watch is watching.
         watchProvider.onSpectrum(newBins, {
-          centerHz:   s.centerHz,
+          // trueCenterHz = the ACTUAL centre of these bins (never the predicted display
+          // centre). The watch INDEXES INTO the bins to crop around the VFO, so it must use
+          // the real centre or the signal draws offset from the VFO ("signal next to the VFO"
+          // bug — confirmed on the watch). Fall back to centerHz for any adapter that doesn't
+          // set it. The main app's full-spectrum draw keeps using the predicted centre.
+          centerHz:   s.trueCenterHz ?? s.centerHz,
           bwHz:       s.bwHz,
           tuneHz:     s.frequency,
           filterLow:  s.bandwidthLow,
@@ -2473,8 +2478,34 @@ export default function SDRScreen({ route, navigation }: Props) {
         // unmounted and every animation driver still cancelled — only the plain
         // JS path stays alive.
         if (watchProvider.isActive) {
-          specPausedByBgRef.current = false;
-          client.current?.setRate(WATCH_BG_DIVISOR);
+          // HAND OFF THE SPECTRUM TO NATIVE. The JS spectrum WS is throttled the instant
+          // the phone locks (iOS throttles the RN JS thread), which is why the wrist
+          // waterfall went ragged in a pocket while native audio played fine. So on lock we
+          // close the JS WS and let VibeWatchModule's native forwarder read the spectrum off
+          // the JS thread and feed the watch. Only ONE subscription ever (battery), and only
+          // in this exact locked+watch window.
+          const c = client.current;
+          const url = (route.params.serverType ?? 'ubersdr') === 'ubersdr'
+            ? c?.watchSpectrumUrl?.() : undefined;
+          if (url) {
+            const view = c?.getView?.();
+            const st = c?.getStatus?.();
+            (NativeModules.VibeWatchModule as {
+              startWatchSpectrum?: (u: string, bb: number, f: number, lo: number, hi: number, br: number, co: number) => void;
+            })?.startWatchSpectrum?.(
+              url,
+              view?.binBandwidth || st?.binBandwidth || 100,
+              st?.frequency || 0,
+              st?.bandwidthLow || 0,
+              st?.bandwidthHigh || 0,
+              0, 0);       // brightness/contrast 0 — the watch applies its own offsets
+            specPausedByBgRef.current = true;
+            c?.pauseSpectrum();          // native owns the feed now — close the JS WS
+          } else {
+            // non-UberSDR backends: keep the old JS-at-full-rate path.
+            specPausedByBgRef.current = false;
+            c?.setRate(WATCH_BG_DIVISOR);
+          }
         } else {
           specPausedByBgRef.current = true;
           client.current?.pauseSpectrum();
@@ -2482,12 +2513,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         watchProvider.setSpecPaused(specPausedByBgRef.current);
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
+        // Foreground again: native spectrum forwarder hands back to the JS spectrum WS.
+        (NativeModules.VibeWatchModule as { stopWatchSpectrum?: () => void })?.stopWatchSpectrum?.();
         // Opened the app after a data-saver disconnect (the Play event may not
         // survive suspension): do a full from-scratch reconnect.
         setDataSaverOff(false);
         setIsMuted(false);
         fullReconnect();
       } else {
+        // Foreground again: stop the native spectrum forwarder — the JS spectrum WS
+        // reopens below and takes back over (single subscription).
+        (NativeModules.VibeWatchModule as { stopWatchSpectrum?: () => void })?.stopWatchSpectrum?.();
         // Instant zombie-socket check — after a background suspension the
         // audio WS can be half-open (server reaped the session, socket never
         // errors) leaving audio+spectrum dead until relaunch. The native
@@ -3053,6 +3089,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
 
+  // ── Crown-tune DEBOUNCE (m9psy/MadPsy, UberSDR author: "debounce to 100ms so it
+  //    doesn't fire on every change"). The watch sends ~16 tune deltas/sec; applying each
+  //    one hammers the tune path, and while the phone is LOCKED its JS thread is throttled
+  //    so it falls behind — the readout overshoots then SNAPS BACK to where the radio
+  //    actually got to. Two parts fix it: (1) accumulate onto our OWN running target, never
+  //    re-reading the LAGGING getStatus() mid-spin (reading it while behind is what made the
+  //    frequency jump wildly), and (2) apply at most once per 100ms, trailing-edge so the
+  //    final value always lands. Feels a touch heavier; tunes reliably.
+  const tuneTargetRef   = useRef<number | null>(null);
+  const lastTuneDeltaAt = useRef(0);
+  const lastTuneApplyAt = useRef(0);
+  const tuneThrottle    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Same 100ms debounce for crown ZOOM — it hammers the zoom path just as hard.
+  const zoomAccum       = useRef(0);
+  const lastZoomApplyAt = useRef(0);
+  const zoomThrottle    = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Retune-while-locked: when the phone is pocketed (JS spectrum WS closed, native forwarder
+  // driving the wrist) and the crown tunes, the SERVER must be re-zoomed onto the new centre
+  // — JS can't (its WS is shut), so tell the native forwarder. Throttled to keep off the link.
+  // (Zoom-while-locked and fast-scan following are NOT forwarded here on purpose — they need
+  // a server round-trip per change that a fast crown outruns, which read as flooding/jumps.
+  // Deferred; see the WC-overhead work.)
+  const lastLockedRetuneRef = useRef(0);
+  useEffect(() => {
+    if (appActiveRef.current || !watchProvider.isActive || !(status.frequency > 0)) return;
+    const now = Date.now();
+    if (now - lastLockedRetuneRef.current < 250) return;
+    lastLockedRetuneRef.current = now;
+    (NativeModules.VibeWatchModule as { retuneWatchSpectrum?: (f: number) => void })
+      ?.retuneWatchSpectrum?.(status.frequency);
+  }, [status.frequency]);
+
   // Late-bound handler refs for the chat-sync engine (declared above the
   // decoder-client effect, which captures them in its callbacks)
   useEffect(() => {
@@ -3095,14 +3164,27 @@ export default function SDRScreen({ route, navigation }: Props) {
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
-        const cur = c.getStatus().frequency;
-        // Snap to the step grid first, exactly like the media-control skip: a
-        // crown detent should land on a channel, not offset the current fraction.
+        const now = Date.now();
+        // Accumulate onto our OWN running target — NOT getStatus().frequency, which lags while
+        // the phone's JS thread is throttled on lock. Re-basing each detent on a lagging value
+        // is what made the frequency jump wildly. Reset to the real freq only on a fresh spin
+        // (first tune, or a >300ms gap = the crown stopped and the phone has re-synced).
+        if (tuneTargetRef.current == null || now - lastTuneDeltaAt.current > 300) {
+          tuneTargetRef.current = c.getStatus().frequency;
+        }
+        lastTuneDeltaAt.current = now;
+        const cur = tuneTargetRef.current;
         const base = delta > 0 ? Math.floor(cur / s) : Math.ceil(cur / s);
         const [loHz, hiHz] = c.caps.freqRange;
-        const newHz = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
-        if (newHz === cur) return;
-        onTuneHzRef.current?.(newHz);
+        tuneTargetRef.current = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
+        // DEBOUNCE to 100ms (UberSDR's rate): apply the LATEST target ≤1/100ms, trailing-edge
+        // so the final value always lands. Stops the tune path being hammered 16/sec.
+        const apply = () => { lastTuneApplyAt.current = Date.now(); onTuneHzRef.current?.(tuneTargetRef.current!); };
+        const wait = lastTuneApplyAt.current + 100 - now;
+        if (wait <= 0) { apply(); }
+        else if (!tuneThrottle.current) {
+          tuneThrottle.current = setTimeout(() => { tuneThrottle.current = null; apply(); }, wait);
+        }
       },
       // Numpad entry. onTuneHz already clamps to the receiver's range, so a
       // fat-fingered 999 MHz lands on the band edge rather than nowhere.
@@ -3123,7 +3205,21 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       onZoomDelta: (delta: number) => {
         if (!delta) return;
-        zoomByRef.current?.(Math.pow(2, -delta / 6));
+        // DEBOUNCE to 100ms, same as tuning: accumulate the zoom detents and apply the
+        // combined factor ≤1/100ms (trailing-edge), so a fast zoom spin doesn't hammer the
+        // zoom path / flood the server with config echoes.
+        zoomAccum.current += delta;
+        const now = Date.now();
+        const apply = () => {
+          lastZoomApplyAt.current = Date.now();
+          const d = zoomAccum.current; zoomAccum.current = 0;
+          if (d) zoomByRef.current?.(Math.pow(2, -d / 6));
+        };
+        const wait = lastZoomApplyAt.current + 100 - now;
+        if (wait <= 0) { apply(); }
+        else if (!zoomThrottle.current) {
+          zoomThrottle.current = setTimeout(() => { zoomThrottle.current = null; apply(); }, wait);
+        }
       },
 
       // The crown, in volume mode. ONE detent = ONE 1/16 step, because 1/16 IS the

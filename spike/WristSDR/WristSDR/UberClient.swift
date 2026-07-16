@@ -534,11 +534,13 @@ final class UberClient: ObservableObject {
   private var specQueue: [(t: Double, row: [UInt8])] = []
   private var lastSpecPush: Double = 0
   /// Match the audio cushion (WatchAudio.targetQueued), less the spectrum's own inherent
-  /// latency, so signal and sound arrive together.
-  /// 0.625s: dialled in by ear against the buzzer (UVB-76). The audio cushion breathes a
-  /// little with network jitter, so no fixed delay is always perfect — this is the value that
-  /// minimises the average error (0.75 read slightly late, 0.5 slightly early).
-  private let spectrumDelay: Double = 0.35
+  /// latency (~0.20s), so signal and sound arrive together. COUPLED to targetQueued: when the
+  /// cushion moves, this must move with it or the waterfall and audio de-sync.
+  /// Dialled in by ear against the buzzer (UVB-76). The audio cushion breathes a little with
+  /// network jitter, so no fixed delay is always perfect — this minimises the average error.
+  /// LOWERED 0.35 -> 0.15 (2026-07-17) tracking targetQueued 0.55 -> 0.35 (same 0.20 gap) —
+  /// see the WatchAudio.targetQueued note for why the cushion shrank.
+  private let spectrumDelay: Double = 0.15
   /// True while the delay buffer is refilling after a resume — nothing old enough to draw
   /// yet, so the UI says "syncing" rather than showing a frozen picture.
   @Published var spectrumSyncing = false
@@ -755,6 +757,36 @@ final class UberClient: ObservableObject {
     audioSock.send(json: msg)
   }
 
+  // ── Crown-tune DEBOUNCE (100ms) — MATCH THE MAIN APP / COMPANION ──────────────
+  //
+  // The main app debounces tuning to 100ms (UberSDR's supported rate; m9psy/MadPsy's
+  // advice) — it feels "heavier" but tunes rock-solid. The spike sent a tune per detent,
+  // which felt slicker but meant the two modes felt DIFFERENT. Stuart's call: keep the
+  // heavier feel for reliability AND make direct (spike) and remote (companion) feel the
+  // SAME. So the spike throttles the SERVER send to the latest frequency ≤1/100ms too —
+  // `frequency` still updates instantly (the readout/needle stay snappy), only the network
+  // tune is rate-limited, trailing-edge so the final freq always lands.
+  private var lastTuneSentAt: Double = 0
+  private var tuneFlushWork: DispatchWorkItem?
+  private func sendTuneThrottled() {
+    let now = ProcessInfo.processInfo.systemUptime
+    let wait = lastTuneSentAt + 0.1 - now
+    if wait <= 0 {
+      lastTuneSentAt = now
+      tuneFlushWork?.cancel(); tuneFlushWork = nil
+      sendTune()
+    } else if tuneFlushWork == nil {
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.tuneFlushWork = nil
+        self.lastTuneSentAt = ProcessInfo.processInfo.systemUptime
+        self.sendTune()   // sends self.frequency — the latest, already updated by tune()
+      }
+      tuneFlushWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+  }
+
   // ── Controls ──────────────────────────────────────────────────────────────
 
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
@@ -764,7 +796,7 @@ final class UberClient: ObservableObject {
     let f = max(10_000, min(30_000_000, (base + Double(delta)) * step))
     guard f != frequency else { return }
     frequency = f
-    sendTune()
+    sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
     sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
 

@@ -25,9 +25,14 @@ import SwiftUI
 ///     a self-inflicted blur no sharpening can undo.) Bilinear still smooths the
 ///     row banding vertically, and the fat bins from a zoomed-out phone.
 final class WaterfallBuffer {
-  /// MUST MATCH WATCH_BINS in watchProvider.ts — rows of any other length are
-  /// dropped, so a mismatch shows as a blank waterfall.
-  static let width  = 256
+  /// MUST MATCH WATCH_BINS in watchProvider.ts AND WatchSpectrumForwarder.watchBins —
+  /// rows of any other length are dropped, so a mismatch shows as a blank waterfall.
+  ///
+  /// BACK TO 128 (2026-07-17) to halve the WCSession row traffic and the watch render CPU.
+  /// The note above records that 128 was tried before and reverted for upscale blur — but
+  /// that was BEFORE the wrist had its own brightness/contrast and the sharpness filter to
+  /// lean on. Revisit if it reads too soft.
+  static let width  = 128
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.

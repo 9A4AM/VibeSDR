@@ -56,7 +56,12 @@ const Native = NativeModules.VibeWatchModule as
  *  UPSCALED 1.6x before they even reached your eye — a self-inflicted blur that
  *  no amount of sharpening can undo. Above native width the image is downscaled
  *  instead, which is sharp. It costs 256 bytes a row (~1.3KB/s at 5fps). */
-const WATCH_BINS = 256;
+// 128, not 256: the row is the biggest thing on the WCSession link (16/sec), and halving
+// its width halves that traffic at zero CPU cost. The wrist is only ~205pt wide, so 128
+// upscales slightly rather than downscaling — the sharpness filter + the watch's own
+// brightness/contrast recover the look. MUST match WaterfallBuffer.width (watch) and
+// WatchSpectrumForwarder.watchBins (native forwarder) — the three define the wire width.
+const WATCH_BINS = 128;
 
 /** Row cadence — 10fps, and rows are BATCHED TWO TO A MESSAGE on the native side.
  *

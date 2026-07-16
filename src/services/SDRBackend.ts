@@ -169,6 +169,9 @@ export interface SDRBackend {
   setRate(divisor: number): void;
   pauseSpectrum(): void;
   resumeSpectrum(): void;
+  /** UberSDR only: the spectrum WS URL (with auth) for the native locked-pocket
+   *  forwarder. Absent on adapters whose spectrum isn't a native-openable UberSDR WS. */
+  watchSpectrumUrl?(): string;
   /** Rebuild the spectrum socket NOW — a half-open zombie never fires onclose, so
    *  nothing else will. Driven by the client's own starvation watchdog, by the
    *  native network-path monitor, and by the watch when its rows dry up.

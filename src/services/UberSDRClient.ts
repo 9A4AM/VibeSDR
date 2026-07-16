@@ -41,8 +41,14 @@ export interface SDRStatus {
   bandwidthHigh: number; // Hz, positive = above carrier
   binCount: number;
   binBandwidth: number;  // Hz per bin
-  centerHz: number;      // center of spectrum display
+  centerHz: number;      // center of spectrum display (may be PREDICTED during a gesture)
   bwHz: number;          // total spectrum bandwidth
+  /** The ACTUAL centre of the bins in THIS frame (from the frame header), never the
+   *  predicted display centre. Consumers that INDEX INTO the bins (the watch crop) must use
+   *  this — using the predicted centerHz points at the wrong bin and draws the signal offset
+   *  from the VFO (the "signal next to the VFO" bug). The full-spectrum display can keep using
+   *  centerHz for gesture continuity. */
+  trueCenterHz?: number;
 }
 
 export interface SDRCallbacks {
@@ -538,6 +544,13 @@ export class UberSDRClient {
     return `${url}${path}`;
   }
 
+  /** The full spectrum WS URL (incl. PIN/password suffix) so NATIVE can open its own
+   *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
+   *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
+  watchSpectrumUrl(): string {
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}${this.authSuffix}`);
+  }
+
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
@@ -971,6 +984,9 @@ export class UberSDRClient {
     // own (intermediate) geometry replays the whole transition as the echoes
     // arrive — that was the band-plan flash / view-reset glitch.
     const emit = { ...s };
+    // The REAL centre of these bins — never overridden below. The watch crop indexes bins by
+    // this; using the predicted emit.centerHz draws the signal offset from the VFO.
+    emit.trueCenterHz = frequency;
     const v = this.view;
     if (this._inFlight() && v.binBandwidth > 0) {
       emit.centerHz     = v.centerHz;

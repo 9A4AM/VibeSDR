@@ -129,8 +129,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   //
   // The cost is one row of latency (~100ms). That is a real cost — we spent tonight
   // cutting lag — but a link that stays up is worth more than 100ms.
+  // 2. Tried 3 to cut the WCSession message rate, but the extra row of latency read as
+  // "molasses" on the wrist (Stuart 2026-07-17) — the responsiveness is worth more than the
+  // message saving. Do NOT raise this without re-checking the feel.
   private static let rowsPerMessage = 2
   private var pendingRows: [Data] = []
+  /// Serialises row batching/sending across the JS `sendRow` caller and the native
+  /// forwarder caller (different threads) — see pushWatchRow.
+  private let watchSendQueue = DispatchQueue(label: "com.vibesdr.watchsend")
 
   // ── NO ACK-BASED BACKPRESSURE. Rows are FIRE-AND-FORGET. ─────────────────────
   //
@@ -217,39 +223,85 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   @objc(sendRow:freq:span:snr:level:lo:hi:meter:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
                level: NSNumber, lo: NSNumber, hi: NSNumber, meter: String) {
-    guard let s = session, linkAlive,
-          let row = Data(base64Encoded: rowB64) else { return }
+    // The FOREGROUND path (JS produces the row). When a watch is attached and the phone
+    // LOCKS, JS stops and the native WatchSpectrumForwarder produces rows instead (which
+    // also land in pushWatchRow) — same wire format, off the throttled JS thread.
+    guard let row = Data(base64Encoded: rowB64) else { return }
+    pushWatchRow(row, freq: freq.doubleValue, span: span.doubleValue, snr: snr.doubleValue,
+                 level: level.doubleValue, lo: lo.doubleValue, hi: hi.doubleValue, meter: meter)
+  }
 
-    var blob = Data(capacity: 8 * 6 + Self.meterBytes + row.count)
-    for v in [freq, span, snr, level, lo, hi] {
-      var d = v.doubleValue.bitPattern.littleEndian
-      withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
+  /// The shared row sender — one 256-byte row + its header, batched and sent over
+  /// WCSession. Called by BOTH the JS `sendRow` (foreground) and the native forwarder
+  /// (locked). Serialised on its own queue so the two callers (different threads) can't
+  /// race on `pendingRows`; in practice they're mutually exclusive (handoff), this is
+  /// belt-and-braces.
+  func pushWatchRow(_ row: Data, freq: Double, span: Double, snr: Double,
+                    level: Double, lo: Double, hi: Double, meter: String) {
+    watchSendQueue.async { [weak self] in
+      guard let self, let s = self.session, self.linkAlive else { return }
+
+      var blob = Data(capacity: 8 * 6 + Self.meterBytes + row.count)
+      for v in [freq, span, snr, level, lo, hi] {
+        var d = v.bitPattern.littleEndian
+        withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
+      }
+      // Fixed-width so the watch can slice the row off without a length field.
+      var mt = Array(meter.utf8.prefix(Self.meterBytes))
+      mt.append(contentsOf: [UInt8](repeating: 0, count: Self.meterBytes - mt.count))
+      blob.append(contentsOf: mt)
+      blob.append(row)
+
+      // Hold it back until we have a pair (see rowsPerMessage).
+      self.pendingRows.append(blob)
+      guard self.pendingRows.count >= Self.rowsPerMessage else { return }
+
+      // kind 2 = a BATCH: [2][count][block][block…].
+      var batch = Data(capacity: 2 + self.pendingRows.reduce(0) { $0 + $1.count })
+      batch.append(2)
+      batch.append(UInt8(self.pendingRows.count))
+      for b in self.pendingRows { batch.append(b) }
+      self.pendingRows.removeAll(keepingCapacity: true)
+
+      // Fire-and-forget (a dropped row is invisible on a scrolling waterfall). The error
+      // handler is our only signal the link has gone one-way.
+      s.sendMessageData(batch, replyHandler: nil, errorHandler: { [weak self] _ in
+        self?.noteSendFailure()
+      })
     }
-    // Fixed-width so the watch can slice the row off without a length field.
-    var mt = Array(meter.utf8.prefix(Self.meterBytes))
-    mt.append(contentsOf: [UInt8](repeating: 0, count: Self.meterBytes - mt.count))
-    blob.append(contentsOf: mt)
-    blob.append(row)
+  }
 
-    // Hold it back until we have a pair (see rowsPerMessage).
-    pendingRows.append(blob)
-    guard pendingRows.count >= Self.rowsPerMessage else { return }
+  // ── Native spectrum forwarder (locked-pocket path) ──────────────────────────
+  //
+  // The phone's spectrum WS lives in JS, which iOS throttles the moment the phone locks
+  // — so the wrist waterfall went ragged in a pocket while native audio played fine. When
+  // a watch is attached and the phone locks, JS hands OFF: it closes its spectrum WS and
+  // calls startWatchSpectrum, and this native forwarder feeds the watch off the JS thread.
+  // On unlock JS calls stopWatchSpectrum and takes over again — so there is only ever ONE
+  // spectrum subscription (battery: this runs ONLY in the broken locked+watch window).
+  private let specForwarder = WatchSpectrumForwarder()
 
-    // kind 2 = a BATCH: [2][count][block][block…], each block being the same
-    // 6-doubles + meter + row layout a single row uses.
-    var batch = Data(capacity: 2 + pendingRows.reduce(0) { $0 + $1.count })
-    batch.append(2)
-    batch.append(UInt8(pendingRows.count))
-    for b in pendingRows { batch.append(b) }
-    pendingRows.removeAll(keepingCapacity: true)
+  @objc(startWatchSpectrum:binBandwidth:tuneHz:filterLow:filterHigh:brightness:contrast:)
+  func startWatchSpectrum(_ url: String, binBandwidth: NSNumber, tuneHz: NSNumber,
+                          filterLow: NSNumber, filterHigh: NSNumber,
+                          brightness: NSNumber, contrast: NSNumber) {
+    specForwarder.onRow = { [weak self] row, freq, span, snr, level, lo, hi, meter in
+      self?.pushWatchRow(row, freq: freq, span: span, snr: snr, level: level,
+                         lo: lo, hi: hi, meter: meter)
+    }
+    specForwarder.start(url: url, binBandwidth: binBandwidth.doubleValue,
+                        tuneHz: tuneHz.doubleValue, filterLow: filterLow.doubleValue,
+                        filterHigh: filterHigh.doubleValue, brightness: brightness.doubleValue,
+                        contrast: contrast.doubleValue)
+  }
 
-    // Fire-and-forget for the ROWS THEMSELVES (a dropped row is invisible on a
-    // scrolling waterfall — do NOT reintroduce ack-based backpressure, see above). But
-    // we DO listen for the error: a run of failures is how we discover the link has
-    // gone one-way, which is otherwise completely silent.
-    s.sendMessageData(batch, replyHandler: nil, errorHandler: { [weak self] _ in
-      self?.noteSendFailure()
-    })
+  @objc(retuneWatchSpectrum:)
+  func retuneWatchSpectrum(_ tuneHz: NSNumber) {
+    specForwarder.retune(tuneHz: tuneHz.doubleValue)
+  }
+
+  @objc func stopWatchSpectrum() {
+    specForwarder.stop()
   }
 
   /// FM-DX state, as JSON. A different SCREEN on the watch, not a variant of the

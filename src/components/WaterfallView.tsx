@@ -663,7 +663,12 @@ function WaterfallView({
     // watchProvider does its own DSP from SDRScreen.onSpectrum instead.)
     const wc = watchCfg.current;
     watchProvider.pushProcessedRow(frame.row, {
-      centerHz:   fstatus.centerHz,
+      // trueCenterHz = the frame's REAL bin centre. The watch INDEXES INTO these bins to crop
+      // around the VFO, so it must use the real centre or the signal draws offset from the VFO
+      // (the "signal next to the VFO" bug). This does NOT change the main app's own render —
+      // the waterfall above still uses fstatus.centerHz (the predicted centre) for gesture
+      // continuity; only what the WATCH is told to crop by changes.
+      centerHz:   fstatus.trueCenterHz ?? fstatus.centerHz,
       bwHz:       fstatus.bwHz,
       tuneHz:     wc.tuneHz,
       filterLow:  wc.filterLow,
