@@ -174,6 +174,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       return next;
     });
   }, []);
+  // Remember the user's last sort choice across launches.
+  useEffect(() => {
+    AsyncStorage.getItem('vibe.picker.sort').then(v => {
+      if (v === 'nearest' || v === 'snr' || v === 'country') setSortMode(v);
+    }).catch(() => {});
+  }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
@@ -1208,7 +1214,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           />
           <TouchableOpacity
             style={[styles.sortBtn, { borderColor: sortMode !== 'nearest' ? C.borderBright : C.border }]}
-            onPress={() => setSortMode(m => m === 'nearest' ? 'snr' : m === 'snr' ? 'country' : 'nearest')}
+            onPress={() => {
+              const next: SortMode = sortMode === 'nearest' ? 'snr' : sortMode === 'snr' ? 'country' : 'nearest';
+              setSortMode(next);
+              AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});   // persist the choice
+            }}
           >
             <Text style={{ fontFamily: F, fontSize: fs(11), color: sortMode !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
               {sortMode === 'snr' ? '📶 SNR' : sortMode === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
