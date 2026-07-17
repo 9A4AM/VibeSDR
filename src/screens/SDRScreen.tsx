@@ -683,6 +683,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [kiwiRefused, setKiwiRefused] = useState<string | null>(null);  // Kiwi refusal card (msg)
   const [compatWarn,  setCompatWarn]  = useState(false); // "leaving VibeSDR" warning before web view
   const [compatUrl,   setCompatUrl]   = useState<string | null>(null);  // Kiwi web UI in a WebView
+  // A definitive Kiwi refusal terminates the session — an auto-reconnect/zombie watchdog must NOT
+  // then stack a "serverLost / Reconnect" card on top of the refusal card. Ref (not state) so the
+  // callbacks below read it without stale closures.
+  const kiwiRefusedRef = useRef(false);
+  const clearKiwiRefused = useCallback(() => { kiwiRefusedRef.current = false; setKiwiRefused(null); }, []);
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
   const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1995,7 +2000,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+      onConnect:    () => { if (!destroyed.current) { kiwiRefusedRef.current = false; setKiwiRefused(null); setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
@@ -2006,12 +2011,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
         // the server is usually still restarting).
-        if (destroyed.current) return;
+        if (destroyed.current || kiwiRefusedRef.current) return;   // refusal card already owns the screen
         setServerLost(true);
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
       onServerBusy: () => {
-        if (destroyed.current) return;
+        if (destroyed.current || kiwiRefusedRef.current) return;   // refusal card already owns the screen
         setServerBusy(true);
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
@@ -2265,7 +2270,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Back to Instances / Try Again / Compatibility Mode. Owner restrictions (app-block,
         // private password, slot limits) can't be fixed by the UberSDR bypass-password box, so
         // it's never offered here — that route is UberSDR-only, for per-IP RATE limits.
-        if (route.params.serverType === 'kiwi') { setKiwiRefused(msg); return; }
+        if (route.params.serverType === 'kiwi') { kiwiRefusedRef.current = true; setKiwiRefused(msg); return; }
         if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
           setPwPrompt(true);
         } else {
@@ -4202,15 +4207,15 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.serverLostBody}>{kiwiRefused}</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
-                onPress={() => { setKiwiRefused(null); navigation.goBack(); }} activeOpacity={0.85}>
+                onPress={() => { clearKiwiRefused(); navigation.goBack(); }} activeOpacity={0.85}>
                 <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>BACK TO INSTANCE LIST</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
-                onPress={() => { setKiwiRefused(null); fullReconnect(); }} activeOpacity={0.85}>
+                onPress={() => { clearKiwiRefused(); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>TRY AGAIN</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
-                onPress={() => { setKiwiRefused(null); setCompatWarn(true); }} activeOpacity={0.85}>
+                onPress={() => { clearKiwiRefused(); setCompatWarn(true); }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
               </TouchableOpacity>
             </View>
