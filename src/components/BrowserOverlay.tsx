@@ -10,7 +10,7 @@
 
 import React, { useRef, useState } from 'react';
 import {
-  Modal, Share, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -33,6 +33,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   const [canFwd,  setCanFwd]  = useState(false);
   const [curUrl,  setCurUrl]  = useState(url);
   const [progress, setProgress] = useState(0);   // 0..1 page-load progress (Safari-style bar)
+  const [loading,  setLoading]  = useState(true); // spinner while the page loads (slow-first-byte)
   if (!url) return null;
   // Hand the currently-open URL to the OS share sheet — for an image (a tapped
   // file in the OWRX gallery) iOS/Android offer "Save Image" / "Save to Files".
@@ -87,13 +88,14 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
           source={{ uri: url }}
           style={styles.web}
           allowsBackForwardNavigationGestures
-          onLoadStart={() => setProgress(0)}
+          onLoadStart={() => { setProgress(0); setLoading(true); }}
           onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
           // Inject after the page loads (injectedJavaScript-prop timing was
           // unreliable on the OWRX map). A MutationObserver re-applies it in case
           // the header mounts after load.
           onLoadEnd={() => {
             setProgress(1);
+            setLoading(false);
             if (!injectCSS) return;
             const css = JSON.stringify(injectCSS);
             webRef.current?.injectJavaScript(
@@ -106,6 +108,12 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
             setCurUrl(nav.url);
           }}
         />
+        {loading && (
+          <View style={styles.spinnerWrap} pointerEvents="none">
+            <ActivityIndicator size="large" color="#FFB833" />
+            <Text style={styles.spinnerText}>Loading…</Text>
+          </View>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -113,8 +121,10 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
 
 const styles = StyleSheet.create({
   root:  { flex: 1, backgroundColor: '#000' },
-  progressTrack: { height: 2.5, backgroundColor: 'rgba(255,160,0,0.12)' },
-  progressFill:  { height: 2.5, backgroundColor: '#FFB833' },
+  progressTrack: { height: 3, backgroundColor: 'rgba(255,160,0,0.12)' },
+  progressFill:  { height: 3, backgroundColor: '#FFB833' },
+  spinnerWrap:   { position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  spinnerText:   { fontFamily: 'Courier', fontSize: 13, color: 'rgba(255,184,51,0.9)', letterSpacing: 1 },
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
