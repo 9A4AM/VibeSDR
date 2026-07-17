@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // UIImage — the bundled server-type logos load by name (no asset catalog)
 
 /// The spike's instance picker — a wrist port of the phone's InstancePickerScreen.
 ///
@@ -169,10 +170,20 @@ struct InstancePickerView: View {
   }
 
   // ── Badge ─────────────────────────────────────────────────────────────────────
+  // Same server-type logos as the phone picker (bundled PNGs in Logos/). SpyServer + RTL-TCP
+  // reuse the rtl_tcp mark. Falls back to a monogram if an image is missing.
+  private static let logoName: [ServerType: String] = [
+    .ubersdr: "logo_ubersdr", .kiwi: "logo_kiwi", .owrx: "logo_owrx",
+    .fmdx: "logo_fmdx", .spyserver: "rtltcp", .rtltcp: "rtltcp",
+  ]
   @ViewBuilder private func typeBadge(_ t: ServerType) -> some View {
-    Text(String(t.display.prefix(1)))
-      .font(.system(size: 11, weight: .bold)).foregroundColor(.black)
-      .frame(width: 20, height: 20).background(Self.amber.opacity(0.85), in: Circle())
+    if let name = Self.logoName[t], let img = UIImage(named: name) {
+      Image(uiImage: img).resizable().scaledToFit().frame(width: 22, height: 22)
+    } else {
+      Text(String(t.display.prefix(1)))
+        .font(.system(size: 11, weight: .bold)).foregroundColor(.black)
+        .frame(width: 20, height: 20).background(Self.amber.opacity(0.85), in: Circle())
+    }
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────────

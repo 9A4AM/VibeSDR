@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B67CAAC9C40F82EDD20C83D9 /* rtltcp.png in Resources */ = {isa = PBXBuildFile; fileRef = 5109AD6983CF9B61DFD0B470 /* rtltcp.png */; };
+		4F6C7EFD801BE26185C1DB11 /* logo_fmdx.png in Resources */ = {isa = PBXBuildFile; fileRef = 14221CE44836568FE0512BC9 /* logo_fmdx.png */; };
+		9186F1CB61D8D96DADE1893D /* logo_kiwi.png in Resources */ = {isa = PBXBuildFile; fileRef = AC0D080CF6523CB3740CC1EA /* logo_kiwi.png */; };
+		A6EF82086E3D8DCC5558E85A /* logo_owrx.png in Resources */ = {isa = PBXBuildFile; fileRef = ADDD8C5F9416C6FF6476FC0E /* logo_owrx.png */; };
+		E6507EAD5EFADCA47A80F7ED /* logo_ubersdr.png in Resources */ = {isa = PBXBuildFile; fileRef = 23814BECB7A108AA19358811 /* logo_ubersdr.png */; };
 		0FF91F53C13F2C0276A0F3D1 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B1A34CDBF05411435076530 /* KiwiClient.swift */; };
 		33210F5613C36004BD310DF9 /* ImaAdpcm.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41402E09F3BE548998525AB0 /* ImaAdpcm.swift */; };
 		545E5EC9A18D83C0F13E068F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8571DA172F523D9E4DD1761B /* InstancePickerView.swift */; };
@@ -32,6 +37,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		5109AD6983CF9B61DFD0B470 /* rtltcp.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/rtltcp.png"; sourceTree = "<group>"; };
+		14221CE44836568FE0512BC9 /* logo_fmdx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/logo_fmdx.png"; sourceTree = "<group>"; };
+		AC0D080CF6523CB3740CC1EA /* logo_kiwi.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/logo_kiwi.png"; sourceTree = "<group>"; };
+		ADDD8C5F9416C6FF6476FC0E /* logo_owrx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/logo_owrx.png"; sourceTree = "<group>"; };
+		23814BECB7A108AA19358811 /* logo_ubersdr.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/logo_ubersdr.png"; sourceTree = "<group>"; };
 		0B1A34CDBF05411435076530 /* KiwiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KiwiClient.swift; sourceTree = "<group>"; };
 		41402E09F3BE548998525AB0 /* ImaAdpcm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImaAdpcm.swift; sourceTree = "<group>"; };
 		8571DA172F523D9E4DD1761B /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
@@ -74,6 +84,11 @@
 		E54ED815E4F7D7A7177E9F81 /* WristSDR */ = {
 			isa = PBXGroup;
 			children = (
+				5109AD6983CF9B61DFD0B470 /* rtltcp.png */,
+				14221CE44836568FE0512BC9 /* logo_fmdx.png */,
+				AC0D080CF6523CB3740CC1EA /* logo_kiwi.png */,
+				ADDD8C5F9416C6FF6476FC0E /* logo_owrx.png */,
+				23814BECB7A108AA19358811 /* logo_ubersdr.png */,
 				0B1A34CDBF05411435076530 /* KiwiClient.swift */,
 				41402E09F3BE548998525AB0 /* ImaAdpcm.swift */,
 				8571DA172F523D9E4DD1761B /* InstancePickerView.swift */,
@@ -184,6 +199,11 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B67CAAC9C40F82EDD20C83D9 /* rtltcp.png in Resources */,
+				4F6C7EFD801BE26185C1DB11 /* logo_fmdx.png in Resources */,
+				9186F1CB61D8D96DADE1893D /* logo_kiwi.png in Resources */,
+				A6EF82086E3D8DCC5558E85A /* logo_owrx.png in Resources */,
+				E6507EAD5EFADCA47A80F7ED /* logo_ubersdr.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
