@@ -358,9 +358,19 @@ struct ContentView: View {
         // seconds old and nobody is reading it, so the label costs nothing — and it now
         // sits directly above the band-boundary marks it explains, which is where it
         // belonged all along.
-        // Hint pill relocated here (was top-anchored): the newest rows are at the TOP and a top
-        // pill covers the very data you tune by, so it lives over seconds-old waterfall instead,
-        // beside the status cluster — pill + method + quality read as one "state of the link" group.
+        // ALL transient pills stack HERE, just above the band-label pill — the one place chrome
+        // lives, over seconds-old waterfall rather than the newest rows you tune by. Lock/unlock
+        // confirmation on top, then the link-hint pill (was top-anchored), then the band row.
+        if let lockPill {
+          Text(lockPill)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .background(.black.opacity(0.78), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
+            .padding(.bottom, 2)
+            .transition(.opacity)
+        }
         if let h = hint { hintPill(h).padding(.bottom, 2) }
         // Band label sits just above the frequency readout now — like the VTS label under the
         // main app's waterfall. The ticker has moved UP into the axis strip between the
@@ -402,16 +412,6 @@ struct ContentView: View {
         .padding(.bottom, 78)   // clear of the ticker/readout
       }
 
-      // Transient confirmation pill, centred — same language as the crown HUDs.
-      if let lockPill {
-        Text(lockPill)
-          .font(.system(size: 13, weight: .semibold, design: .rounded))
-          .foregroundStyle(.white)
-          .padding(.horizontal, 13).padding(.vertical, 7)
-          .background(.black.opacity(0.78), in: Capsule())
-          .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
-          .transition(.opacity)
-      }
 
       // THE COACH, once. Gated on everGotRow so it lands on a WORKING waterfall — a
       // tutorial over a black boot screen teaches you the app is broken. It also sits
