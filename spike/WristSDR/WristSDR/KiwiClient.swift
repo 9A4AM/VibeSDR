@@ -175,7 +175,9 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.sndSend("SET auth t=kiwi p=")
         self.sndSend("SET ident_user=\(self.ident)")
         self.sndSend("SERVER DE CLIENT openwebrx.js SND")
-        self.openWf()
+        // Do NOT open W/F here. Kiwi DROPS the SND socket (ENOTCONN "Socket is not connected")
+        // if the second socket opens before SND's auth is processed — the reference opens W/F
+        // only after the first SND MSG. We open it from onMsg (first MSG = auth done).
         self.startKeepalive()
       }
     }
@@ -219,8 +221,11 @@ final class KiwiClient: ObservableObject, SDRClient {
     }
   }
 
+  private var wfOpened = false
   private func onText(_ data: String, _ stream: String) {
     guard data.hasPrefix("MSG") else { return }
+    // First SND MSG ⇒ auth processed ⇒ now it's safe to open the W/F socket (see onReady note).
+    if stream == "SND", !wfOpened { wfOpened = true; openWf() }
     let body = String(data.dropFirst(4))
     for tok in body.split(separator: " ") {
       guard let eq = tok.firstIndex(of: "=") else { continue }
