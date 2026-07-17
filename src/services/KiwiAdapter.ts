@@ -223,7 +223,7 @@ export class KiwiAdapter implements SDRBackend {
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
       this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
-      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); fail(new Error('KiwiSDR SND closed')); };
+      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); fail(new Error('KiwiSDR SND closed')); };
 
       // Open W/F right away too (both share this.ts). The first-SND-MSG gate
       // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
@@ -270,7 +270,7 @@ export class KiwiAdapter implements SDRBackend {
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
-    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); };
+    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(ev?.reason ?? ''); };
   }
 
   // ── binary frame dispatch ───────────────────────────────────────────────
@@ -358,7 +358,10 @@ export class KiwiAdapter implements SDRBackend {
         // Guard on errorShown: badp arrives on BOTH the SND and W/F sockets, so without this it
         // fired onError (a native Alert) twice — two stacked alerts, the second lost when the
         // first navigates back. One refusal, one message.
-        if (val !== '0' && !this.errorShown) { this.errorShown = true; this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
+        // badp=1 is a SPECIFIC signal: the sign-in was rejected because this receiver has a
+        // listen PASSWORD set and we connected without one. (Guard on errorShown: badp arrives on
+        // BOTH sockets, and a socket close may also fire — one refusal, one message.)
+        if (val !== '0' && !this.errorShown) { this.errorShown = true; this.cb.onError('This KiwiSDR is password-protected — the owner requires a listen password, which VibeSDR doesn’t have. It’s a private receiver; try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
@@ -743,7 +746,7 @@ export class KiwiAdapter implements SDRBackend {
     if (q !== this.lastLink) { this.lastLink = q; this.cb.onLink?.(q); }
   }
 
-  private onSocketDrop(): void {
+  private onSocketDrop(closeReason: string = ''): void {
     if (!this.started) return;        // our own close() / already torn down
     this.started = false;
     // Fully tear down: a half-open connection (one socket wobbled closed on flaky
@@ -756,13 +759,16 @@ export class KiwiAdapter implements SDRBackend {
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
     if (!this.everConnected) {
-      // Closed BEFORE we ever received a frame = a REFUSAL, not a mid-session drop. Many blocked
-      // Kiwis just hang up the socket without a `badp` MSG, so this is the ONLY signal we get —
-      // give it the plain-English reason (routes to the clear alert, not the "stopped responding"
-      // card). Skip if badp already explained it.
+      // Closed BEFORE we ever received a frame = a REFUSAL, not a mid-session drop. Blocked Kiwis
+      // usually just hang up with no `badp` MSG — so the ONLY thing we can report is the WebSocket
+      // close reason, IF the server bothered to send one (most don't). Be honest either way, and
+      // skip if badp already explained it.
       if (!this.errorShown) {
         this.errorShown = true;
-        this.cb.onError('This KiwiSDR refused the connection — the owner may only allow their own web page (blocking apps), require a password, or every listener slot may be taken. Not a fault in VibeSDR — try another KiwiSDR, or use UberSDR or OpenWebRX.');
+        const reason = String(closeReason ?? '').trim();
+        this.cb.onError(reason
+          ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
+          : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
       }
     } else {
       // Was streaming, then dropped — a genuine mid-session loss.
