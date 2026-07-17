@@ -156,40 +156,39 @@ final class KiwiClient: ObservableObject, SDRClient {
   private func openSnd() {
     sndSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "SND") } }
     sndSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "SND") } }
+    // AudioSocket.onReady is DEAD (never invoked) — drive the handshake off the .ready STATE instead.
     sndSock.onState = { [weak self] st in
       Task { @MainActor in
         guard let self else { return }
-        self.sockState = st                          // last SND socket state (for the timeout debug)
+        self.sockState = st
         if !self.everFrame, self.status != "live" { self.status = st }
+        if st.contains("ready"), !self.sndAuthed {
+          self.sndAuthed = true
+          self.status = "registering"
+          self.sndSend("SET auth t=kiwi p=")
+          self.sndSend("SET ident_user=\(self.ident)")
+          self.sndSend("SERVER DE CLIENT openwebrx.js SND")
+          // Do NOT open W/F here — Kiwi DROPS SND (ENOTCONN) if the second socket opens before SND's
+          // auth is processed. W/F opens from onMsg (first SND MSG = auth done).
+          self.startKeepalive()
+        }
         if st.contains("failed") {
-          // Socket failed before any frame = a handshake block (the server bounced us to its own web
-          // page) or the host is unreachable. Show the raw error too (debug) so we can see the cause.
           self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
         }
       }
     }
-    sndSock.onReady = { [weak self] in
-      Task { @MainActor in
-        guard let self else { return }
-        self.status = "registering"
-        self.sndSend("SET auth t=kiwi p=")
-        self.sndSend("SET ident_user=\(self.ident)")
-        self.sndSend("SERVER DE CLIENT openwebrx.js SND")
-        // Do NOT open W/F here. Kiwi DROPS the SND socket (ENOTCONN "Socket is not connected")
-        // if the second socket opens before SND's auth is processed — the reference opens W/F
-        // only after the first SND MSG. We open it from onMsg (first MSG = auth done).
-        self.startKeepalive()
-      }
-    }
     sndSock.open(url: wsURL("SND"))
   }
+  private var sndAuthed = false
 
+  private var wfAuthed = false
   private func openWf() {
     wfSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "W/F") } }
     wfSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "W/F") } }
-    wfSock.onReady = { [weak self] in
+    wfSock.onState = { [weak self] st in
       Task { @MainActor in
-        guard let self else { return }
+        guard let self, st.contains("ready"), !self.wfAuthed else { return }
+        self.wfAuthed = true
         self.wfSend("SET auth t=kiwi p=")
         self.wfSend("SERVER DE CLIENT openwebrx.js W/F")
         self.wfSend("SET send_dB=1")
