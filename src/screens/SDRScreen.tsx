@@ -680,6 +680,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connected, setConnected] = useState(false);
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
+  const [kiwiRefused, setKiwiRefused] = useState<string | null>(null);  // Kiwi refusal card (msg)
+  const [compatWarn,  setCompatWarn]  = useState(false); // "leaving VibeSDR" warning before web view
+  const [compatUrl,   setCompatUrl]   = useState<string | null>(null);  // Kiwi web UI in a WebView
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
   const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2258,22 +2261,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError: (msg) => {
         if (destroyed.current) return;
-        const isKiwi = route.params.serverType === 'kiwi';
-        // KiwiSDR refusals are OWNER restrictions — an app-block, a private password we don't
-        // have, or slot/IP limits — none of which the UberSDR bypass-password box can fix. So for
-        // Kiwi, show the plain-English reason the adapter gave and NEVER offer that box (which
-        // just looks broken). The bypass-password route is UberSDR-only: its instance password
-        // gets around per-IP RATE limits, which is a different thing entirely.
-        if (!isKiwi && /429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
+        // KiwiSDR refusals get our own CUSTOM card (not a system alert) with three choices:
+        // Back to Instances / Try Again / Compatibility Mode. Owner restrictions (app-block,
+        // private password, slot limits) can't be fixed by the UberSDR bypass-password box, so
+        // it's never offered here — that route is UberSDR-only, for per-IP RATE limits.
+        if (route.params.serverType === 'kiwi') { setKiwiRefused(msg); return; }
+        if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
           setPwPrompt(true);
         } else {
-          Alert.alert(isKiwi ? 'KiwiSDR unavailable' : 'Connection Error', msg,
-            isKiwi
-              ? [{ text: 'Back to Instances', onPress: () => navigation.goBack() }]
-              : [
-                  { text: 'Back to Instances', onPress: () => navigation.goBack() },
-                  { text: 'Enter Password', onPress: () => setPwPrompt(true) },
-                ]);
+          Alert.alert('Connection Error', msg, [
+            { text: 'Back to Instances', onPress: () => navigation.goBack() },
+            { text: 'Enter Password', onPress: () => setPwPrompt(true) },
+          ]);
         }
       },
     }, password, !!route.params.isLocal);
@@ -4193,6 +4192,66 @@ export default function SDRScreen({ route, navigation }: Props) {
             </View>
           </View>
         </View>
+      )}
+
+      {/* KiwiSDR refused the connection — our own card, three choices. */}
+      {kiwiRefused && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
+            <Text style={styles.serverLostBody}>{kiwiRefused}</Text>
+            <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+                onPress={() => { setKiwiRefused(null); navigation.goBack(); }} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>BACK TO INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+                onPress={() => { setKiwiRefused(null); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>TRY AGAIN</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+                onPress={() => { setKiwiRefused(null); setCompatWarn(true); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Warning before opening the receiver's own web UI in compatibility mode. */}
+      {compatWarn && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Open in compatibility mode?</Text>
+            <Text style={styles.serverLostBody}>This opens the KiwiSDR’s OWN web interface inside VibeSDR — you’ll use Kiwi’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
+            <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+                onPress={() => { setCompatWarn(false); navigation.goBack(); }} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+                onPress={() => {
+                  setCompatWarn(false);
+                  let u = (baseUrl || '').trim().replace(/\/+$/, '')
+                    .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+                  if (!/^https?:\/\//.test(u)) u = 'http://' + u;
+                  setCompatUrl(u + '/');
+                }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>CONTINUE</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Compatibility mode — the Kiwi's own web page full-screen; ← VibeSDR returns to the list. */}
+      {compatUrl && (
+        <BrowserOverlay
+          url={compatUrl}
+          title={(instanceName ?? 'KiwiSDR') + ' — web'}
+          backLabel="← VibeSDR"
+          onClose={() => { setCompatUrl(null); navigation.goBack(); }}
+        />
       )}
 
       {/* Connection to an UberSDR instance dropped (e.g. it rebooted). It auto-

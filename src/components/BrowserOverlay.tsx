@@ -23,9 +23,11 @@ export interface BrowserOverlayProps {
   allowSave?: boolean;
   /** CSS injected into the page (e.g. hide the OWRX header to enlarge the map). */
   injectCSS?: string;
+  /** Back-bar label (default "← SDR"; compatibility mode uses "← VibeSDR"). */
+  backLabel?: string;
 }
 
-export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS }: BrowserOverlayProps) {
+export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel }: BrowserOverlayProps) {
   const webRef = useRef<WebView>(null);
   const [canBack, setCanBack] = useState(false);
   const [canFwd,  setCanFwd]  = useState(false);
@@ -51,7 +53,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
       <SafeAreaView style={styles.root} edges={['top']}>
         <View style={styles.bar}>
           <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
-            <Text style={styles.back}>← SDR</Text>
+            <Text style={styles.back}>{backLabel ?? '← SDR'}</Text>
           </TouchableOpacity>
           <Text style={styles.title} numberOfLines={1}>{title ?? url}</Text>
           {allowSave && (
