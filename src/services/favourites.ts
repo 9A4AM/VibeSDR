@@ -5,7 +5,41 @@ const KEY = 'vsdr_favourites';
 
 // SpyServer favourites carry url = spyserver://host:port (the protocol has no
 // web UI to point a browser at); the picker routes on serverType.
-export type Favourite = { name: string; url: string; serverType?: BackendType };
+//
+// visits    = Most-Used tally: bumped every time the user connects to this favourite, on the
+//             phone OR the watch (the watch's counts fold in via sync). Default sort is by this.
+// lat/lon   = snapshot of the receiver's location (from the directory entry when favourited, and
+//             refreshed when a directory loads) → the Nearest sort.
+// bestSnr   = snapshot of the last-seen reported SNR → the SNR sort (missing ⇒ sorts to the bottom).
+// order is the array position itself = the Manual (drag) order.
+export type Favourite = {
+  name: string; url: string; serverType?: BackendType;
+  visits?: number; latitude?: number; longitude?: number; bestSnr?: number;
+};
+
+export type FavSort = 'used' | 'alpha' | 'nearest' | 'snr' | 'manual';
+const FAV_SORT_KEY = 'vibe.fav.sort';
+export async function getFavSort(): Promise<FavSort> {
+  try { const v = await AsyncStorage.getItem(FAV_SORT_KEY);
+    return (v === 'used' || v === 'alpha' || v === 'nearest' || v === 'snr' || v === 'manual') ? v : 'used';
+  } catch { return 'used'; }
+}
+export async function setFavSort(v: FavSort): Promise<void> {
+  try { await AsyncStorage.setItem(FAV_SORT_KEY, v); } catch { /* best effort */ }
+}
+
+/** Bump the Most-Used tally for whichever favourite matches this url (server, custom URL, local,
+ *  TCP, spyserver — the url is the key). No-op if it isn't a favourite. Returns the updated list. */
+export async function registerFavouriteVisit(url: string): Promise<Favourite[]> {
+  const favs = await getFavourites();
+  let changed = false;
+  const next = favs.map(f => {
+    if (f.url === url) { changed = true; return { ...f, visits: (f.visits ?? 0) + 1 }; }
+    return f;
+  });
+  if (changed) await saveFavourites(next);
+  return next;
+}
 
 export async function getFavourites(): Promise<Favourite[]> {
   try {
@@ -24,7 +58,9 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
   const exists = current.some(f => f.url === fav.url);
   const next = exists
     ? current.filter(f => f.url !== fav.url)
-    : [...current, { name: fav.name, url: fav.url, serverType: fav.serverType }];
+    : [...current, { name: fav.name, url: fav.url, serverType: fav.serverType,
+                     latitude: fav.latitude, longitude: fav.longitude, bestSnr: fav.bestSnr,
+                     visits: fav.visits ?? 0 }];
   await saveFavourites(next);
   return next;
 }

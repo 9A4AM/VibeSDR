@@ -82,7 +82,8 @@ import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkSta
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
-         repairVibeserverFavourites,
+         repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
+         FavSort, getFavSort, setFavSort,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
@@ -138,6 +139,31 @@ function countryName(code: string | null): string {
 // 'country' = collapsible groups by country; 'nearest' = distance bands; 'snr' = signal tiers.
 type SortMode = 'nearest' | 'snr' | 'country';
 
+// Great-circle km between two lat/lon points (favourites' Nearest sort).
+function haversineKm(la1: number, lo1: number, la2: number, lo2: number): number {
+  const R = 6371, toR = Math.PI / 180;
+  const dLa = (la2 - la1) * toR, dLo = (lo2 - lo1) * toR;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * toR) * Math.cos(la2 * toR) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+// Sort favourites for display. 'manual' keeps the stored array order (the drag order); the rest
+// derive from the tally / name / snapshot. Missing SNR or location sinks to the bottom.
+function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null): Favourite[] {
+  const arr = [...list];
+  const km = (f: Favourite) => (f.latitude != null && f.longitude != null && loc)
+    ? haversineKm(loc.lat, loc.lon, f.latitude, f.longitude) : Infinity;
+  if (mode === 'used')         arr.sort((a, b) => (b.visits ?? 0) - (a.visits ?? 0));
+  else if (mode === 'alpha')   arr.sort((a, b) => a.name.localeCompare(b.name));
+  else if (mode === 'nearest') arr.sort((a, b) => km(a) - km(b));
+  else if (mode === 'snr')     arr.sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+  return arr;   // 'manual' → unchanged
+}
+const FAV_SORT_CYCLE: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'manual'];
+const FAV_SORT_LABEL: Record<FavSort, string> = {
+  used: '★ MOST USED', alpha: 'A–Z', nearest: 'NEAREST', snr: 'SNR', manual: 'MANUAL',
+};
+
 // Collapsible band a server falls into for NEAR mode. Closest band opens by default; unknowns last.
 function distanceBand(km: number | null | undefined): { key: string; label: string; order: number } {
   if (km == null || !Number.isFinite(km)) return { key: 'd:none', label: 'Distance unknown', order: 99 };
@@ -183,6 +209,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // Whether we have a usable location (GPS permission granted, or a manual city/grid entered).
   // Gates the 'nearest' sort — no location means no distances to sort by.
   const [hasLocation, setHasLocation]   = useState(false);
+  // How the FAVOURITES list is ordered (default Most Used). Persisted; cycled from the fav header.
+  const [favSort, setFavSortState] = useState<FavSort>('used');
+  useEffect(() => { getFavSort().then(setFavSortState).catch(() => {}); }, []);
+  const cycleFavSort = useCallback(() => {
+    setFavSortState(prev => {
+      const next = FAV_SORT_CYCLE[(FAV_SORT_CYCLE.indexOf(prev) + 1) % FAV_SORT_CYCLE.length];
+      setFavSort(next).catch(() => {});
+      return next;
+    });
+  }, []);
   // The user's country (device locale, no permission) — group heading + default-open group.
   const userCountry = useMemo(() => deviceCountry(), []);
   // Which collapsible groups are currently OPEN. Seeded with the user's country so their
@@ -379,9 +415,32 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setFavourites(next);
   }, [favourites]);
 
+  // Keep favourites' location/SNR snapshots fresh: whenever a directory's instances load, copy the
+  // matching entry's lat/lon/bestSnr onto the favourite so Nearest/SNR sorts aren't stale.
+  useEffect(() => {
+    if (!instances.length) return;
+    const byUrl = new Map(instances.map(i => [i.url, i]));
+    setFavourites(prev => {
+      let changed = false;
+      const next = prev.map(f => {
+        const inst = byUrl.get(f.url);
+        if (!inst) return f;
+        const lat = inst.latitude ?? f.latitude, lon = inst.longitude ?? f.longitude, snr = inst.bestSnr ?? f.bestSnr;
+        if (lat === f.latitude && lon === f.longitude && snr === f.bestSnr) return f;
+        changed = true;
+        return { ...f, latitude: lat ?? undefined, longitude: lon ?? undefined, bestSnr: snr ?? undefined };
+      });
+      if (changed) saveFavourites(next).catch(() => {});
+      return changed ? next : prev;
+    });
+  }, [instances]);
+
   const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
+    // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
+    // it floats to the top under the default sort. No-op if this isn't a favourite.
+    registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
     // FM-DX Webserver: distinct tuner screen, and checkConnection (UberSDR-shaped)
     // doesn't apply — the adapter opens the /text WS itself.
     if (serverType === 'fmdx') {
@@ -877,7 +936,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const showFavs = selectedDir === null;
     const instanceUrls = new Set(instances.map(i => i.url));
     const favItems: ListItem[] = showFavs ? [
-      ...favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav).map(f => ({ kind: 'custom' as const, fav: f })),
+      ...sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current)
+          .map(f => ({ kind: 'custom' as const, fav: f })),
       ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
     ] : [];
     // In a directory, a favourited server still shows in its OWN group (don't vanish it) —
@@ -930,7 +990,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
     }
     return out;
-  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir]);
+  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir, favSort]);
 
   // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
   const collapsibleKeys = useMemo(
@@ -948,6 +1008,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const renderItem = ({ item }: { item: ListItem }) => {
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
+      // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
+      if (item.groupKey === '__fav') {
+        return (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 6 }}>
+            <View style={{ flex: 1 }}>
+              <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
+            </View>
+            <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
+              <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
       return (
         <SectionHeader
           label={item.count > 0 ? `${item.label}  (${item.count})` : item.label}
@@ -980,6 +1053,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }} numberOfLines={1}>{fav.url}</Text>
+              {(fav.visits ?? 0) > 0 && (
+                <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.goldDim, letterSpacing: 0.5 }}>
+                  ★ {fav.visits} visit{fav.visits === 1 ? '' : 's'}
+                </Text>
+              )}
             </View>
             <View style={styles.rowRight}>
               <TouchableOpacity style={{ padding: 4 }}
@@ -1080,7 +1158,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={{ padding: 4 }}
-              onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType })}>
+              onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
+                latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined })}>
               <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
             </TouchableOpacity>
           </View>
