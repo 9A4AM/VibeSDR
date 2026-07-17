@@ -4125,7 +4125,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Reconnect failed (server full / rate-limited) — tap retries */}
-      {reconnectFailedUi && (
+      {!kiwiRefused && reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); }}
           activeOpacity={0.85}>
@@ -4135,7 +4135,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
           tell the user to wait before reconnecting (the server's still booting). */}
-      {serverLost && (() => {
+      {!kiwiRefused && serverLost && (() => {
         const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
                         : route.params.serverType === 'owrx' ? 'OpenWebRX'
                         : 'SDR';
@@ -4180,7 +4180,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {serverBusy && (
+      {!kiwiRefused && serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
@@ -4264,7 +4264,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Returning from the background — the spectrum was paused, so show a calm
           reinitialising notice while the waterfall re-subscribes (no buttons; it
           clears itself on the first frame, or escalates to "Connection lost"). */}
-      {reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!kiwiRefused && reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Reinitialising</Text>
@@ -4278,7 +4278,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Audio resumed fine but the waterfall/spectrum never re-subscribed after
           a background — give the user an escape (the rest of the app is alive). */}
-      {specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!kiwiRefused && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
@@ -4299,7 +4299,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
+      {!kiwiRefused && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Connection lost</Text>
@@ -4323,7 +4323,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Initial connect never completed (wedged host/shim/USB). Escape hatch so
           the app can never be permanently stuck on the connecting spinner. */}
-      {connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
+      {!kiwiRefused && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
@@ -4349,7 +4349,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
-      {dataSaverOff && !reconnectFailedUi && (
+      {!kiwiRefused && dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
