@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		545E5EC9A18D83C0F13E068F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8571DA172F523D9E4DD1761B /* InstancePickerView.swift */; };
+		BEF4ED448975D1505C5D5EE9 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */; };
 		27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967BF6CB775E6B40E9E614BA /* SpikeLink.swift */; };
 		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
 		39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */; };
@@ -28,6 +30,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		8571DA172F523D9E4DD1761B /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
+		C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1D4434780FAA0BCA12A4738A /* BandwidthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandwidthView.swift; sourceTree = "<group>"; };
 		37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSDRApp.swift; sourceTree = "<group>"; };
@@ -66,6 +70,8 @@
 		E54ED815E4F7D7A7177E9F81 /* WristSDR */ = {
 			isa = PBXGroup;
 			children = (
+				8571DA172F523D9E4DD1761B /* InstancePickerView.swift */,
+				C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */,
 				37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */,
 				A5C7CA3AAA59DBED958D0315 /* ContentView.swift */,
 				D43A131B3C936F106D8872A6 /* UberClient.swift */,
@@ -182,6 +188,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				545E5EC9A18D83C0F13E068F /* InstancePickerView.swift in Sources */,
+				BEF4ED448975D1505C5D5EE9 /* SDRDirectory.swift in Sources */,
 				49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */,
 				70EE588C003629B12094698A /* ContentView.swift in Sources */,
 				A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */,

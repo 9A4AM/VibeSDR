@@ -138,7 +138,25 @@ final class SpikeLink: ObservableObject {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+  /// The server the picker chose, shown in the UI. Empty until one is selected.
+  @Published var serverName = ""
+  private var started = false
+
+  /// Start the receiver against a chosen UberSDR host (from the instance picker). Idempotent —
+  /// calling again with the same session is a no-op so ContentView's onAppear can't double-start.
+  func start(host: String, name: String) {
+    guard !started else { return }
+    started = true
+    client.host = host
+    serverName = name
+    startBatteryMonitor()
+    client.start()
+  }
+
+  /// Legacy no-arg start (kept for any caller): connects to the client's default host.
   func start() {
+    guard !started else { return }
+    started = true
     startBatteryMonitor()
     client.start()
   }

@@ -15,7 +15,9 @@ import Network
 @MainActor
 final class UberClient: ObservableObject {
 
-  static let host = "stuey3d.tunnel.ubersdr.org"
+  /// The UberSDR host to connect to. Selectable now (was a hardcoded `static let`) so the
+  /// instance picker can point the spike at any UberSDR server the user chooses.
+  var host = "stuey3d.tunnel.ubersdr.org"
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"
@@ -298,7 +300,7 @@ final class UberClient: ObservableObject {
   private var specOpened = false
 
   private func postConnection() async -> Bool {
-    var req = URLRequest(url: URL(string: "https://\(Self.host)/connection")!)
+    var req = URLRequest(url: URL(string: "https://\(host)/connection")!)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     // The same headers the phone sends. It is not obvious that the server cares — but a
@@ -341,7 +343,7 @@ final class UberClient: ObservableObject {
   private func openSpectrum() {
     specOpenSeq &+= 1
     let seq = specOpenSeq
-    let url = URL(string: "wss://\(Self.host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
+    let url = URL(string: "wss://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -750,7 +752,7 @@ final class UberClient: ObservableObject {
     // `/ws`, NOT `/ws/audio` — and the tune rides the QUERY STRING, not a message. Taken
     // verbatim from VibePowerModule.audioWsURL.
     guard let url = URL(string:
-      "wss://\(Self.host)/ws?user_session_id=\(uuid)" +
+      "wss://\(host)/ws?user_session_id=\(uuid)" +
       "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2") else { return }
 
     audioSock.onData = { [weak self] d in

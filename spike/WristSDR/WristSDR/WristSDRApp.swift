@@ -15,17 +15,25 @@ import SwiftUI
 @main
 struct WristSDRApp: App {
   @StateObject private var link = SpikeLink()
+  @StateObject private var favs = FavStore()
 
   var body: some Scene {
     WindowGroup {
       // NavigationStack so the numpad and control menu can be PUSHED, exactly as the
       // companion does — a sheet's mandatory header steals ~100pt on a watch.
       NavigationStack {
-        ContentView()
-          .environmentObject(link)
-          .navigationBarHidden(true)
+        if link.serverName.isEmpty {
+          // Instance picker first — pick a server, THEN the receiver connects to it.
+          InstancePickerView { server in
+            link.start(host: server.host, name: server.name)
+          }
+          .environmentObject(favs)
+        } else {
+          ContentView()
+            .environmentObject(link)
+            .navigationBarHidden(true)
+        }
       }
-      .onAppear { link.start() }
     }
   }
 }
