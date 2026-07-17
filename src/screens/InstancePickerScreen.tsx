@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import {
   ActivityIndicator,
   Alert,
@@ -433,6 +434,20 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const next = await toggleFavourite(fav, favourites);
     setFavourites(next);
   }, [favourites]);
+
+  // Manual-mode drag reorder: the dragged list mixes headers/directories, but only favourite rows
+  // can be picked up, so we persist just the new favourite order (by url) and let listData rebuild
+  // the rest into their canonical spots.
+  const handleFavDragEnd = useCallback((data: ListItem[]) => {
+    const order = data.filter((i): i is Extract<ListItem, { kind: 'custom' }> => i.kind === 'custom').map(i => i.fav.url);
+    if (!order.length) return;
+    const rank = new Map(order.map((u, i) => [u, i]));
+    setFavourites(prev => {
+      const next = [...prev].sort((a, b) => (rank.get(a.url) ?? 1e9) - (rank.get(b.url) ?? 1e9));
+      saveFavourites(next).catch(() => {});
+      return next;
+    });
+  }, []);
 
   // Live directory metrics for favourites (normUrl → {dist, snr}). Held in STATE, not written onto
   // the stored favourite — the focus effect reloads favourites from storage on every focus, which
@@ -1042,19 +1057,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
 
-  const renderItem = ({ item }: { item: ListItem }) => {
+  const renderItem = ({ item, drag, isActive }: { item: ListItem; drag?: () => void; isActive?: boolean }) => {
     // Explicit collapsible section headers (favourites / country groups / OTHER).
     if (item.kind === 'header') {
       // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
       if (item.groupKey === '__fav') {
         return (
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 6 }}>
-            <View style={{ flex: 1 }}>
-              <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
+          <View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 6 }}>
+              <View style={{ flex: 1 }}>
+                <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
+              </View>
+              <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
+                <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
-              <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
-            </TouchableOpacity>
+            {favSort === 'manual' && (
+              <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 0.5, paddingHorizontal: 2, marginTop: 2, marginBottom: 4 }}>
+                ≡ Tap and hold a server to drag it into order
+              </Text>
+            )}
           </View>
         );
       }
@@ -1072,10 +1094,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (item.kind === 'custom') {
       const fav = item.fav;
       const isDefault = defaultInst?.url === fav.url;
-      return (
+      const canDrag = favSort === 'manual' && !!drag;
+      const body = (
           <TouchableOpacity
-            style={[styles.row, { borderColor: C.borderBright, backgroundColor: 'rgba(255,100,100,0.06)' }]}
+            style={[styles.row, { borderColor: C.borderBright, backgroundColor: isActive ? 'rgba(255,160,0,0.22)' : 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
+            onLongPress={canDrag ? drag : undefined}
+            delayLongPress={180}
             disabled={connecting}
           >
             <View style={styles.rowMain}>
@@ -1114,9 +1139,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <TouchableOpacity style={{ padding: 4 }} onPress={() => handleToggleFav(fav)}>
                 <Text style={{ fontSize: fs(18), color: C.red }}>♥</Text>
               </TouchableOpacity>
+              {canDrag && (
+                <TouchableOpacity style={{ paddingLeft: 6, paddingVertical: 4 }} onPressIn={drag} delayLongPress={0}>
+                  <Text style={{ fontSize: fs(20), color: C.goldDim }}>≡</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </TouchableOpacity>
       );
+      return canDrag ? <ScaleDecorator>{body}</ScaleDecorator> : body;
     }
 
     const inst = item.data;
@@ -1494,10 +1525,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             />
           )
         ) : (
-          <FlatList
+          <DraggableFlatList
             data={listData}
+            onDragEnd={({ data }) => handleFavDragEnd(data)}
+            activationDistance={12}
             keyExtractor={item => item.kind === 'header' ? 'hdr:' + item.groupKey : item.kind === 'custom' ? 'custom:' + item.fav.url : 'inst:' + item.data.url}
-            renderItem={renderItem}
+            renderItem={renderItem as any}
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
