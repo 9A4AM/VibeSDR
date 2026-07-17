@@ -71,6 +71,36 @@ struct InstanceNodes: Shape {
   }
 }
 
+/// Owns the 20fps waterfall repaint clock in ITS OWN view, so bumping the frame counter
+/// invalidates only this Canvas — not the whole ContentView body (ticker, status glyphs, band
+/// row, hint logic), which previously rebuilt 20x/sec and was the CPU cost that grew with every
+/// piece of chrome added. The drawing itself stays on ContentView (it reads only `link`, a
+/// reference type) and is handed in as `draw`; this view just clocks the repaints.
+private struct WaterfallCanvas: View {
+  @Binding var crownMode: CrownMode
+  let crownUsedAt: Date
+  let idleTimeout: TimeInterval
+  let draw: (GraphicsContext, CGSize) -> Void
+
+  @State private var frame = 0
+  private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
+
+  var body: some View {
+    Canvas { ctx, size in
+      _ = frame                     // read so SwiftUI repaints on each tick
+      draw(ctx, size)
+    }
+    .ignoresSafeArea()
+    .onReceive(driver) { _ in
+      frame &+= 1
+      // Lapse back to TUNE once the crown has been left alone — on the clock we already run.
+      if crownMode != .tune, Date().timeIntervalSince(crownUsedAt) > idleTimeout {
+        crownMode = .tune
+      }
+    }
+  }
+}
+
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
 ///
 /// Solid bars would cut the waterfall in two and steal height at both ends, and
@@ -131,8 +161,8 @@ struct ContentView: View {
   /// ANY published change repainted BOTH. The clocks simply summed (12 + 25 + rows
   /// ≈ 45 redraws/sec of everything) and CPU rose. The decoupling was imaginary;
   /// only the cost was real. Doing it properly means giving each Canvas its own
-  /// View struct observing only what it needs — not worth it while 20fps looks fine.
-  @State private var frame = 0
+  /// View struct observing only what it needs — DONE: see `WaterfallCanvas`, which owns the
+  /// frame counter so the render clock no longer invalidates this whole body.
   @State private var showNumpad = false
   @State private var showMenu = false
   /// What the crown does. Explicit and persistent — never a timed-out HUD, because
@@ -236,7 +266,17 @@ struct ContentView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      if link.everGotRow { waterfall } else { placeholder }
+      if link.everGotRow {
+        // The Canvas + its 20fps repaint clock live in a DEDICATED child view now, so bumping
+        // the frame counter invalidates only the waterfall — NOT the whole ContentView body
+        // (ticker, status glyphs, band row, hint logic), which used to rebuild 20x/sec and was
+        // the CPU that kept climbing as chrome was added. The drawing stays here (it only reads
+        // `link`) and is passed in as a closure.
+        WaterfallCanvas(crownMode: $crownMode, crownUsedAt: crownUsedAt,
+                        idleTimeout: Self.crownIdleTimeout) { ctx, size in
+          drawWaterfall(ctx, size)
+        }
+      } else { placeholder }
 
       // STATUS CLUSTER — bottom-right, a vertical pill (method above quality) on its own scrim.
       // Method = what the watch is connected THROUGH (iPhone relay / WiFi / cellular / none);
@@ -556,62 +596,40 @@ struct ContentView: View {
   /// (Doing it properly would mean giving each Canvas its own View struct with only
   /// the state it needs, so SwiftUI can invalidate them independently. Worth it
   /// only if the trace's smoothness at 20fps proves inadequate — and it doesn't.)
-  private var waterfall: some View {
-    Canvas { ctx, size in
-      _ = frame        // read so SwiftUI must redraw; see `driver`
+  /// The waterfall Canvas's drawing, factored OUT of a `some View` computed property into a
+  /// plain method so the 20fps repaint clock can live in its own child view (`WaterfallCanvas`)
+  /// — see the note above. It reads only `link` (a reference type), so a captured closure over
+  /// it always paints live data. No `frame` here: the child's own @State drives the repaint.
+  private func drawWaterfall(_ ctx: GraphicsContext, _ size: CGSize) {
+    let wf = link.waterfall
+    let now = ProcessInfo.processInfo.systemUptime
+    wf.tickTrace(at: now)
+    wf.tickScroll(at: now)   // both every frame — smooth scroll
 
-      let wf = link.waterfall
-      let now = ProcessInfo.processInfo.systemUptime
-      wf.tickTrace(at: now)
-      wf.tickScroll(at: now)   // both every frame — smooth scroll restored (throttling it neither cut CPU nor was worth the judder)
+    // The spectrum gets a BAND of its own — the top third — and the waterfall takes the rest.
+    let specH = (size.height / 3).rounded()
+    // The frequency axis lives BETWEEN the spectrum and the waterfall (OWRX/SDR++ style): a thin
+    // dead-black strip carrying ticks, labels and a band-plan colour wash.
+    let tickerH: CGFloat = 18
+    let wfTop = specH + tickerH
 
-      // The spectrum gets a BAND of its own — the top third — and the waterfall
-      // takes the rest. A floating overlay was cheaper in pixels, but the trace has
-      // to be readable as a HEIGHT: squashed into a strip it is just another
-      // texture. The system clock sits in this band and reads as a label there.
-      let specH = (size.height / 3).rounded()
-      // The frequency axis lives BETWEEN the spectrum and the waterfall (OWRX/SDR++ style): the
-      // axis is the shared zero line both views hang off, and the waterfall flows down from
-      // directly beneath it. A thin dead-black strip — no spectrum or waterfall renders behind
-      // it — carries the ticks, labels and a band-plan colour wash.
-      let tickerH: CGFloat = 18
-      let wfTop = specH + tickerH
-
-      if let img = wf.makeImage() {
-        let rowPx = (size.height - wfTop) / Double(WaterfallBuffer.visible)
-        let p = wf.progress
-
-        // Newest row is index 0 (top) with one row of headroom above the visible
-        // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
-        // fully in at the top", exactly as the next row lands and resets p. It now
-        // starts BELOW the axis strip rather than at the spectrum's baseline.
-        var wctx = ctx
-        wctx.clip(to: Path(CGRect(x: 0, y: wfTop,
-                                  width: size.width, height: size.height - wfTop)))
-        wctx.draw(
-          Image(decorative: img, scale: 1),
-          in: CGRect(x: 0, y: wfTop - (1 - p) * rowPx,
-                     width: size.width,
-                     height: rowPx * Double(WaterfallBuffer.height))
-        )
-      }
-
-      drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
-      drawAxisStrip(ctx, size, top: specH, h: tickerH)
-      drawVFO(ctx, size)   // through ALL: the trace, the axis and its history stay aligned
+    if let img = wf.makeImage() {
+      let rowPx = (size.height - wfTop) / Double(WaterfallBuffer.visible)
+      let p = wf.progress
+      var wctx = ctx
+      wctx.clip(to: Path(CGRect(x: 0, y: wfTop,
+                                width: size.width, height: size.height - wfTop)))
+      wctx.draw(
+        Image(decorative: img, scale: 1),
+        in: CGRect(x: 0, y: wfTop - (1 - p) * rowPx,
+                   width: size.width,
+                   height: rowPx * Double(WaterfallBuffer.height))
+      )
     }
-    .ignoresSafeArea()
-    .onReceive(driver) { _ in
-      frame &+= 1
-      // (Row draining moved to the always-mounted root — see the note there. This Canvas
-      // only exists once everGotRow, so it can't be the thing that first flips it.)
-      // Lapse back to TUNE once the crown has been left alone. Checked on the render
-      // clock we already run, rather than adding a timer of its own.
-      if crownMode != .tune,
-         Date().timeIntervalSince(crownUsedAt) > Self.crownIdleTimeout {
-        crownMode = .tune
-      }
-    }
+
+    drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
+    drawAxisStrip(ctx, size, top: specH, h: tickerH)
+    drawVFO(ctx, size)   // through ALL: the trace, the axis and its history stay aligned
   }
 
   /// A thin spectrum trace across the top.
@@ -804,6 +822,10 @@ struct ContentView: View {
   /// your eye shouldn't have to cross the screen to see the effect of your finger.
   /// And the X goes opposite it so your hand isn't covering the way out.
   private var crownOverlay: some View {
+    // Self-clocking at 12fps ONLY while this overlay is on screen (crownMode != .tune), so the
+    // exit-ring's 30s drain stays smooth now that the global frame clock no longer re-evaluates
+    // the whole body. Bounded to crown-use windows — nothing ticks when it's dismissed.
+    TimelineView(.periodic(from: .now, by: 1.0 / 12.0)) { _ in
     ZStack {
       // X on the edge OPPOSITE the crown, so your hand isn't over the way out.
       VStack {
@@ -838,6 +860,7 @@ struct ContentView: View {
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 10)
+    }
   }
 
   /// The way out — wrapped in a COUNTDOWN RING showing the mode's remaining life.
