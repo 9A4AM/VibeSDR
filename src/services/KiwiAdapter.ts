@@ -349,9 +349,12 @@ export class KiwiAdapter implements SDRBackend {
         }
         break;
       case 'badp':
-        // 0 = auth OK. Non-zero = the owner restricts access (apps/non-web users
-        // blocked, slot/IP limit, or password) — an owner choice, not an app fault.
-        if (val !== '0') this.cb.onError("This KiwiSDR's owner has blocked the connection — many only allow their own web page, or limit who can connect. Try another KiwiSDR, or use UberSDR/OpenWebRX.");
+        // 0 = sign-in OK. Non-zero = the server rejected the sign-in itself. It can't tell us
+        // WHY on the wire, but it's always one of: the owner set a private listen PASSWORD we
+        // don't have; the owner only allows their own WEB PAGE and blocks apps; or a slot/IP
+        // limit. All are owner settings, not an app fault — say so in plain English (and NOT via
+        // the UberSDR bypass-password box, which can't touch any of these; see SDRScreen.onError).
+        if (val !== '0') this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.');
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;

@@ -2258,16 +2258,22 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError: (msg) => {
         if (destroyed.current) return;
-        // Rate-limited / blocked → straight to the bypass-password box (the
-        // instance password gets around per-IP limits); other errors offer
-        // both routes.
-        if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
+        const isKiwi = route.params.serverType === 'kiwi';
+        // KiwiSDR refusals are OWNER restrictions — an app-block, a private password we don't
+        // have, or slot/IP limits — none of which the UberSDR bypass-password box can fix. So for
+        // Kiwi, show the plain-English reason the adapter gave and NEVER offer that box (which
+        // just looks broken). The bypass-password route is UberSDR-only: its instance password
+        // gets around per-IP RATE limits, which is a different thing entirely.
+        if (!isKiwi && /429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
           setPwPrompt(true);
         } else {
-          Alert.alert('Connection Error', msg, [
-            { text: 'Back to Instances', onPress: () => navigation.goBack() },
-            { text: 'Enter Password', onPress: () => setPwPrompt(true) },
-          ]);
+          Alert.alert(isKiwi ? 'KiwiSDR unavailable' : 'Connection Error', msg,
+            isKiwi
+              ? [{ text: 'Back to Instances', onPress: () => navigation.goBack() }]
+              : [
+                  { text: 'Back to Instances', onPress: () => navigation.goBack() },
+                  { text: 'Enter Password', onPress: () => setPwPrompt(true) },
+                ]);
         }
       },
     }, password, !!route.params.isLocal);

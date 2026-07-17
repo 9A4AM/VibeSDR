@@ -186,10 +186,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }).catch(() => {});
   }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
-  // KiwiSDR name/callsign prompt — holds the pending connect args while the box is up, plus the
-  // pre-fill value (the saved ident, so re-opening never means retyping).
-  const [identModal,  setIdentModal]    = useState<null | { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' }>(null);
+  // KiwiSDR name/callsign identity. `identModal` open = the entry box is up; its optional
+  // `connect` holds a pending connection to resume after saving (from a connect), or is absent
+  // (editing via the prefill box). `kiwiIdentValue` is the saved value shown in the box.
+  const [identModal,  setIdentModal]    = useState<null | { connect?: { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' } }>(null);
   const [identPrefill, setIdentPrefill] = useState('');
+  const [kiwiIdentValue, setKiwiIdentValue] = useState('');
+  useEffect(() => { getKiwiIdent().then(setKiwiIdentValue).catch(() => {}); }, []);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
   const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
@@ -373,7 +376,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const id = await getKiwiIdent();
       if (!id) {
         setIdentPrefill('');
-        setIdentModal({ url: cleaned, name, password, lon: serverLongitude, type: serverType });
+        setIdentModal({ connect: { url: cleaned, name, password, lon: serverLongitude, type: serverType } });
         return;
       }
     }
@@ -1041,7 +1044,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         onSubmit={async (id) => {
           const m = identModal; setIdentModal(null);
           await setKiwiIdent(id);
-          if (m) connect(m.url, m.name, m.password, m.lon, m.type);
+          setKiwiIdentValue(id);
+          const c = m?.connect;
+          if (c) connect(c.url, c.name, c.password, c.lon, c.type);
         }}
         onCancel={() => setIdentModal(null)}
       />
@@ -1433,6 +1438,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             }
             ListFooterComponent={
               <View style={{ marginTop: 14 }}>
+                {/* KiwiSDR call sign — saved once, sent automatically on every Kiwi connect.
+                    Sits above the directories because that's where Kiwi lives; tap to add/edit. */}
+                <TouchableOpacity
+                  style={[styles.row, { borderColor: C.border, marginBottom: 12 }]}
+                  onPress={() => { setIdentPrefill(kiwiIdentValue); setIdentModal({}); }}
+                >
+                  <View style={styles.rowMain}>
+                    <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 1 }} numberOfLines={1}>PREFILL KIWISDR CALL SIGN</Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(16), color: kiwiIdentValue ? C.amber : C.textDim, marginTop: 3 }} numberOfLines={1}>
+                      {kiwiIdentValue || 'Not set — tap to add'}
+                    </Text>
+                  </View>
+                  <View style={styles.rowRight}>
+                    <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim }}>✎</Text>
+                  </View>
+                </TouchableOpacity>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
                 {DIRECTORIES.map(d => (
                   <TouchableOpacity
