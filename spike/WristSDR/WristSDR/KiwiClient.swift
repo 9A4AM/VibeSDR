@@ -74,6 +74,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var everFrame = false
   private var errorShown = false
   private var connectTimer: Timer?
+  private var sockState = "connecting"
 
   // ── Endpoint ──
   private let wsBase: String     // ws(s)://host:port
@@ -128,7 +129,9 @@ final class KiwiClient: ObservableObject, SDRClient {
     let ct = Timer(timeInterval: 12, repeats: false) { [weak self] _ in
       Task { @MainActor in
         guard let self, !self.everFrame else { return }
-        self.fail("Couldn’t connect to this KiwiSDR. It may only allow its own web page, be full, or need a callsign. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+        // Include the last socket state (debug): "ready" ⇒ socket opened but Kiwi sent no frames
+        // (handshake/UA/protocol), "waiting"/"preparing" ⇒ the connection never completed.
+        self.fail("No data from this KiwiSDR after 12s.\n[state: \(self.sockState)]")
       }
     }
     RunLoop.main.add(ct, forMode: .common); connectTimer = ct
@@ -156,7 +159,8 @@ final class KiwiClient: ObservableObject, SDRClient {
     sndSock.onState = { [weak self] st in
       Task { @MainActor in
         guard let self else { return }
-        if !self.everFrame, self.status != "live" { self.status = "snd \(st)" }   // visible on the placeholder
+        self.sockState = st                          // last SND socket state (for the timeout debug)
+        if !self.everFrame, self.status != "live" { self.status = st }
         if st.contains("failed") {
           // Socket failed before any frame = a handshake block (the server bounced us to its own web
           // page) or the host is unreachable. Show the raw error too (debug) so we can see the cause.

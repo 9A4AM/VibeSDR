@@ -1,5 +1,37 @@
 import SwiftUI
 import UIKit   // UIImage — the bundled server-type logos load by name (no asset catalog)
+import CoreLocation
+
+/// One-shot location for distance sorting. When-in-use only; if the user declines, the picker
+/// falls back to country grouping. Coarsened to ~1 km — we only need rough distance to sort.
+@MainActor
+final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
+  @Published var coord: CLLocationCoordinate2D? = nil
+  private let mgr = CLLocationManager()
+  override init() { super.init(); mgr.delegate = self; mgr.desiredAccuracy = kCLLocationAccuracyKilometer }
+  func request() {
+    switch mgr.authorizationStatus {
+    case .notDetermined: mgr.requestWhenInUseAuthorization()
+    case .authorizedWhenInUse, .authorizedAlways: mgr.requestLocation()
+    default: break
+    }
+  }
+  nonisolated func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+    if m.authorizationStatus == .authorizedWhenInUse || m.authorizationStatus == .authorizedAlways { m.requestLocation() }
+  }
+  nonisolated func locationManager(_ m: CLLocationManager, didUpdateLocations locs: [CLLocation]) {
+    guard let c = locs.last?.coordinate else { return }
+    Task { @MainActor in self.coord = c }
+  }
+  nonisolated func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {}
+}
+
+private func haversineKm(_ a: CLLocationCoordinate2D, _ blat: Double, _ blon: Double) -> Double {
+  let R = 6371.0, toRad = { (d: Double) in d * .pi / 180 }
+  let dLat = toRad(blat - a.latitude), dLon = toRad(blon - a.longitude)
+  let h = sin(dLat/2)*sin(dLat/2) + cos(toRad(a.latitude))*cos(toRad(blat))*sin(dLon/2)*sin(dLon/2)
+  return R * 2 * atan2(sqrt(h), sqrt(1-h))
+}
 
 /// The spike's instance picker — a wrist port of the phone's InstancePickerScreen.
 ///
@@ -9,6 +41,7 @@ import UIKit   // UIImage — the bundled server-type logos load by name (no ass
 /// their protocol lands in the spike.
 struct InstancePickerView: View {
   @EnvironmentObject var favs: FavStore
+  @StateObject private var loc = LocationProvider()
   let onConnect: (SDRServer) -> Void
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)
@@ -31,6 +64,7 @@ struct InstancePickerView: View {
     .listStyle(.carousel)
     .navigationTitle("VibeSDR")
     .task { await preloadForFavourites() }
+    .onAppear { loc.request() }
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in
       favs.addCustom(name: name, url: url, type: type)
     } }
@@ -138,10 +172,18 @@ struct InstancePickerView: View {
   /// Simplified wrist sort: by distance from the user when the directory reports it (UberSDR gives
   /// server-side distance); otherwise by country with the user's own country first, rest alphabetical.
   private func sortedServers(_ list: [SDRServer]) -> [SDRServer] {
-    let userCC = Locale.current.region?.identifier.uppercased()
-    if list.contains(where: { $0.distance != nil }) {
-      return list.sorted { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
+    // Preferred: real distance from the user's own location to each server's coords (works across
+    // every directory that publishes lat/lon — UberSDR/Kiwi/Receiverbook/FMDX). The server-reported
+    // `distance` was unreliable (IP-geolocated, wildly off), so we compute it ourselves.
+    if let c = loc.coord {
+      func km(_ s: SDRServer) -> Double {
+        guard let la = s.latitude, let lo = s.longitude else { return .infinity }
+        return haversineKm(c, la, lo)
+      }
+      return list.sorted { km($0) < km($1) }
     }
+    // No location permission → country grouping, user's country first then alphabetical.
+    let userCC = Locale.current.region?.identifier.uppercased()
     return list.sorted { a, b in
       let ac = a.countryCode ?? "ZZ", bc = b.countryCode ?? "ZZ"
       let aUser = (ac == userCC), bUser = (bc == userCC)
