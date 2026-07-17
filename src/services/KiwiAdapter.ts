@@ -766,9 +766,17 @@ export class KiwiAdapter implements SDRBackend {
       if (!this.errorShown) {
         this.errorShown = true;
         const reason = String(closeReason ?? '').trim();
-        this.cb.onError(reason
-          ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
-          : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
+        // A WebSocket-HANDSHAKE failure (invalid accept, redirect, 30x/401/403) means the server
+        // didn't open a data socket at all — it bounced us to its own web page. That's the
+        // "only allows its own web interface" block, and compatibility mode is exactly the fix,
+        // so say so in plain English rather than dumping the raw protocol string on the user.
+        const handshakeBlock = /sec-websocket|websocket|handshake|redirect|30[12]|\b40[13]\b|forbidden|moved/i.test(reason);
+        this.cb.onError(
+          handshakeBlock
+            ? 'This KiwiSDR wouldn’t open a data connection for the app — it sent us to its own web page instead. Many owners only allow their own web interface. Use “Open in compatibility mode” below to listen via the receiver’s web page, or try another KiwiSDR.'
+          : reason
+            ? `This KiwiSDR closed the connection: “${reason}”. Try another KiwiSDR, or use UberSDR or OpenWebRX.`
+            : 'This KiwiSDR closed the connection without giving a reason — most likely it only allows its own web page and blocks apps like VibeSDR. Try another KiwiSDR, or use UberSDR or OpenWebRX.');
       }
     } else {
       // Was streaming, then dropped — a genuine mid-session loss.
