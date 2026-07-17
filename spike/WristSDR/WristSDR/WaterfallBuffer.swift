@@ -42,11 +42,14 @@ final class WaterfallBuffer {
 
   /// Synthesised rows per received row. 2 x 10fps = ~20 rows/sec of scroll.
   ///
-  /// Fewer than before, deliberately: the feed went back to 10fps of REAL data,
-  /// so there is less to invent. Synthesised rows smooth the scroll but carry no
-  /// information — the fewer of them between real samples, the more of what you
-  /// see is something the receiver actually heard.
-  private let subRows = 2
+  /// 1 = no synthesised rows: the waterfall REBUILDS only on real rows (~10/sec) instead of
+  /// twice that, which is the CPU win — the CGImage rebuild is the render hotspot. The scroll
+  /// still GLIDES smoothly via the sub-pixel `progress` offset (drawn on the 20fps render
+  /// clock); only the content steps at 10/sec, which is invisible next to the spectrum TRACE,
+  /// which stays at the full render rate on its own clock (tickTrace, unaffected). Stuart's
+  /// call (2026-07-17): keep the spectrum smooth, drop the waterfall to 10. Bonus: every row
+  /// you see is now something the receiver actually heard, not an invented in-between.
+  private let subRows = 1
 
   /// 0..1 extra temporal blend from the phone's settings, on top of the
   /// interpolation. 0 = rely on interpolation alone.
