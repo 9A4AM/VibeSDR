@@ -10,6 +10,7 @@ import {
   Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';   // nativeBuildVersion = the actual installed CFBundleVersion
 import { APP_VERSION } from '../constants/version';
 
 export interface AboutOverlayProps {
@@ -309,8 +310,8 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.appName}>VibeSDR V7</Text>
-              <Text style={styles.appVer}>Version {APP_VERSION}</Text>
+              <Text style={styles.appName}>VibeSDR</Text>
+              <Text style={styles.appVer}>Version {APP_VERSION} · build {Constants.nativeBuildVersion ?? '?'}</Text>
               <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
             </View>
           </View>
