@@ -149,6 +149,15 @@ function haversineKm(la1: number, lo1: number, la2: number, lo2: number): number
 
 // Sort favourites for display. 'manual' keeps the stored array order (the drag order); the rest
 // derive from the tally / name / snapshot. Missing SNR or location sinks to the bottom.
+// Loose URL key for matching a favourite against a directory entry — favourites may have been saved
+// with a trailing slash, a different scheme (http/https/ws/wss), or a leading www. that the directory
+// listing lacks (or vice-versa). Normalise all of that away so the snapshot actually lands.
+function normUrl(u: string): string {
+  return (u || '').trim().toLowerCase()
+    .replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '')
+    .replace(/^www\./, '').replace(/\/+$/, '');
+}
+
 function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null): Favourite[] {
   const arr = [...list];
   const km = (f: Favourite) => (f.latitude != null && f.longitude != null && loc)
@@ -415,17 +424,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setFavourites(next);
   }, [favourites]);
 
-  // Keep favourites' location/SNR snapshots fresh: whenever a directory's instances load, copy the
-  // matching entry's lat/lon/bestSnr onto the favourite so Nearest/SNR sorts aren't stale.
-  useEffect(() => {
-    if (!instances.length) return;
-    const byUrl = new Map(instances.map(i => [i.url, i]));
+  // Patch favourite lat/lon/bestSnr snapshots from a normUrl → {lat,lon,snr} map, so Nearest/SNR
+  // sorts have real data. Only fills MISSING/changed fields; persists if anything moved.
+  const patchFavSnapshots = useCallback((map: Map<string, { lat: number | null; lon: number | null; snr: number | null }>) => {
     setFavourites(prev => {
       let changed = false;
       const next = prev.map(f => {
-        const inst = byUrl.get(f.url);
-        if (!inst) return f;
-        const lat = inst.latitude ?? f.latitude, lon = inst.longitude ?? f.longitude, snr = inst.bestSnr ?? f.bestSnr;
+        const hit = map.get(normUrl(f.url));
+        if (!hit) return f;
+        const lat = hit.lat ?? f.latitude, lon = hit.lon ?? f.longitude, snr = hit.snr ?? f.bestSnr;
         if (lat === f.latitude && lon === f.longitude && snr === f.bestSnr) return f;
         changed = true;
         return { ...f, latitude: lat ?? undefined, longitude: lon ?? undefined, bestSnr: snr ?? undefined };
@@ -433,7 +440,43 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (changed) saveFavourites(next).catch(() => {});
       return changed ? next : prev;
     });
-  }, [instances]);
+  }, []);
+
+  // Keep snapshots fresh whenever a directory the user opens loads its instances.
+  useEffect(() => {
+    if (!instances.length) return;
+    const map = new Map(instances.map(i => [normUrl(i.url), { lat: i.latitude, lon: i.longitude, snr: i.bestSnr }]));
+    patchFavSnapshots(map);
+  }, [instances, patchFavSnapshots]);
+
+  // On-demand enrichment: the chooser screen never loads any directory, so a favourite made before
+  // its directory was ever opened has no lat/lon/SNR. The FIRST time the user sorts by Nearest or
+  // SNR, fetch ALL directories in the background and snapshot every favourite that matches — one
+  // pass per session (a ref guards re-fetching the whole set on every chip tap).
+  const enrichedRef = useRef(false);
+  useEffect(() => {
+    if (enrichedRef.current) return;
+    if (favSort !== 'nearest' && favSort !== 'snr') return;
+    if (!favourites.length) return;
+    enrichedRef.current = true;
+    (async () => {
+      const map = new Map<string, { lat: number | null; lon: number | null; snr: number | null }>();
+      await Promise.all(DIRECTORIES.map(async d => {
+        try {
+          const list = await fetchDirectory(d.id, userLocRef.current?.lat, userLocRef.current?.lon);
+          for (const i of list) {
+            const k = normUrl(i.url);
+            const cur = map.get(k);
+            // Prefer an entry that actually carries SNR/coords over a bare one (same server, two dirs).
+            if (!cur || (cur.snr == null && i.bestSnr != null) || (cur.lat == null && i.latitude != null)) {
+              map.set(k, { lat: i.latitude ?? cur?.lat ?? null, lon: i.longitude ?? cur?.lon ?? null, snr: i.bestSnr ?? cur?.snr ?? null });
+            }
+          }
+        } catch { /* one directory failing must not abort the rest */ }
+      }));
+      if (map.size) patchFavSnapshots(map);
+    })();
+  }, [favSort, favourites, patchFavSnapshots]);
 
   const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
     if (!url) return;
@@ -1053,11 +1096,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }} numberOfLines={1}>{fav.url}</Text>
-              {(fav.visits ?? 0) > 0 && (
-                <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.goldDim, letterSpacing: 0.5 }}>
-                  ★ {fav.visits} visit{fav.visits === 1 ? '' : 's'}
-                </Text>
-              )}
+              {(() => {
+                const bits: string[] = [];
+                if (favSort === 'nearest') {
+                  const loc = userLocRef.current;
+                  if (loc && fav.latitude != null && fav.longitude != null)
+                    bits.push(`◍ ${Math.round(haversineKm(loc.lat, loc.lon, fav.latitude, fav.longitude)).toLocaleString()} km`);
+                  else bits.push('◍ distance unknown');
+                } else if (favSort === 'snr') {
+                  bits.push(fav.bestSnr != null ? `▲ SNR ${Math.round(fav.bestSnr)} dB` : '▽ no SNR data');
+                }
+                if (favSort !== 'snr' && favSort !== 'nearest' && (fav.visits ?? 0) > 0)
+                  bits.push(`★ ${fav.visits} visit${fav.visits === 1 ? '' : 's'}`);
+                return bits.length ? (
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.goldDim, letterSpacing: 0.5 }}>{bits.join('   ')}</Text>
+                ) : null;
+              })()}
             </View>
             <View style={styles.rowRight}>
               <TouchableOpacity style={{ padding: 4 }}
