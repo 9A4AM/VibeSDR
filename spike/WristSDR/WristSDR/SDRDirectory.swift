@@ -31,8 +31,8 @@ enum ServerType: String, Codable, CaseIterable {
     case .fmdx: return 3; case .spyserver: return 5; case .rtltcp: return 6
     }
   }
-  /// Can the spike's UberClient actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr }
+  /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
+  var connectable: Bool { self == .ubersdr || self == .kiwi }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.

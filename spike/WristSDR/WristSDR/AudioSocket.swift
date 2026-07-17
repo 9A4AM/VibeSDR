@@ -89,6 +89,14 @@ final class AudioSocket {
     }
   }
 
+  /// Text control frame — KiwiSDR's `SET …` command plane (UberSDR uses JSON below).
+  func send(text: String) {
+    guard let c = conn, let d = text.data(using: .utf8) else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx = NWConnection.ContentContext(identifier: "text", metadata: [meta])
+    c.send(content: d, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+  }
+
   /// JSON control (the tune). Text frame, same as the phone.
   func send(json: [String: Any]) {
     guard let c = conn,

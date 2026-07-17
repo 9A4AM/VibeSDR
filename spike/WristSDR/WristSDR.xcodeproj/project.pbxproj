@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0FF91F53C13F2C0276A0F3D1 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B1A34CDBF05411435076530 /* KiwiClient.swift */; };
+		33210F5613C36004BD310DF9 /* ImaAdpcm.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41402E09F3BE548998525AB0 /* ImaAdpcm.swift */; };
 		545E5EC9A18D83C0F13E068F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8571DA172F523D9E4DD1761B /* InstancePickerView.swift */; };
 		BEF4ED448975D1505C5D5EE9 /* SDRDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */; };
 		27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967BF6CB775E6B40E9E614BA /* SpikeLink.swift */; };
@@ -30,6 +32,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0B1A34CDBF05411435076530 /* KiwiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KiwiClient.swift; sourceTree = "<group>"; };
+		41402E09F3BE548998525AB0 /* ImaAdpcm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImaAdpcm.swift; sourceTree = "<group>"; };
 		8571DA172F523D9E4DD1761B /* InstancePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstancePickerView.swift; sourceTree = "<group>"; };
 		C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -70,6 +74,8 @@
 		E54ED815E4F7D7A7177E9F81 /* WristSDR */ = {
 			isa = PBXGroup;
 			children = (
+				0B1A34CDBF05411435076530 /* KiwiClient.swift */,
+				41402E09F3BE548998525AB0 /* ImaAdpcm.swift */,
 				8571DA172F523D9E4DD1761B /* InstancePickerView.swift */,
 				C17F97D8BFE913E5449E63BC /* SDRDirectory.swift */,
 				37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */,
@@ -188,6 +194,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0FF91F53C13F2C0276A0F3D1 /* KiwiClient.swift in Sources */,
+				33210F5613C36004BD310DF9 /* ImaAdpcm.swift in Sources */,
 				545E5EC9A18D83C0F13E068F /* InstancePickerView.swift in Sources */,
 				BEF4ED448975D1505C5D5EE9 /* SDRDirectory.swift in Sources */,
 				49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */,

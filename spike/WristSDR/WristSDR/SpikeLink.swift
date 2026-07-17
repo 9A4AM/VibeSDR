@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import WatchKit
 import Combine
+import Network
 
 /// How the watch is reaching the internet. `.iphone` = the paired-iPhone Bluetooth relay, which
 /// on watchOS surfaces as `NWInterface.InterfaceType.other` (Apple TN3135 — a well-supported
@@ -22,9 +23,9 @@ enum Transport { case iphone, wifi, cellular, none }
 @MainActor
 final class SpikeLink: ObservableObject {
 
-  /// The direct UberSDR client — sockets, DSP, Opus, audio. Untouched except that it now
-  /// draws into a buffer WE own (see `waterfall`).
-  let client: UberClient
+  /// The direct backend client — sockets, DSP, audio. Built when the picker chooses a server
+  /// (UberClient or KiwiClient), so it's nil until then. Draws into the buffer WE own.
+  var client: (any SDRClient)?
 
   /// The waterfall buffer, OWNED here and injected into the client so its processed 0-255
   /// rows land in the exact buffer the ported views draw from.
@@ -111,20 +112,29 @@ final class SpikeLink: ObservableObject {
     // Sonar Green by default, baked into the buffer before the client draws anything.
     waterfall.setLUT(Self.sonarGreenLUT)
     waterfall.peakHold = true
-    client = UberClient(waterfall: waterfall)
-    // Mirror the client's path-derived transport onto our published surface (the client owns
-    // the one NWPathMonitor; this just re-exposes it to the views).
-    client.$transport.assign(to: &$transport)
-
     if let raw = UserDefaults.standard.string(forKey: "vibe.displayUnit"),
        let u = DisplayUnit(rawValue: raw) {
       displayUnit = u
     }
-    // Seed the readout with the client's boot frequency/mode so the screen isn't blank
-    // before the first frame lands.
-    frequency = client.frequency
-    mode = client.mode
     updateBand()
+  }
+
+  // ── Transport glyph — one path monitor here (client-agnostic; the network interface the watch
+  // is using is the same whichever backend we talk to). Was on UberClient; lifted so KiwiClient
+  // doesn't have to duplicate it. ──
+  private let pathMonitor = NWPathMonitor()
+  private let pathQueue = DispatchQueue(label: "spikelink.path")
+  private func startPathMonitor() {
+    pathMonitor.pathUpdateHandler = { [weak self] path in
+      let tr: Transport
+      if path.status != .satisfied { tr = .none }
+      else if path.usesInterfaceType(.wifi) { tr = .wifi }
+      else if path.usesInterfaceType(.cellular) { tr = .cellular }
+      else if path.usesInterfaceType(.other) { tr = .iphone }
+      else { tr = .none }
+      Task { @MainActor in if self?.transport != tr { self?.transport = tr } }
+    }
+    pathMonitor.start(queue: pathQueue)
   }
 
   /// Band label + boundary edges for the ticker, from the tuned frequency (Region 1 HF plan).
@@ -142,25 +152,36 @@ final class SpikeLink: ObservableObject {
   @Published var serverName = ""
   private var booted = false
 
-  /// Start (or switch) the receiver against a chosen host from the instance picker. First pick does
-  /// the one-time boot (timers + path monitor + battery); later picks just reconnect to the new host.
-  func start(host: String, name: String) {
+  /// Start (or switch to) a chosen server from the picker. Builds the backend client for the
+  /// server's type (UberSDR or KiwiSDR), tearing down any previous one. One-time boot (battery +
+  /// path monitor) runs on the first pick.
+  func start(url: String, host: String, type: ServerType, name: String) {
     serverName = name
-    if !booted {
-      booted = true
-      client.host = host
-      startBatteryMonitor()
-      client.start()
-    } else {
-      everGotRow = false
-      client.reconnect(host: host)
+    client?.goIdle()
+    everGotRow = false
+    lastRowsPushed = 0
+
+    let c: any SDRClient
+    switch type {
+    case .kiwi:
+      c = KiwiClient(url: url, waterfall: waterfall)
+    default:  // .ubersdr (only connectable web backends for now)
+      let u = UberClient(waterfall: waterfall)
+      u.host = host
+      c = u
     }
+    client = c
+    frequency = c.frequency
+    mode = c.mode
+    updateBand()
+
+    if !booted { booted = true; startBatteryMonitor(); startPathMonitor() }
+    c.start()
   }
 
-  /// Back out to the instance picker (the menu's SERVERS tile). Drops the sockets/audio but keeps
-  /// the boot state, so picking again is a cheap reconnect.
+  /// Back out to the instance picker (the menu's SERVERS tile). Drops the sockets/audio.
   func backToPicker() {
-    client.goIdle()
+    client?.goIdle()
     serverName = ""
   }
 
@@ -168,6 +189,7 @@ final class SpikeLink: ObservableObject {
   /// spectrum delay queue (the spike's own row cadence — MUST run on the main actor) and
   /// mirrors the client's state onto our published surface.
   func driverTick(now: Double) {
+    guard let client else { return }
     client.drainSpectrum(now: now)
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
@@ -212,36 +234,36 @@ final class SpikeLink: ObservableObject {
 
   /// True while the spectrum has been intentionally dropped for wrist-down (audio keeps
   /// playing). Used by the scene handler to tell a real suspend from a quick glance-away.
-  var isBackground: Bool { client.status.hasPrefix("background") }
+  var isBackground: Bool { client?.status.hasPrefix("background") ?? false }
 
   // ── Scene lifecycle passthroughs (the spike's socket watchdog) ──────────────
-  func resume() { client.resumeSpectrum() }
-  func reconnectIfNeeded() { client.reconnectIfNeeded() }
-  func suspend() { client.suspend() }
+  func resume() { client?.resumeSpectrum() }
+  func reconnectIfNeeded() { client?.reconnectIfNeeded() }
+  func suspend() { client?.suspend() }
 
   // ── Controls the ported views call ──────────────────────────────────────────
   func tune(delta: Int) {
-    client.tune(delta: delta, step: step)
-    frequency = client.frequency
+    client?.tune(delta: delta, step: step)
+    frequency = client?.frequency ?? frequency
   }
 
-  func zoom(delta: Int) { client.zoom(delta: delta) }
+  func zoom(delta: Int) { client?.zoom(delta: delta) }
 
   /// LOCAL volume nudge — cosmetic (see `volume`). One detent = one 1/16 step, matching the
   /// companion's quantisation so the meter feels the same.
   func volume(delta: Int) {
     volume = min(1, max(0, volume + Double(delta) / 16))
-    if !muted { client.setVolume(volume) }   // drives the engine's real output gain
+    if !muted { client?.setVolume(volume) }   // drives the engine's real output gain
   }
 
   func setMuted(_ m: Bool) {
     muted = m
-    client.setVolume(m ? 0 : volume)          // real mute/unmute, not just a glyph
+    client?.setVolume(m ? 0 : volume)          // real mute/unmute, not just a glyph
   }
 
   func setMode(_ m: String) {
-    client.setMode(m)
-    mode = client.mode
+    client?.setMode(m)
+    mode = client?.mode ?? mode
   }
 
   func setStep(_ hz: Double) { step = hz }
@@ -249,7 +271,7 @@ final class SpikeLink: ObservableObject {
   /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi
   /// (which drive the VFO's dashed sideband lines).
   func setBandwidth(_ low: Double, _ high: Double) {
-    client.setBandwidth(low, high)
+    client?.setBandwidth(low, high)
     filtLo = low; filtHi = high
   }
 
@@ -268,8 +290,8 @@ final class SpikeLink: ObservableObject {
 
   /// Absolute tune, from the numpad.
   func tune(toHz hz: Double) {
-    client.tuneTo(hz)
-    frequency = client.frequency
+    client?.tuneTo(hz)
+    frequency = client?.frequency ?? frequency
   }
 
   // ── Battery ─────────────────────────────────────────────────────────────────

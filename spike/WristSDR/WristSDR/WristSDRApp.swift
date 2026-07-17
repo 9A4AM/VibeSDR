@@ -25,7 +25,7 @@ struct WristSDRApp: App {
         if link.serverName.isEmpty {
           // Instance picker first — pick a server, THEN the receiver connects to it.
           InstancePickerView { server in
-            link.start(host: server.host, name: server.name)
+            link.start(url: server.url, host: server.host, type: server.serverType, name: server.name)
           }
           .environmentObject(favs)
         } else {
