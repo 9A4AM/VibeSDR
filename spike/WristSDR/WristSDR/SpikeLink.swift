@@ -30,7 +30,10 @@ final class SpikeLink: ObservableObject {
   nonisolated(unsafe) let waterfall = WaterfallBuffer()
 
   // ── Mirrored / derived state the ported views consume ──────────────────────
-  @Published var frequency = 0.0
+  // Band label + colour follow the tuned frequency automatically — several update paths set
+  // `frequency` and only some remembered to call updateBand(), so the ticker wash could stay
+  // stuck on the boot band's colour (looked "always blue"). A didSet can't miss a path.
+  @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand() } } }
   @Published var span = 0.0
   @Published var snr = 0.0
   /// The spike has no server-supplied meter string (that was a phone/OWRX/FM-DX concept).
@@ -135,7 +138,7 @@ final class SpikeLink: ObservableObject {
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode { mode = client.mode }
-    let sp = client.spanHz
+    let sp = client.displaySpanHz   // the on-screen width, held across a reconnect (no snap)
     if span != sp { span = sp }
     // Passband edges → the VFO's dashed LSB/USB lines (drawVFO), and the bandwidth UI.
     if filtLo != client.bwLow { filtLo = client.bwLow }

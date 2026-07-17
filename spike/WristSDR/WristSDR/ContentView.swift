@@ -1197,18 +1197,8 @@ struct ContentView: View {
       ctx.draw(label, at: CGPoint(x: px, y: y0 + (h - 4) / 2), anchor: .center)
       hz += stepHz
     }
-
-    // BAND BOUNDARIES — full strip height, at true x, in the band's colour with a dark keyline
-    // either side so a bright tick label landing on top can't erase them.
-    let edges = [link.bandLo, link.bandHi].filter { $0 > 0 && $0 > lo && $0 < hi }
-    let edgeCol = link.bandColor ?? .white
-    for e in edges {
-      let px = x(e)
-      ctx.fill(Path(CGRect(x: px - 2, y: y0, width: 4, height: h)),
-               with: .color(.black.opacity(0.85)))
-      ctx.fill(Path(CGRect(x: px - 1, y: y0, width: 2, height: h)),
-               with: .color(edgeCol))
-    }
+    // (Band-boundary bars removed: the colour WASH now tells you the band, so the old
+    // per-edge marker bars are redundant. bandLo/bandHi stay populated for later use.)
   }
 
   /// THE BAND, in words, in the strip beside the clock.

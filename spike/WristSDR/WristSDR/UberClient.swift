@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Network
 
 /// A DIRECT UberSDR client, running on the WATCH. No phone anywhere in the chain.
 ///
@@ -179,7 +180,59 @@ final class UberClient: ObservableObject {
     RunLoop.main.add(t, forMode: .common)
     rateTimer = t
 
+    startPathMonitor()
     Task { await connect() }
+  }
+
+  // ── Network-path handoff (wifi → cellular as you leave the house) ─────────────
+  //
+  // THE canonical standalone case: you set the watch going indoors on wifi and walk out. The
+  // path flips to cellular mid-connect, and a spectrum NWConnection that bound to the dying
+  // wifi interface can sit in `.waiting` forever — it never reaches `.ready`, so the
+  // onReady-armed watchdog never even starts, and it never `.failed`s, so the retry never
+  // fires. Audio (opened first, durable) usually rides onto cellular; the disposable spectrum
+  // socket is the one left stranded. So: watch the path ourselves, and when the usable
+  // interface actually CHANGES, rebuild the spectrum socket clean on the new path.
+  private let pathMonitor = NWPathMonitor()
+  private let pathQueue = DispatchQueue(label: "wristsdr.path")
+  private var lastPathIface = ""
+
+  private func startPathMonitor() {
+    pathMonitor.pathUpdateHandler = { [weak self] path in
+      let iface = UberClient.ifaceName(path)
+      Task { @MainActor in self?.onPathChange(iface, satisfied: path.status == .satisfied) }
+    }
+    pathMonitor.start(queue: pathQueue)
+  }
+
+  nonisolated private static func ifaceName(_ p: NWPath) -> String {
+    guard p.status == .satisfied else { return "none" }
+    if p.usesInterfaceType(.wifi)          { return "wifi" }
+    if p.usesInterfaceType(.cellular)      { return "cell" }
+    if p.usesInterfaceType(.wiredEthernet) { return "eth" }
+    if p.usesInterfaceType(.other)         { return "other" }
+    return "unknown"
+  }
+
+  private func onPathChange(_ iface: String, satisfied: Bool) {
+    let prev = lastPathIface
+    lastPathIface = iface
+    guard satisfied else { return }
+    // Only react to a genuine CHANGE of usable interface — not the first report, and not
+    // repeat updates on the same interface (which would thrash a healthy feed).
+    guard !prev.isEmpty, prev != "none", iface != prev else { return }
+    wsDiag = "path \(prev)→\(iface)"
+    // Only while we're meant to be receiving, and only if the spectrum is actually starving —
+    // a feed that's still flowing has migrated fine and must not be disturbed.
+    guard status == "live" else { return }
+    if framesPerSec == 0 {
+      specWsState = "path \(prev)→\(iface) · rebuilding spectrum"
+      specSock.cancel()
+      specRetries = 0
+      openSpectrum()
+    }
+    // Audio is durable, but if it too fell silent across the handoff, bring it back.
+    if audioPerSec == 0 { audioSock.cancel(); openAudio() }
   }
 
   private func connect() async {
@@ -292,7 +345,18 @@ final class UberClient: ObservableObject {
 
   // ── Spectrum ──────────────────────────────────────────────────────────────
 
+  /// Bumped on every (re)open so a stale watchdog from a superseded socket bails instead of
+  /// tearing down the fresh one — the connect-timeout and the ready-but-silent watchdog can
+  /// otherwise both fire and cancel each other's work.
+  private var specOpenSeq = 0
+  /// Did THIS socket ever reach `.ready`? A socket stuck in `.waiting` (bound to a dead
+  /// interface on a handoff) never does — that's the case the connect-timeout exists for.
+  private var specReady = false
+
   private func openSpectrum() {
+    specOpenSeq &+= 1
+    let seq = specOpenSeq
+    specReady = false
     let url = URL(string: "wss://\(Self.host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
 
     specSock.onData = { [weak self] d in
@@ -321,25 +385,47 @@ final class UberClient: ObservableObject {
     // socket, and only FRAMES prove it.
     specSock.onReady = { [weak self] in
       Task { @MainActor in
-        guard let self else { return }
+        guard let self, self.specOpenSeq == seq else { return }
+        self.specReady = true
         self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
         self.armSpectrumWatchdog()
       }
     }
     specSock.open(url: url)
+    armSpectrumConnectTimeout(seq)
+  }
+
+  /// STUCK IN `.waiting` HAS NO WAY OUT ON ITS OWN. `armSpectrumWatchdog` only runs once the
+  /// socket is `.ready`; a socket that never gets there (opened onto a dying wifi interface as
+  /// you walk out, then never migrated) would otherwise hang silently until relaunch — which
+  /// is exactly the "audio worked, no waterfall, had to force-quit" bug. So arm a timeout the
+  /// moment we OPEN: if it hasn't reached `.ready` in 7s, tear it down and retry (the fresh
+  /// NWConnection binds to whatever interface is now live).
+  private func armSpectrumConnectTimeout(_ seq: Int) {
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 7_000_000_000)
+      guard self.specOpenSeq == seq else { return }   // a newer open supersedes us
+      guard !self.specReady else { return }            // it came up — the ready-watchdog has it
+      self.specWsState = "spec never readied (\(self.lastPathIface)) · reopening"
+      self.specSock.cancel()
+      self.retrySpectrum()
+    }
   }
 
   /// FRAMES OR IT DIDN'T HAPPEN. Ready and silent is a real state, and it needs its own way
   /// out — first re-ask for the band, then tear the socket down and start again.
   private func armSpectrumWatchdog() {
     let n = frameCount
+    let seq = specOpenSeq
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 5_000_000_000)
+      guard self.specOpenSeq == seq else { return }          // a newer socket supersedes us
       guard self.frameCount == n else { return }             // frames arrived — all well
       self.specWsState = "spec ready but SILENT · re-subscribing"
       self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
 
       try? await Task.sleep(nanoseconds: 5_000_000_000)
+      guard self.specOpenSeq == seq else { return }
       guard self.frameCount == n else { return }
       self.specWsState = "spec SILENT · reopening"
       self.specSock.cancel()
@@ -388,6 +474,7 @@ final class UberClient: ObservableObject {
   /// The app is really going away (not just wrist-down) — let the server go too, rather than
   /// leaving it holding a socket it believes is alive.
   func teardown() {
+    pathMonitor.cancel()
     specSock.cancel()
     audioSock.cancel()
     audio.stop()
@@ -879,4 +966,13 @@ final class UberClient: ObservableObject {
   }
 
   var spanHz: Double { binBandwidth * Double(max(binCount, 1)) }
+
+  /// The span the ticker should draw at — the width actually ON SCREEN, which is the DESIRED
+  /// view (`viewBinBw`), not the server's raw `binBandwidth`. They agree in steady state, but
+  /// across a reconnect the server sends a wide-default config first: `binBandwidth` jumps to
+  /// full span for a moment before our re-asserted zoom lands, so `spanHz` would snap wide and
+  /// then narrow. The waterfall doesn't snap — its rows are held until the scale is trustworthy
+  /// — and `viewBinBw` holds the user's zoom throughout, so the ticker built on it stays put
+  /// too. (Zoom stays instant: `viewBinBw` is the PREDICTED width, updated the moment you zoom.)
+  var displaySpanHz: Double { (viewBinBw > 0 ? viewBinBw : binBandwidth) * Double(max(binCount, 1)) }
 }
