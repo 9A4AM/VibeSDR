@@ -138,27 +138,30 @@ final class SpikeLink: ObservableObject {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /// The server the picker chose, shown in the UI. Empty until one is selected.
+  /// The server the picker chose, shown in the UI. Empty = show the picker.
   @Published var serverName = ""
-  private var started = false
+  private var booted = false
 
-  /// Start the receiver against a chosen UberSDR host (from the instance picker). Idempotent —
-  /// calling again with the same session is a no-op so ContentView's onAppear can't double-start.
+  /// Start (or switch) the receiver against a chosen host from the instance picker. First pick does
+  /// the one-time boot (timers + path monitor + battery); later picks just reconnect to the new host.
   func start(host: String, name: String) {
-    guard !started else { return }
-    started = true
-    client.host = host
     serverName = name
-    startBatteryMonitor()
-    client.start()
+    if !booted {
+      booted = true
+      client.host = host
+      startBatteryMonitor()
+      client.start()
+    } else {
+      everGotRow = false
+      client.reconnect(host: host)
+    }
   }
 
-  /// Legacy no-arg start (kept for any caller): connects to the client's default host.
-  func start() {
-    guard !started else { return }
-    started = true
-    startBatteryMonitor()
-    client.start()
+  /// Back out to the instance picker (the menu's SERVERS tile). Drops the sockets/audio but keeps
+  /// the boot state, so picking again is a cheap reconnect.
+  func backToPicker() {
+    client.goIdle()
+    serverName = ""
   }
 
   /// Called from the ported ContentView's 20fps driver tick. Drains the audio-synced

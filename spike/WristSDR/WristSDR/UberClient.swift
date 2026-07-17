@@ -447,6 +447,29 @@ final class UberClient: ObservableObject {
     audio.stop()
   }
 
+  /// Go quiet without dying — the user backed out to the instance picker. Drop both sockets and
+  /// the audio, but leave the once-only timers/path monitor alone so a later reconnect is cheap.
+  func goIdle() {
+    specSock.cancel()
+    audioSock.cancel()
+    audio.stop()
+    specOpened = false
+    framesPerSec = 0
+    status = "idle"
+  }
+
+  /// Point at a DIFFERENT server and connect fresh (from the picker). `start()` did the one-time
+  /// setup; this reuses it. Safe because connect() is built to run repeatedly (retry/wrist-up).
+  func reconnect(host newHost: String) {
+    host = newHost
+    specSock.cancel()
+    audioSock.cancel()
+    audio.stop()
+    specOpened = false
+    _ = rotateSession()      // fresh session id for the new server
+    Task { await connect() }
+  }
+
   /// Wrist back up: the audio never stopped, so only the waterfall needs bringing home.
   func resumeSpectrum() {
     guard status.hasPrefix("background") else { return }

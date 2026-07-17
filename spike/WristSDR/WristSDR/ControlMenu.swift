@@ -386,8 +386,10 @@ struct ControlMenu: View {
           // reconnect on the way back.
           tile(name: "WRIST DOWN", value: wristLabel, h: h) { showWrist = true }
 
-          // NOTE: the phone-only "Servers" (favourite instances) tile is dropped — the
-          // spike is hard-wired to one UberSDR server, there is no instance picker.
+          // SERVERS — back to the instance picker to switch server (or manage favourites).
+          tile(icon: "antenna.radiowaves.left.and.right", label: "Servers", h: h) {
+            dismiss(); link.backToPicker()
+          }
 
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to
