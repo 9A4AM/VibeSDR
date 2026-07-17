@@ -131,7 +131,10 @@ final class KiwiClient: ObservableObject, SDRClient {
   // ── Lifecycle ──
   func start() {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-      Task { @MainActor in guard let self else { return }; self.framesPerSec = Double(self.frameCount); self.frameCount = 0 }
+      Task { @MainActor in guard let self else { return }
+        self.framesPerSec = Double(self.frameCount)
+        if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
+        self.frameCount = 0 }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
 
@@ -164,6 +167,25 @@ final class KiwiClient: ObservableObject, SDRClient {
     if !everFrame { everFrame = true; connectTimer?.invalidate(); connectTimer = nil }
   }
 
+  // ── Reconnect on a mid-session drop (UberClient's proven pattern) ──
+  private var retries = 0
+  private var retrying = false
+  private func retrySnd() {
+    guard !retrying, !goingIdle else { return }
+    retrying = true
+    retries += 1
+    status = "reconnecting \(retries)…"
+    sndSock.cancel(); wfSock.cancel()
+    sndAuthed = false; wfAuthed = false; wfOpened = false
+    let wait = UInt64(min(retries, 5)) * 1_500_000_000   // 1.5s → 7.5s, then hold
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: wait)
+      self.retrying = false
+      guard !self.goingIdle else { return }
+      self.openSnd()          // W/F reopens after SND's first MSG, as on a cold connect
+    }
+  }
+
   private func openSnd() {
     sndSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "SND") } }
     sndSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "SND") } }
@@ -183,14 +205,13 @@ final class KiwiClient: ObservableObject, SDRClient {
           // auth is processed. W/F opens from onMsg (first SND MSG = auth done).
           self.startKeepalive()
         }
-        if st.contains("failed") || st.contains("cancelled") {
-          if self.everFrame, !self.goingIdle {
-            // Dropped AFTER it was streaming — a genuine mid-session loss (server closed the socket).
-            // Report it plainly (debug: the raw state) rather than the spike silently going yellow.
-            self.errorShown = true
-            self.lastError = "This KiwiSDR dropped the connection after streaming.\n[\(st)]"
-            self.status = "dropped"
-          } else if !self.everFrame {
+        if (st.contains("failed") || st.contains("recv:")), !self.goingIdle {
+          if self.everFrame {
+            // REOPEN, don't die. AudioSocket.receive stops on any recv error (shared fragility),
+            // so we stop reading, Kiwi's buffer fills, and it drops SND (ENOTCONN) a few seconds
+            // later. UberClient survives exactly this by reopening — so do we. Full re-handshake.
+            self.retrySnd()
+          } else {
             self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
           }
         }
