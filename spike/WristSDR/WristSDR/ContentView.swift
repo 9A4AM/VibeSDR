@@ -443,6 +443,9 @@ struct ContentView: View {
         )
       }
     }
+    // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
+    // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
+    .overlay { if let err = link.connectError { refusalCard(err) } }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
     // pad's own content began, pushing the bottom row clean off the screen (and
@@ -1242,6 +1245,25 @@ struct ContentView: View {
   /// "Starting VibeSDR…", "Choose a server", "Open VibeSDR on iPhone and save a
   /// favourite". A boot is not an error, and a wrist that cries wolf on every launch
   /// teaches you to ignore it.
+  /// Full-screen refusal/timeout card — a connection that will never complete. One button back
+  /// to the picker so the user isn't stuck watching a dead "waiting for signal".
+  private func refusalCard(_ msg: String) -> some View {
+    ZStack {
+      Color.black.opacity(0.92).ignoresSafeArea()
+      VStack(spacing: 10) {
+        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+          .font(.title3).foregroundStyle(.orange)
+        Text("Couldn’t connect").font(.headline).foregroundStyle(.white)
+        Text(msg).font(.caption2).foregroundStyle(.secondary)
+          .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        Button { link.backToPicker() } label: {
+          Text("← Back to servers").font(.footnote.weight(.semibold))
+        }.tint(.orange).padding(.top, 2)
+      }
+      .padding(.horizontal, 14)
+    }
+  }
+
   private var placeholder: some View {
     let msg = stalledMessage
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")

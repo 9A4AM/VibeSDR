@@ -79,6 +79,9 @@ final class SpikeLink: ObservableObject {
   @Published var muted = false
 
   @Published var battery: Double = -1
+  /// A plain-English refusal/timeout from the backend (Kiwi full / password / blocked / no
+  /// connection). nil = fine. ContentView shows a card so nobody waits on a dead connection.
+  @Published var connectError: String? = nil
 
   // ── Band plan: NONE yet in the spike. Left blank; the label/edges simply don't draw. ──
   @Published var bandName = ""
@@ -171,6 +174,7 @@ final class SpikeLink: ObservableObject {
       c = u
     }
     client = c
+    connectError = nil
     frequency = c.frequency
     mode = c.mode
     updateBand()
@@ -191,6 +195,7 @@ final class SpikeLink: ObservableObject {
   func driverTick(now: Double) {
     guard let client else { return }
     client.drainSpectrum(now: now)
+    if connectError != client.lastError { connectError = client.lastError }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode { mode = client.mode }

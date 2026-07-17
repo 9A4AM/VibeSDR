@@ -15,6 +15,9 @@ protocol SDRClient: AnyObject {
   var rowsPushed: Int { get }
   var framesPerSec: Double { get }
   var status: String { get }
+  /// A plain-English refusal/timeout reason to show the user (nil = fine). Kiwi sets this on
+  /// badp/too_busy/handshake-block/connect-timeout so nobody waits forever for a dead connection.
+  var lastError: String? { get }
 
   func start()
   func drainSpectrum(now: Double)
@@ -30,7 +33,10 @@ protocol SDRClient: AnyObject {
   func goIdle()
 }
 
-extension UberClient: SDRClient {}
+extension UberClient: SDRClient {
+  /// UberSDR surfaces its own refusals via its status/cards; no separate channel here.
+  var lastError: String? { nil }
+}
 
 /// A DIRECT KiwiSDR client on the watch — a Swift port of `src/services/KiwiAdapter.ts`.
 ///
@@ -61,8 +67,13 @@ final class KiwiClient: ObservableObject, SDRClient {
   @Published var signalDb: Double = 0
   @Published var framesPerSec: Double = 0
   @Published var status = "starting"
+  @Published var lastError: String? = nil
   var rowsPushed = 0
   var displaySpanHz: Double { viewInit ? viewBw : rxBw }
+
+  private var everFrame = false
+  private var errorShown = false
+  private var connectTimer: Timer?
 
   // ── Endpoint ──
   private let wsBase: String     // ws(s)://host:port
@@ -112,13 +123,44 @@ final class KiwiClient: ObservableObject, SDRClient {
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
 
+    // Connect watchdog — if no audio/waterfall frame has arrived in 12s the connection is never
+    // coming (blocked, full, callsign-only, or just unreachable). Say so instead of hanging.
+    let ct = Timer(timeInterval: 12, repeats: false) { [weak self] _ in
+      Task { @MainActor in
+        guard let self, !self.everFrame else { return }
+        self.fail("Couldn’t connect to this KiwiSDR. It may only allow its own web page, be full, or need a callsign. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+      }
+    }
+    RunLoop.main.add(ct, forMode: .common); connectTimer = ct
+
     audio.start { _, _ in }
     openSnd()
+  }
+
+  /// Surface a refusal reason ONCE (badp/too_busy/handshake/timeout all funnel here).
+  private func fail(_ msg: String) {
+    guard !errorShown, !everFrame else { return }
+    errorShown = true
+    lastError = msg
+    status = "refused"
+    goIdle()
+  }
+
+  private func markFrame() {
+    if !everFrame { everFrame = true; connectTimer?.invalidate(); connectTimer = nil }
   }
 
   private func openSnd() {
     sndSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "SND") } }
     sndSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "SND") } }
+    sndSock.onState = { [weak self] st in
+      guard st.contains("failed") else { return }
+      Task { @MainActor in
+        // Socket failed before any frame = a handshake block (the server bounced us to its own web
+        // page) or the host is unreachable. Either way, don't hang — the watchdog message fits.
+        self?.fail("This KiwiSDR wouldn’t open a connection for the app — many owners only allow their own web page. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+      }
+    }
     sndSock.onReady = { [weak self] in
       Task { @MainActor in
         guard let self else { return }
@@ -197,6 +239,17 @@ final class KiwiClient: ObservableObject, SDRClient {
     case "audio_adpcm_state":
       let parts = val.split(separator: ",").compactMap { Int($0) }
       if parts.count == 2 { audioDec.setState(index: parts[0], predictor: parts[1]) }
+    case "too_busy":
+      // too_busy=0 is a NORMAL "you are not too busy" broadcast — only non-zero means full.
+      if val != "0" && val != "" {
+        fail("This KiwiSDR is full — every listening slot is in use. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+      }
+    case "badp":
+      // Non-zero = the sign-in was rejected: a private listen PASSWORD we don't have, or the owner
+      // only allows their own web page. Owner setting, not an app fault.
+      if val != "0" {
+        fail("This KiwiSDR is password-protected — the owner requires a listen password, which VibeSDR doesn’t have. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+      }
     default: break
     }
   }
@@ -208,6 +261,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     let smeter = (Int(buf[8]) << 8) | Int(buf[9])
     signalDb = Double(smeter) / 10 - 127            // dBm from header
     frameCount += 1
+    markFrame()
     if status != "live" { status = "live" }
 
     let offset = (flags & 0x0008) != 0 ? 20 : 10    // SND_STEREO
@@ -242,6 +296,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     guard bins.count >= 8 else { return }
     // u8 → dBm-ish (bin − 255); the auto-contrast in SignalProcessor ranges it.
     let floats = bins.map { Float($0) - 255 }
+    markFrame()
     let row = proc.process(floats, centerHz: viewCenter, bwHz: viewBw)
     signalLevel = proc.level
     let dec = decimate(row, to: WaterfallBuffer.width)
@@ -369,8 +424,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   func goIdle() {
     keepaliveTimer?.invalidate(); keepaliveTimer = nil
     rateTimer?.invalidate(); rateTimer = nil
+    connectTimer?.invalidate(); connectTimer = nil
     sndSock.cancel(); wfSock.cancel(); audio.stop()
-    status = "idle"
+    if status != "refused" { status = "idle" }
   }
 
   private func sndSend(_ s: String) { sndSock.send(text: s) }

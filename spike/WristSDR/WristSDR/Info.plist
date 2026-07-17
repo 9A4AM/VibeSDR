@@ -43,5 +43,15 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<!-- Cleartext HTTP/WS. KiwiSDR runs on plain ws://host:8073, the linkfanel Kiwi directory
+	     (rx.linkfanel.net) and the FM-DX directory (servers.fmdx.org) are plain http://, and
+	     OpenWebRX/rtl_tcp are often cleartext too. Without this, watchOS ATS silently blocks
+	     them all — the directory won't load and a connection hangs forever with no error.
+	     Matches the VibeSDR phone app (NSAllowsArbitraryLoads=true). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
