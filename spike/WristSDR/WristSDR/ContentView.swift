@@ -330,6 +330,10 @@ struct ContentView: View {
         HStack(spacing: 6) {
           BatteryPill(level: link.battery)   // horizontal, number inside, own dark scrim
           bandLabel
+          // Invisible battery-width balance on the right so the band LABEL sits dead-centre
+          // (aligned with the frequency readout below), rather than the whole battery+label
+          // group centring and shoving the label off to the right.
+          BatteryPill(level: link.battery).hidden()
         }
         Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
