@@ -158,6 +158,55 @@ struct BatteryPill: View {
   }
 }
 
+/// The battery, drawn VERTICALLY, for the bottom-left corner of the spike screen.
+///
+/// The horizontal `BatteryPill` lived beside the clock; that spot fouls the watchOS system
+/// glyphs (driving car, location arrow, recording dot) which have no detect-and-dodge API. The
+/// ticker moving up to the axis strip freed the bottom-left corner, so the battery drops there —
+/// upright, on its OWN dark scrim, because down here it floats over the raw waterfall and white
+/// strokes/digits over a bright spectrum are simply not there without darkening behind them.
+struct BatteryPillV: View {
+  let level: Double
+  private var tint: Color { level <= 0.20 ? .red : .white.opacity(0.85) }
+
+  var body: some View {
+    if level < 0 {
+      EmptyView()
+    } else {
+      let pct = Int((level * 100).rounded())
+      VStack(spacing: 1.5) {
+        // The nub, on TOP now that the cell stands upright.
+        RoundedRectangle(cornerRadius: 0.5).fill(tint).frame(width: 4, height: 1.5)
+        ZStack {
+          RoundedRectangle(cornerRadius: 2.5).stroke(tint, lineWidth: 1)
+          // Fill from the BOTTOM, the way an upright cell reads.
+          GeometryReader { g in
+            RoundedRectangle(cornerRadius: 1.5)
+              .fill(tint.opacity(0.32))
+              .frame(height: max(0, (g.size.height - 2) * level))
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+              .padding(1)
+          }
+        }
+        .frame(width: 13, height: 24)
+        // Percentage BELOW the cell — 13pt is too narrow to hold "100" inside it legibly.
+        Text("\(pct)")
+          .font(.system(size: 8, weight: .bold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(tint)
+          .lineLimit(1)
+          .fixedSize()
+      }
+      // The scrim — darkening, never frosting, same rule as every other piece of chrome.
+      .padding(.horizontal, 4)
+      .padding(.vertical, 3)
+      .background(Color.black.opacity(0.55), in: Capsule())
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Watch battery \(pct) percent")
+    }
+  }
+}
+
 enum CrownMode: Equatable {
   case tune, zoom, brightness, contrast, volume
 

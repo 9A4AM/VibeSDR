@@ -216,11 +216,23 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
-      // The watch's own battery, tucked in beside the clock. A live waterfall costs the
-      // watch ~34% of a core, and this is the one screen you'd leave running on a hilltop
-      // — so the number you'd reach for is on the screen you're already looking at.
+      // The watch's own battery, now in the BOTTOM-LEFT corner, drawn vertically on its own
+      // scrim. It used to sit beside the clock, but that spot fouls the watchOS system glyphs
+      // (driving car, location arrow, recording dot) with no API to dodge them. The ticker
+      // moving up to the axis strip vacated this corner. The clock keeps its own scrim (drawn
+      // in `drawSpectrum`); this is a separate badge on its own ground.
       // pointer-events off: it must never eat a tap meant for the waterfall.
-      topStrip
+      VStack {
+        Spacer()
+        HStack {
+          BatteryPillV(level: link.battery)
+            .padding(.leading, 8)
+            .padding(.bottom, 6)
+          Spacer()
+        }
+      }
+      .ignoresSafeArea()
+      .allowsHitTesting(false)
 
       // Developer CPU badge, top-left (clear of the clock/battery on the right).
       // Same measurement as the JR spike so companion vs standalone is directly
@@ -284,8 +296,10 @@ struct ContentView: View {
         // seconds old and nobody is reading it, so the label costs nothing — and it now
         // sits directly above the band-boundary marks it explains, which is where it
         // belonged all along.
+        // Band label sits just above the frequency readout now — like the VTS label under the
+        // main app's waterfall. The ticker has moved UP into the axis strip between the
+        // spectrum and the waterfall (see `drawAxisStrip`), where the frequency scale belongs.
         bandLabel
-        ticker
         Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
       }
@@ -521,27 +535,35 @@ struct ContentView: View {
       // to be readable as a HEIGHT: squashed into a strip it is just another
       // texture. The system clock sits in this band and reads as a label there.
       let specH = (size.height / 3).rounded()
+      // The frequency axis lives BETWEEN the spectrum and the waterfall (OWRX/SDR++ style): the
+      // axis is the shared zero line both views hang off, and the waterfall flows down from
+      // directly beneath it. A thin dead-black strip — no spectrum or waterfall renders behind
+      // it — carries the ticks, labels and a band-plan colour wash.
+      let tickerH: CGFloat = 18
+      let wfTop = specH + tickerH
 
       if let img = wf.makeImage() {
-        let rowPx = (size.height - specH) / Double(WaterfallBuffer.visible)
+        let rowPx = (size.height - wfTop) / Double(WaterfallBuffer.visible)
         let p = wf.progress
 
         // Newest row is index 0 (top) with one row of headroom above the visible
         // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
-        // fully in at the top", exactly as the next row lands and resets p.
+        // fully in at the top", exactly as the next row lands and resets p. It now
+        // starts BELOW the axis strip rather than at the spectrum's baseline.
         var wctx = ctx
-        wctx.clip(to: Path(CGRect(x: 0, y: specH,
-                                  width: size.width, height: size.height - specH)))
+        wctx.clip(to: Path(CGRect(x: 0, y: wfTop,
+                                  width: size.width, height: size.height - wfTop)))
         wctx.draw(
           Image(decorative: img, scale: 1),
-          in: CGRect(x: 0, y: specH - (1 - p) * rowPx,
+          in: CGRect(x: 0, y: wfTop - (1 - p) * rowPx,
                      width: size.width,
                      height: rowPx * Double(WaterfallBuffer.height))
         )
       }
 
       drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
-      drawVFO(ctx, size)   // through BOTH: the trace and its history stay aligned
+      drawAxisStrip(ctx, size, top: specH, h: tickerH)
+      drawVFO(ctx, size)   // through ALL: the trace, the axis and its history stay aligned
     }
     .ignoresSafeArea()
     .onReceive(driver) { _ in
@@ -1127,61 +1149,66 @@ struct ContentView: View {
 
   // ── Frequency ticker ───────────────────────────────────────────────────────
 
-  private var ticker: some View {
-    Canvas { ctx, size in
-      guard link.span > 0 else { return }
-      let lo = link.frequency - link.span / 2
-      let hi = link.frequency + link.span / 2
-      let stepHz = tickStep(span: link.span)
-      let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
+  /// THE FREQUENCY AXIS, drawn as a strip BETWEEN the spectrum and the waterfall.
+  ///
+  /// This is where "where exactly is the signal" gets answered — OWRX and SDR++ both put the
+  /// axis here for that reason. It is its OWN reserved dead-black band (nothing of the spectrum
+  /// or waterfall renders behind it), full-bleed edge to edge, carrying:
+  ///  - a band-plan colour WASH filling the strip (OWRX's coloured segments). The old code
+  ///    forbade a wash — but only because the ticker used to float OVER the waterfall, where a
+  ///    tint fought the trace. On dead black it reads cleanly and tells you the band at a glance.
+  ///  - ticks + frequency labels at their TRUE x, with NO edge clamp: a label at the edge clips
+  ///    at the bezel, exactly as the signal it sits over is already clipped off-screen.
+  ///  - band-boundary bars at true x, sliding off/in as you tune.
+  private func drawAxisStrip(_ ctx: GraphicsContext, _ size: CGSize, top: CGFloat, h: CGFloat) {
+    let y0 = top, y1 = top + h
 
-      var hz = (lo / stepHz).rounded(.up) * stepHz
-      while hz <= hi {
-        let px = x(hz)
-        ctx.stroke(
-          Path { $0.move(to: CGPoint(x: px, y: size.height - 4))
-                 $0.addLine(to: CGPoint(x: px, y: size.height)) },
-          with: .color(.white.opacity(0.5)),
-          lineWidth: 1
-        )
-        var label = ctx.resolve(
-          Text(tickLabel(hz, span: link.span))
-            .font(.system(size: 8, weight: .medium, design: .rounded))
-        )
-        label.shading = .color(.white.opacity(0.75))
-        let w = label.measure(in: size).width
-        // Don't let an edge label hang off the screen.
-        let cx = min(max(px, w / 2), size.width - w / 2)
-        ctx.draw(label, at: CGPoint(x: cx, y: 5), anchor: .center)
-        hz += stepHz
-      }
-
-      // BAND BOUNDARIES — a MARK, not a wash.
-      //
-      // Tinting the whole strip was tried and it earns nothing: it is either too faint to
-      // notice or too strong to read the tick labels through, and either way it only tells
-      // you WHICH band you're in — which the label above already says, in words. A mark at
-      // the edge tells you something the label cannot: how far you are from leaving it.
-      // That is the thing you want to know while the crown is turning under your finger.
-      let edges = [link.bandLo, link.bandHi].filter { $0 > 0 && $0 > lo && $0 < hi }
-      let edgeCol = link.bandColor ?? .white
-      for e in edges {
-        let px = x(e)
-        // Full-height bar in the band's own colour, with a dark keyline either side so it
-        // survives a bright tick label landing on top of it.
-        ctx.fill(Path(CGRect(x: px - 2, y: 0, width: 4, height: size.height)),
-                 with: .color(.black.opacity(0.85)))
-        ctx.fill(Path(CGRect(x: px - 1, y: 0, width: 2, height: size.height)),
-                 with: .color(edgeCol))
-      }
+    // Dead-black base — the strip is carved space, not a window onto the waterfall.
+    ctx.fill(Path(CGRect(x: 0, y: y0, width: size.width, height: h)), with: .color(.black))
+    // Band-plan colour WASH, edge to edge.
+    if let bc = link.bandColor {
+      ctx.fill(Path(CGRect(x: 0, y: y0, width: size.width, height: h)),
+               with: .color(bc.opacity(0.30)))
     }
-    .frame(height: 14)
-    // 0.45 → 0.68. It sat at 0.45 while the band label DIRECTLY ABOVE IT sits at 0.62, and
-    // the difference is plainly visible on a bright waterfall: one reads, the other doesn't.
-    // A touch darker still than the label, because the tick text is 8pt against the band
-    // name's 10pt — the smaller the type, the more ground it needs under it.
-    .background(.black.opacity(0.68))
-    .clipShape(RoundedRectangle(cornerRadius: 4))
+    // Hairline under the strip, so the axis and the waterfall's top edge don't bleed together.
+    // (The spectrum already draws one at y0, the strip's top.)
+    ctx.stroke(
+      Path { $0.move(to: CGPoint(x: 0, y: y1)); $0.addLine(to: CGPoint(x: size.width, y: y1)) },
+      with: .color(.white.opacity(0.18)), lineWidth: 1)
+
+    guard link.span > 0 else { return }
+    let lo = link.frequency - link.span / 2
+    let hi = link.frequency + link.span / 2
+    let stepHz = tickStep(span: link.span)
+    let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
+
+    var hz = (lo / stepHz).rounded(.up) * stepHz
+    while hz <= hi {
+      let px = x(hz)
+      // Tick at the BOTTOM of the strip, against the waterfall row it labels.
+      ctx.stroke(
+        Path { $0.move(to: CGPoint(x: px, y: y1 - 4)); $0.addLine(to: CGPoint(x: px, y: y1)) },
+        with: .color(.white.opacity(0.6)), lineWidth: 1)
+      var label = ctx.resolve(
+        Text(tickLabel(hz, span: link.span))
+          .font(.system(size: 8, weight: .medium, design: .rounded)))
+      label.shading = .color(.white.opacity(0.85))
+      // True x — labels clip at the bezel, they are not pulled back inboard.
+      ctx.draw(label, at: CGPoint(x: px, y: y0 + (h - 4) / 2), anchor: .center)
+      hz += stepHz
+    }
+
+    // BAND BOUNDARIES — full strip height, at true x, in the band's colour with a dark keyline
+    // either side so a bright tick label landing on top can't erase them.
+    let edges = [link.bandLo, link.bandHi].filter { $0 > 0 && $0 > lo && $0 < hi }
+    let edgeCol = link.bandColor ?? .white
+    for e in edges {
+      let px = x(e)
+      ctx.fill(Path(CGRect(x: px - 2, y: y0, width: 4, height: h)),
+               with: .color(.black.opacity(0.85)))
+      ctx.fill(Path(CGRect(x: px - 1, y: y0, width: 2, height: h)),
+               with: .color(edgeCol))
+    }
   }
 
   /// THE BAND, in words, in the strip beside the clock.
