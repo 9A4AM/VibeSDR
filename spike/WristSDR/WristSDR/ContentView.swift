@@ -379,12 +379,16 @@ struct ContentView: View {
         // beside a long label like "AM Broadcast Band", and it keeps the corners clear.
         HStack(spacing: 6) {
           BatteryPill(level: link.battery)   // horizontal, number inside, own dark scrim
+          Spacer(minLength: 0)
           bandLabel
+          Spacer(minLength: 0)
           // Invisible battery-width balance on the right so the band LABEL sits dead-centre
-          // (aligned with the frequency readout below), rather than the whole battery+label
-          // group centring and shoving the label off to the right.
+          // (aligned with the frequency readout below). The Spacers + full-width frame PIN the
+          // battery to the leading edge — without them the whole group hugged its content and
+          // centred, so a SHORT band label let the battery drift inward from the left.
           BatteryPill(level: link.battery).hidden()
         }
+        .frame(maxWidth: .infinity)
         Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
       }
