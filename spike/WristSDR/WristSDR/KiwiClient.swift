@@ -57,6 +57,17 @@ final class KiwiClient: ObservableObject, SDRClient {
   private static let fullBW = 30_000_000.0
   private static let maxZoom = 14
   private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+  private static let OPEN_WF = true
+
+  /// Browser-identity handshake headers. Kiwi classifies connections as `ext_api` (and time-limits/
+  /// DROPS them after a few seconds) unless they look like the web client. The phone gets this for
+  /// free — React Native's WebSocket sends Origin + browser headers automatically; a raw NWConnection
+  /// sends neither, so we add them explicitly. `Origin` = the Kiwi's own http(s) origin.
+  private var browserHeaders: [(name: String, value: String)] {
+    let origin = wsBase.replacingOccurrences(of: "wss://", with: "https://")
+                       .replacingOccurrences(of: "ws://", with: "http://")
+    return [("User-Agent", Self.ua), ("Origin", origin)]
+  }
 
   // ── Published surface the UI mirrors ──
   @Published var frequency: Double = 9_600_000
@@ -185,7 +196,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         }
       }
     }
-    sndSock.open(url: wsURL("SND"), headers: [("User-Agent", Self.ua)])
+    sndSock.open(url: wsURL("SND"), headers: browserHeaders)
   }
   private var sndAuthed = false
 
@@ -206,7 +217,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.sendZoom()
       }
     }
-    wfSock.open(url: wsURL("W/F"), headers: [("User-Agent", Self.ua)])
+    wfSock.open(url: wsURL("W/F"), headers: browserHeaders)
   }
 
   private func startKeepalive() {
@@ -232,7 +243,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   private func onText(_ data: String, _ stream: String) {
     guard data.hasPrefix("MSG") else { return }
     // First SND MSG ⇒ auth processed ⇒ now it's safe to open the W/F socket (see onReady note).
-    if stream == "SND", !wfOpened { wfOpened = true; openWf() }
+    // DIAGNOSTIC: OPEN_WF gates the waterfall socket. If audio streams indefinitely with it OFF,
+    // the two-concurrent-socket interaction is what Kiwi drops (POSIXErrorCode 57 on SND).
+    if Self.OPEN_WF, stream == "SND", !wfOpened { wfOpened = true; openWf() }
     let body = String(data.dropFirst(4))
     for tok in body.split(separator: " ") {
       guard let eq = tok.firstIndex(of: "=") else { continue }
