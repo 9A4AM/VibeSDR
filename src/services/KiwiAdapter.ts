@@ -187,6 +187,7 @@ export class KiwiAdapter implements SDRBackend {
     this.connectedAt = Date.now();
     this.gapHist = []; this.lastFrameAt = 0; this.lastLink = -1;
     this.verMaj = null; this.verMin = null; this.serverInfoSent = false;
+    this.everConnected = false; this.errorShown = false;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -354,7 +355,7 @@ export class KiwiAdapter implements SDRBackend {
         // don't have; the owner only allows their own WEB PAGE and blocks apps; or a slot/IP
         // limit. All are owner settings, not an app fault — say so in plain English (and NOT via
         // the UberSDR bypass-password box, which can't touch any of these; see SDRScreen.onError).
-        if (val !== '0') this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.');
+        if (val !== '0') { this.errorShown = true; this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
@@ -375,7 +376,15 @@ export class KiwiAdapter implements SDRBackend {
     this.cb.onServerInfo?.({ name: 'KiwiSDR', version: `${this.verMaj}.${this.verMin}` });
   }
 
+  /** True once we've received a real frame — i.e. the connection actually opened. Lets a socket
+   *  close be read as a REFUSAL (never connected) vs a mid-session DROP (was streaming). */
+  private everConnected = false;
+  /** Set once we've already surfaced a refusal reason (e.g. badp), so a following socket close
+   *  doesn't show a second, duplicate message. */
+  private errorShown = false;
+
   private maybeConnected(): void {
+    this.everConnected = true;
     if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
 
@@ -743,7 +752,19 @@ export class KiwiAdapter implements SDRBackend {
     if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
-    this.cb.onServerLost?.();
+    if (!this.everConnected) {
+      // Closed BEFORE we ever received a frame = a REFUSAL, not a mid-session drop. Many blocked
+      // Kiwis just hang up the socket without a `badp` MSG, so this is the ONLY signal we get —
+      // give it the plain-English reason (routes to the clear alert, not the "stopped responding"
+      // card). Skip if badp already explained it.
+      if (!this.errorShown) {
+        this.errorShown = true;
+        this.cb.onError('This KiwiSDR refused the connection — the owner may only allow their own web page (blocking apps), require a password, or every listener slot may be taken. Not a fault in VibeSDR — try another KiwiSDR, or use UberSDR or OpenWebRX.');
+      }
+    } else {
+      // Was streaming, then dropped — a genuine mid-session loss.
+      this.cb.onServerLost?.();
+    }
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
