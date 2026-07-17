@@ -172,8 +172,16 @@ final class KiwiClient: ObservableObject, SDRClient {
           // auth is processed. W/F opens from onMsg (first SND MSG = auth done).
           self.startKeepalive()
         }
-        if st.contains("failed") {
-          self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
+        if st.contains("failed") || st.contains("cancelled") {
+          if self.everFrame, !self.goingIdle {
+            // Dropped AFTER it was streaming — a genuine mid-session loss (server closed the socket).
+            // Report it plainly (debug: the raw state) rather than the spike silently going yellow.
+            self.errorShown = true
+            self.lastError = "This KiwiSDR dropped the connection after streaming.\n[\(st)]"
+            self.status = "dropped"
+          } else if !self.everFrame {
+            self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
+          }
         }
       }
     }
@@ -432,7 +440,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   func resumeSpectrum() { wfSend("SET wf_speed=4") }
   func suspend() { wfSend("SET wf_speed=0"); specQueue.removeAll(); status = "background · audio only" }
   func reconnectIfNeeded() { /* Kiwi keepalive + socket retry handle this for now */ }
+  private var goingIdle = false
   func goIdle() {
+    goingIdle = true
     keepaliveTimer?.invalidate(); keepaliveTimer = nil
     rateTimer?.invalidate(); rateTimer = nil
     connectTimer?.invalidate(); connectTimer = nil
