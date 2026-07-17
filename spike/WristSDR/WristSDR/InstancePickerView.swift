@@ -111,7 +111,7 @@ struct InstancePickerView: View {
             Text("Couldn't load — tap to retry").font(.system(size: 12)).foregroundColor(.orange)
               .onTapGesture { Task { await load(dir.id) } }
           }
-          ForEach(lists[dir.id] ?? []) { serverRow($0) }
+          ForEach(sortedServers(lists[dir.id] ?? [])) { serverRow($0) }
         }
       }
     }
@@ -132,6 +132,22 @@ struct InstancePickerView: View {
         }.buttonStyle(.plain)
       }.opacity(s.full ? 0.5 : 1)
     }.buttonStyle(.plain).disabled(s.full)
+  }
+
+  /// Simplified wrist sort: by distance from the user when the directory reports it (UberSDR gives
+  /// server-side distance); otherwise by country with the user's own country first, rest alphabetical.
+  private func sortedServers(_ list: [SDRServer]) -> [SDRServer] {
+    let userCC = Locale.current.region?.identifier.uppercased()
+    if list.contains(where: { $0.distance != nil }) {
+      return list.sorted { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
+    }
+    return list.sorted { a, b in
+      let ac = a.countryCode ?? "ZZ", bc = b.countryCode ?? "ZZ"
+      let aUser = (ac == userCC), bUser = (bc == userCC)
+      if aUser != bUser { return aUser }                        // user's country first
+      if ac != bc { return ac < bc }                            // then alphabetical by country
+      return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+    }
   }
 
   private func serverSubtitle(_ s: SDRServer) -> String {

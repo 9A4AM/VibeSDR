@@ -154,11 +154,14 @@ final class KiwiClient: ObservableObject, SDRClient {
     sndSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "SND") } }
     sndSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "SND") } }
     sndSock.onState = { [weak self] st in
-      guard st.contains("failed") else { return }
       Task { @MainActor in
-        // Socket failed before any frame = a handshake block (the server bounced us to its own web
-        // page) or the host is unreachable. Either way, don't hang — the watchdog message fits.
-        self?.fail("This KiwiSDR wouldn’t open a connection for the app — many owners only allow their own web page. Try another KiwiSDR, or use UberSDR or OpenWebRX.")
+        guard let self else { return }
+        if !self.everFrame, self.status != "live" { self.status = "snd \(st)" }   // visible on the placeholder
+        if st.contains("failed") {
+          // Socket failed before any frame = a handshake block (the server bounced us to its own web
+          // page) or the host is unreachable. Show the raw error too (debug) so we can see the cause.
+          self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
+        }
       }
     }
     sndSock.onReady = { [weak self] in
