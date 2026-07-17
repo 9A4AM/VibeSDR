@@ -49,6 +49,28 @@ enum LinkHint: Equatable {
   case indeterminate
 }
 
+/// Server-link health for the status glyph. Piggybacks on the hint machinery (below) so the
+/// pill and the glyph can never disagree — one set of thresholds, one debounce.
+enum LinkQuality { case good, degraded, poor, down }
+
+/// The phone app's "instance" icon — three connected dots in a triangle — reproduced 1:1 as a
+/// Shape so the watch's link-quality glyph is pixel-identical to the phone's (no SF Symbol
+/// matches it). Geometry from SectionIcon.tsx (viewBox 0 0 24 24), scaled to the frame.
+struct InstanceNodes: Shape {
+  func path(in r: CGRect) -> Path {
+    let s = min(r.width, r.height) / 24
+    func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }
+    var p = Path()
+    p.move(to: P(8, 7));     p.addLine(to: P(16, 7))       // top edge
+    p.move(to: P(7.2, 8.7)); p.addLine(to: P(10.8, 16.3))  // left diagonal
+    p.move(to: P(16.8, 8.7)); p.addLine(to: P(13.2, 16.3)) // right diagonal
+    for c in [P(6, 7), P(18, 7), P(12, 18)] {              // nodes
+      p.addEllipse(in: CGRect(x: c.x - 2 * s, y: c.y - 2 * s, width: 4 * s, height: 4 * s))
+    }
+    return p
+  }
+}
+
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
 ///
 /// Solid bars would cut the waterfall in two and steal height at both ends, and
@@ -216,19 +238,24 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
-      // The watch's own battery, now in the BOTTOM-LEFT corner, drawn vertically on its own
-      // scrim. It used to sit beside the clock, but that spot fouls the watchOS system glyphs
-      // (driving car, location arrow, recording dot) with no API to dodge them. The ticker
-      // moving up to the axis strip vacated this corner. The clock keeps its own scrim (drawn
-      // in `drawSpectrum`); this is a separate badge on its own ground.
-      // pointer-events off: it must never eat a tap meant for the waterfall.
+      // STATUS CLUSTER — bottom-right, a vertical pill (method above quality) on its own scrim.
+      // Method = what the watch is connected THROUGH (iPhone relay / WiFi / cellular / none);
+      // quality = how well the server link is holding. See BRIEF-watch-status-glyphs.
+      // Vertical so it hugs the corner curve without clipping (same reason the readout centres).
+      // Hit-testing off: status chrome must never eat a waterfall tap.
       VStack {
         Spacer()
         HStack {
-          BatteryPillV(level: link.battery)
-            .padding(.leading, 8)
-            .padding(.bottom, 6)
           Spacer()
+          VStack(spacing: 5) {
+            methodGlyph      // top: what we're connected THROUGH
+            qualityGlyph     // below: how WELL
+          }
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white)   // method glyph white; quality glyph carries its own tint
+          .padding(.horizontal, 4).padding(.vertical, 5)
+          .background(Color.black.opacity(0.55), in: Capsule())
+          .padding(.trailing, 10).padding(.bottom, 20)   // clear the corner arc
         }
       }
       .ignoresSafeArea()
@@ -265,13 +292,8 @@ struct ContentView: View {
       // So: a brief gap gets a small WARNING PILL and the waterfall keeps rendering
       // whatever it's got. Only a genuinely dead link (or a phone that has told us
       // it's doing something else) gets the full overlay.
-      if let h = hint {
-        VStack {
-          hintPill(h)
-            .padding(.top, 46)      // clear of the clock
-          Spacer()
-        }
-      }
+      // (The hint pill has moved DOWN into the bottom stack, above the band row — see below —
+      // so it no longer covers the newest waterfall rows at the top.)
 
       if link.everGotRow, let msg = stalledMessage {
         VStack(spacing: 4) {
@@ -296,10 +318,19 @@ struct ContentView: View {
         // seconds old and nobody is reading it, so the label costs nothing — and it now
         // sits directly above the band-boundary marks it explains, which is where it
         // belonged all along.
+        // Hint pill relocated here (was top-anchored): the newest rows are at the TOP and a top
+        // pill covers the very data you tune by, so it lives over seconds-old waterfall instead,
+        // beside the status cluster — pill + method + quality read as one "state of the link" group.
+        if let h = hint { hintPill(h).padding(.bottom, 2) }
         // Band label sits just above the frequency readout now — like the VTS label under the
         // main app's waterfall. The ticker has moved UP into the axis strip between the
         // spectrum and the waterfall (see `drawAxisStrip`), where the frequency scale belongs.
-        bandLabel
+        // The battery rides the SAME ROW, horizontal with its number inside — there's room even
+        // beside a long label like "AM Broadcast Band", and it keeps the corners clear.
+        HStack(spacing: 6) {
+          BatteryPill(level: link.battery)   // horizontal, number inside, own dark scrim
+          bandLabel
+        }
         Button { if !locked { showNumpad = true } } label: { readout }
           .buttonStyle(.plain)
       }
@@ -906,6 +937,55 @@ struct ContentView: View {
   /// perfectly good data because of it is not.
   ///
   /// This is the raw reading. `hint` is the debounced one that reaches the screen.
+  /// Server-link health for the status glyph — DERIVED from the same hint/gap signals as the
+  /// pill so the two can never disagree. NOT from `link.level`: that's the tuned station's RF
+  /// strength (the readout gradient), a different meter — a strong station on a dying link must
+  /// still show red.
+  private var linkQuality: LinkQuality {
+    if link.transport == .none { return .down }
+    if stalledMessage != nil { return .down }            // no server connection at all
+    guard hint != nil else { return .good }               // healthy, rows fresh
+    let gap = link.lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
+    return gap > hintRowGap ? .poor : .degraded           // stopped vs jerky-but-flowing
+  }
+
+  private func qualityTint(_ q: LinkQuality) -> Color {
+    switch q {
+    case .good:     return .green
+    case .degraded: return .yellow
+    case .poor:     return .red
+    case .down:     return .red
+    }
+  }
+
+  /// What the watch is connected THROUGH. `.other` (the iPhone relay) → iphone; see transportFor.
+  @ViewBuilder private var methodGlyph: some View {
+    switch link.transport {
+    case .iphone:   Image(systemName: "iphone")
+    case .wifi:     Image(systemName: "wifi")
+    case .cellular: Image(systemName: "antenna.radiowaves.left.and.right")
+    case .none:     Image(systemName: "xmark").foregroundStyle(.red)
+    }
+  }
+
+  /// How WELL the server link is holding — the phone app's instance triangle, tinted, X when down.
+  @ViewBuilder private var qualityGlyph: some View {
+    let q = linkQuality
+    Group {
+      if q == .down {
+        Image(systemName: "xmark").foregroundStyle(.red)
+      } else {
+        InstanceNodes()
+          .stroke(qualityTint(q),
+                  style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+          .frame(width: 15, height: 15)
+      }
+    }
+    // Breathe only while a warning pill is up — reuses the pill's own `pulse`, so glyph and pill
+    // are in lockstep: static when healthy, gently breathing whenever a warning is on screen.
+    .opacity(hint != nil ? pulse : 1)
+  }
+
   private var rawHint: LinkHint? {
     guard stalledMessage == nil else { return nil }   // the hard overlay owns it
     guard link.everGotRow else { return nil }         // a cold boot is not a fault
@@ -1186,8 +1266,10 @@ struct ContentView: View {
       let x0 = max(0, x(max(b.lo, lo)))
       let x1 = min(size.width, x(min(b.hi, hi)))
       guard x1 > x0 else { continue }
+      // Vibrancy: 0.30 read far too subtle on the actual display (a screenshot flatters it).
+      // 0.62 makes the band segments clearly legible on the watch without drowning the ticks.
       ctx.fill(Path(CGRect(x: x0, y: y0, width: x1 - x0, height: h)),
-               with: .color(b.color.opacity(0.30)))
+               with: .color(b.color.opacity(0.62)))
     }
 
     // Hairline under the strip, so the axis and the waterfall's top edge don't bleed together.

@@ -131,13 +131,15 @@ struct BatteryPill: View {
               .padding(1)
           }
           Text("\(pct)")
-            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .font(.system(size: 9, weight: .bold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(tint)
             .minimumScaleFactor(0.7)
             .lineLimit(1)
         }
-        .frame(width: 26, height: 13)
+        // Sized to sit level with the band-label pill on the same row — the font is clear, so
+        // even three digits stay legible. Not huge; just matched.
+        .frame(width: 30, height: 15)
         // The nub. Without it a rounded rectangle with a number in it is just a badge.
         RoundedRectangle(cornerRadius: 0.5)
           .fill(tint)

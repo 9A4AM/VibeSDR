@@ -1,6 +1,12 @@
 import Foundation
 import SwiftUI
 import WatchKit
+import Combine
+
+/// How the watch is reaching the internet. `.iphone` = the paired-iPhone Bluetooth relay, which
+/// on watchOS surfaces as `NWInterface.InterfaceType.other` (Apple TN3135 — a well-supported
+/// heuristic, not a documented contract; the mapping lives in ONE place, UberClient.transportFor).
+enum Transport { case iphone, wifi, cellular, none }
 
 /// A `WatchLink`-shaped adapter for the STANDALONE spike.
 ///
@@ -35,6 +41,10 @@ final class SpikeLink: ObservableObject {
   // stuck on the boot band's colour (looked "always blue"). A didSet can't miss a path.
   @Published var frequency = 0.0 { didSet { if frequency != oldValue { updateBand() } } }
   @Published var span = 0.0
+  /// How the watch is reaching the server — mirrored from the client's NWPathMonitor. Drives
+  /// the connection-method glyph. Republished (not driverTick-mirrored) so it updates even
+  /// before the first row lands, e.g. while still connecting on wifi.
+  @Published var transport: Transport = .none
   @Published var snr = 0.0
   /// The spike has no server-supplied meter string (that was a phone/OWRX/FM-DX concept).
   /// STUB: blank → the readout shows "—". NOTE for later: could derive an S-meter from the
@@ -102,6 +112,9 @@ final class SpikeLink: ObservableObject {
     waterfall.setLUT(Self.sonarGreenLUT)
     waterfall.peakHold = true
     client = UberClient(waterfall: waterfall)
+    // Mirror the client's path-derived transport onto our published surface (the client owns
+    // the one NWPathMonitor; this just re-exposes it to the views).
+    client.$transport.assign(to: &$transport)
 
     if let raw = UserDefaults.standard.string(forKey: "vibe.displayUnit"),
        let u = DisplayUnit(rawValue: raw) {

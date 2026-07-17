@@ -197,12 +197,33 @@ final class UberClient: ObservableObject {
   private let pathQueue = DispatchQueue(label: "wristsdr.path")
   private var lastPathIface = ""
 
+  /// How the watch is reaching the server — for the connection-method glyph (SpikeLink mirrors
+  /// this). Updated on EVERY path callback, including the first, so the glyph is right from the
+  /// start (the recovery path below deliberately ignores the first callback; this doesn't).
+  @Published var transport: Transport = .none
+
   private func startPathMonitor() {
     pathMonitor.pathUpdateHandler = { [weak self] path in
       let iface = UberClient.ifaceName(path)
-      Task { @MainActor in self?.onPathChange(iface, satisfied: path.status == .satisfied) }
+      let tr = UberClient.transportFor(path)
+      Task { @MainActor in
+        guard let self else { return }
+        if self.transport != tr { self.transport = tr }
+        self.onPathChange(iface, satisfied: path.status == .satisfied)
+      }
     }
     pathMonitor.start(queue: pathQueue)
+  }
+
+  /// `.other` = the paired-iPhone Bluetooth relay on watchOS (Apple TN3135). Heuristic, kept in
+  /// this ONE place. No 4G/5G split — CoreTelephony RAT isn't reliable on watchOS and the glyph
+  /// only needs "on the watch's own cellular".
+  nonisolated private static func transportFor(_ p: NWPath) -> Transport {
+    guard p.status == .satisfied else { return .none }
+    if p.usesInterfaceType(.wifi)     { return .wifi }
+    if p.usesInterfaceType(.cellular) { return .cellular }
+    if p.usesInterfaceType(.other)    { return .iphone }
+    return .none
   }
 
   nonisolated private static func ifaceName(_ p: NWPath) -> String {
