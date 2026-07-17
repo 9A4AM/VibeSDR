@@ -184,32 +184,30 @@ final class UberClient: ObservableObject {
     Task { await connect() }
   }
 
-  // ── Network-path handoff (wifi → cellular as you leave the house) ─────────────
+  // ── Network path → transport glyph ONLY ──────────────────────────────────────
   //
-  // THE canonical standalone case: you set the watch going indoors on wifi and walk out. The
-  // path flips to cellular mid-connect, and a spectrum NWConnection that bound to the dying
-  // wifi interface can sit in `.waiting` forever — it never reaches `.ready`, so the
-  // onReady-armed watchdog never even starts, and it never `.failed`s, so the retry never
-  // fires. Audio (opened first, durable) usually rides onto cellular; the disposable spectrum
-  // socket is the one left stranded. So: watch the path ourselves, and when the usable
-  // interface actually CHANGES, rebuild the spectrum socket clean on the new path.
+  // We watch the path solely to tell the UI what the watch is connected THROUGH (wifi /
+  // cellular / iPhone relay) for the status glyph. It deliberately drives NO recovery.
+  //
+  // An earlier version rebuilt the spectrum socket on interface changes to fix the rare "walk
+  // out of the house on wifi" stuck case — but that risked disturbing a connection that was
+  // otherwise coping, and the field test WITHOUT it was already near-perfect. So recovery is
+  // left entirely to the socket's own failed→retry, the ready-but-silent watchdog and
+  // resumeSpectrum (which worked great), and the wifi→cellular launch edge case is handled by a
+  // simple close-and-reopen. (Stuart's call, 2026-07-17: revert to what worked.)
   private let pathMonitor = NWPathMonitor()
   private let pathQueue = DispatchQueue(label: "wristsdr.path")
-  private var lastPathIface = ""
 
   /// How the watch is reaching the server — for the connection-method glyph (SpikeLink mirrors
-  /// this). Updated on EVERY path callback, including the first, so the glyph is right from the
-  /// start (the recovery path below deliberately ignores the first callback; this doesn't).
+  /// this). Updated on every path callback, including the first, so the glyph is right from the start.
   @Published var transport: Transport = .none
 
   private func startPathMonitor() {
     pathMonitor.pathUpdateHandler = { [weak self] path in
-      let iface = UberClient.ifaceName(path)
       let tr = UberClient.transportFor(path)
       Task { @MainActor in
         guard let self else { return }
         if self.transport != tr { self.transport = tr }
-        self.onPathChange(iface, satisfied: path.status == .satisfied)
       }
     }
     pathMonitor.start(queue: pathQueue)
@@ -224,43 +222,6 @@ final class UberClient: ObservableObject {
     if p.usesInterfaceType(.cellular) { return .cellular }
     if p.usesInterfaceType(.other)    { return .iphone }
     return .none
-  }
-
-  nonisolated private static func ifaceName(_ p: NWPath) -> String {
-    guard p.status == .satisfied else { return "none" }
-    if p.usesInterfaceType(.wifi)          { return "wifi" }
-    if p.usesInterfaceType(.cellular)      { return "cell" }
-    if p.usesInterfaceType(.wiredEthernet) { return "eth" }
-    if p.usesInterfaceType(.other)         { return "other" }
-    return "unknown"
-  }
-
-  private var lastPathRebuildAt = Date.distantPast
-  private func onPathChange(_ iface: String, satisfied: Bool) {
-    let prev = lastPathIface
-    lastPathIface = iface
-    guard satisfied else { return }
-    // Only react to a genuine CHANGE of usable interface — not the first report, and not
-    // repeat updates on the same interface (which would thrash a healthy feed).
-    guard !prev.isEmpty, prev != "none", iface != prev else { return }
-    wsDiag = "path \(prev)→\(iface)"
-    guard status == "live" else { return }
-
-    // CONSERVATIVE ON PURPOSE — this exists ONLY for the "walk out of the house" stuck case,
-    // and must not disturb a connection that's coping on its own (the road test was already
-    // near-perfect without it). So:
-    //  - SPECTRUM ONLY. Never touch the audio socket: it's the durable one, NWConnection
-    //    migrates it across the handoff itself, and cancelling it here broke what worked.
-    //  - SUSTAINED starving, not a one-sample dip (frames absent >3s), so a healthy feed that
-    //    momentarily reads 0 fps between samples is left alone.
-    //  - A cooldown, so a flapping path (wifi↔iPhone relay at home) can't thrash the socket.
-    guard Date().timeIntervalSince(lastFrameAt) > 3,
-          Date().timeIntervalSince(lastPathRebuildAt) > 6 else { return }
-    lastPathRebuildAt = Date()
-    specWsState = "path \(prev)→\(iface) · rebuilding spectrum"
-    specSock.cancel()
-    specRetries = 0
-    openSpectrum()
   }
 
   private func connect() async {
