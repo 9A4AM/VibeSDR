@@ -135,9 +135,28 @@ function countryName(code: string | null): string {
   } catch { return code.toUpperCase(); }
 }
 
-// 'country' = collapsible groups by country (universal — no location needed).
-// 'nearest'/'snr' unchanged for now (distance-banding + SNR-tiering land next).
+// 'country' = collapsible groups by country; 'nearest' = distance bands; 'snr' = signal tiers.
 type SortMode = 'nearest' | 'snr' | 'country';
+
+// Collapsible band a server falls into for NEAR mode. Closest band opens by default; unknowns last.
+function distanceBand(km: number | null | undefined): { key: string; label: string; order: number } {
+  if (km == null || !Number.isFinite(km)) return { key: 'd:none', label: 'Distance unknown', order: 99 };
+  if (km < 50)   return { key: 'd:0', label: 'Within 50 km',   order: 0 };
+  if (km < 150)  return { key: 'd:1', label: '50–150 km',      order: 1 };
+  if (km < 400)  return { key: 'd:2', label: '150–400 km',     order: 2 };
+  if (km < 1000) return { key: 'd:3', label: '400–1000 km',    order: 3 };
+  if (km < 3000) return { key: 'd:4', label: '1000–3000 km',   order: 4 };
+  return { key: 'd:5', label: 'Over 3000 km', order: 5 };
+}
+
+// Collapsible tier a server falls into for SNR mode. Excellent opens by default; no-data last.
+function snrTier(snr: number | null | undefined): { key: string; label: string; order: number } {
+  if (snr == null || !Number.isFinite(snr)) return { key: 's:none', label: 'No signal data', order: 99 };
+  if (snr >= 30) return { key: 's:0', label: '▲ Excellent conditions', order: 0 };
+  if (snr >= 20) return { key: 's:1', label: '▲ Good conditions',      order: 1 };
+  if (snr >= 6)  return { key: 's:2', label: '△ Fair conditions',      order: 2 };
+  return { key: 's:3', label: '▽ Poor conditions', order: 3 };
+}
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
 
 // A unified list item — a real SDRInstance, a favourited custom URL, or a collapsible
@@ -168,10 +187,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const userCountry = useMemo(() => deviceCountry(), []);
   // Which collapsible groups are currently OPEN. Seeded with the user's country so their
   // group is expanded on first paint; every other group starts collapsed (anti-overload).
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const c = deviceCountry();
-    return new Set<string>(c ? [c] : []);
-  });
+  // Which collapsible groups are OPEN. Seeded per mode by the defaultOpenKey effect below
+  // (user's country / closest distance band / best SNR tier); the user's toggles persist within
+  // a mode, and switching mode re-seeds.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set<string>());
   const toggleGroup = useCallback((key: string) => {
     setOpenGroups(prev => {
       const next = new Set(prev);
@@ -825,6 +844,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // they open an SNR-capable directory or grant location).
   const effectiveSort: SortMode = availModes.includes(sortMode) ? sortMode : availModes[0];
 
+  // The group that should open by default for the current mode: the user's country (COUNTRY),
+  // the closest distance band (NEAR), or the best SNR tier (SNR).
+  const defaultOpenKey = useMemo(() => {
+    if (effectiveSort === 'country') return userCountry ?? '';
+    if (!instances.length) return '';
+    if (effectiveSort === 'nearest') {
+      const closest = instances.reduce((m, i) => (i.distance != null && i.distance < m ? i.distance : m), Infinity);
+      return distanceBand(Number.isFinite(closest) ? closest : null).key;
+    }
+    const best = instances.reduce((m, i) => (Number.isFinite(i.bestSnr as number) && (i.bestSnr as number) > m ? (i.bestSnr as number) : m), -Infinity);
+    return snrTier(best === -Infinity ? null : best).key;
+  }, [effectiveSort, instances, userCountry]);
+
+  // Re-seed the open group when the mode or directory changes (or once data resolves the default).
+  // Anti-overload: only the best band is open; the user's own toggles then persist within the mode.
+  useEffect(() => {
+    setOpenGroups(new Set(defaultOpenKey ? [defaultOpenKey] : []));
+  }, [effectiveSort, selectedDir, defaultOpenKey]);
+
   // Build the list as explicit sections with collapsible HEADER items. Favourites first
   // (never collapsible), then the directory grouped by the current sort mode. In 'country'
   // mode each country is its own collapsible group (user's country open, rest collapsed);
@@ -871,10 +909,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         if (open) out.push(...rows.map(i => ({ kind: 'instance' as const, data: i })));
       }
     } else {
-      if (effectiveSort === 'snr') rest = [...rest].sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
-      if (rest.length) {
-        out.push({ kind: 'header', groupKey: '__other', label: 'OTHER SERVERS', count: rest.length, collapsible: false, collapsed: false });
-        out.push(...rest.map(i => ({ kind: 'instance' as const, data: i })));
+      // NEAR = distance bands; SNR = signal tiers. Collapsible groups; the closest/best band is
+      // seeded open (see defaultOpenKey effect), the rest collapsed to avoid overload.
+      const bandOf = effectiveSort === 'snr'
+        ? (i: SDRInstance) => snrTier(i.bestSnr as number | null)
+        : (i: SDRInstance) => distanceBand(i.distance);
+      const groups = new Map<string, { label: string; order: number; rows: SDRInstance[] }>();
+      for (const i of rest) {
+        const b = bandOf(i);
+        (groups.get(b.key) ?? groups.set(b.key, { label: b.label, order: b.order, rows: [] }).get(b.key)!).rows.push(i);
+      }
+      const bands = [...groups.entries()].sort((a, b) => a[1].order - b[1].order);
+      bands.forEach(([, g]) => g.rows.sort((a, b) => effectiveSort === 'snr'
+        ? (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity)
+        : (a.distance ?? Infinity) - (b.distance ?? Infinity)));
+      for (const [key, g] of bands) {
+        const open = openGroups.has(key);
+        out.push({ kind: 'header', groupKey: key, label: g.label, count: g.rows.length, collapsible: true, collapsed: !open });
+        if (open) out.push(...g.rows.map(i => ({ kind: 'instance' as const, data: i })));
       }
     }
     return out;
