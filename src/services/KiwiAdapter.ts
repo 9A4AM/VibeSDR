@@ -23,6 +23,7 @@ import type {
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { ImaAdpcmDecoder, decodeKiwiWaterfallFrame } from './imaAdpcm';
+import { getKiwiIdent, sanitizeIdent } from './kiwiIdent';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -131,11 +132,18 @@ export class KiwiAdapter implements SDRBackend {
   private connectedAt = 0;
   private lastLink = -1;
 
+  /** Name/callsign sent as `SET ident_user=`. Loaded from the saved global identity; falls back
+   *  to a non-blank default so we never connect anonymously (a common blacklist trigger). The
+   *  load is local and fast, and the ident isn't sent until the SND socket's auth (a network
+   *  round-trip later), so it's always ready in time. */
+  private ident = 'VibeSDR';
+
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
     this.uuid = uuid;
     this.cb = callbacks;
     this.password = password ?? '';
     this.wsBase = KiwiAdapter.toWsBase(baseUrl);
+    getKiwiIdent().then((v) => { const s = sanitizeIdent(v); if (s) this.ident = s; }).catch(() => {});
   }
 
   /** http(s)/ws(s)://host:port[/…] → ws(s)://host:port (no trailing path). */
@@ -197,6 +205,10 @@ export class KiwiAdapter implements SDRBackend {
       this.sndWs.onopen = () => {
         this.dbg('SND open');
         this.sndSend(`SET auth t=kiwi p=${this.password}`);
+        // Ident goes EARLY, right after auth — a "require name/callsign" server checks it at
+        // connect time, so sending it late (buried in the RX params) means the refusal has
+        // already happened. See kiwiIdent / IdentModal.
+        this.sndSend(`SET ident_user=${this.ident}`);
         this.sndSend('SERVER DE CLIENT openwebrx.js SND');
         // RX params (which START the audio stream) — a short tick lets the
         // server process auth first; also re-asserted on the audio_rate MSG.
@@ -403,7 +415,7 @@ export class KiwiAdapter implements SDRBackend {
     this.sendDemod();
     this.sndSend('SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50');
     this.sndSend('SET compression=1');
-    this.sndSend('SET ident_user=VibeSDR');
+    // (ident_user is now sent EARLY, right after auth in the SND onopen — see there.)
     this.cb.onStatus(this.getStatus());
   }
 

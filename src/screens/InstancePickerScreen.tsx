@@ -87,6 +87,8 @@ import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
+import IdentModal from '../components/IdentModal';
+import { getKiwiIdent, setKiwiIdent } from '../services/kiwiIdent';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
@@ -184,6 +186,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }).catch(() => {});
   }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
+  // KiwiSDR name/callsign prompt — holds the pending connect args while the box is up, plus the
+  // pre-fill value (the saved ident, so re-opening never means retyping).
+  const [identModal,  setIdentModal]    = useState<null | { url: string; name: string; password?: string; lon?: number | null; type?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' }>(null);
+  const [identPrefill, setIdentPrefill] = useState('');
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
   const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
@@ -359,6 +365,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (serverType === 'fmdx') {
       navigation.navigate('Tuner', { baseUrl: cleaned, instanceName: name, viewMode });
       return;
+    }
+    // KiwiSDR: capture a name/callsign once (saved like the VibeServer PIN). Many Kiwis refuse
+    // anonymous or require an ident — so ensure one exists before connecting. Prompt only when
+    // it's empty; thereafter the adapter loads and sends it silently.
+    if (serverType === 'kiwi') {
+      const id = await getKiwiIdent();
+      if (!id) {
+        setIdentPrefill('');
+        setIdentModal({ url: cleaned, name, password, lon: serverLongitude, type: serverType });
+        return;
+      }
     }
     setConnecting(true);
     try {
@@ -1018,6 +1035,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}>
+      <IdentModal
+        visible={!!identModal}
+        initial={identPrefill}
+        onSubmit={async (id) => {
+          const m = identModal; setIdentModal(null);
+          await setKiwiIdent(id);
+          if (m) connect(m.url, m.name, m.password, m.lon, m.type);
+        }}
+        onCancel={() => setIdentModal(null)}
+      />
       <PasswordModal
         visible={!!pwModal}
         serverUrl={pwModal?.url ?? ''}
