@@ -32,6 +32,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   const [canBack, setCanBack] = useState(false);
   const [canFwd,  setCanFwd]  = useState(false);
   const [curUrl,  setCurUrl]  = useState(url);
+  const [progress, setProgress] = useState(0);   // 0..1 page-load progress (Safari-style bar)
   if (!url) return null;
   // Hand the currently-open URL to the OS share sheet — for an image (a tapped
   // file in the OWRX gallery) iOS/Android offer "Save Image" / "Save to Files".
@@ -75,15 +76,24 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
             <Text style={[styles.navArrow, !canFwd && styles.navArrowDim]}>›</Text>
           </TouchableOpacity>
         </View>
+        {/* Safari-style load bar — on a slow receiver a blank WebView reads as "hung". */}
+        {progress < 1 && (
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${Math.max(3, progress * 100)}%` }]} />
+          </View>
+        )}
         <WebView
           ref={webRef}
           source={{ uri: url }}
           style={styles.web}
           allowsBackForwardNavigationGestures
+          onLoadStart={() => setProgress(0)}
+          onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
           // Inject after the page loads (injectedJavaScript-prop timing was
           // unreliable on the OWRX map). A MutationObserver re-applies it in case
           // the header mounts after load.
           onLoadEnd={() => {
+            setProgress(1);
             if (!injectCSS) return;
             const css = JSON.stringify(injectCSS);
             webRef.current?.injectJavaScript(
@@ -103,6 +113,8 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
 
 const styles = StyleSheet.create({
   root:  { flex: 1, backgroundColor: '#000' },
+  progressTrack: { height: 2.5, backgroundColor: 'rgba(255,160,0,0.12)' },
+  progressFill:  { height: 2.5, backgroundColor: '#FFB833' },
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
