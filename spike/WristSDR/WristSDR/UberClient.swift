@@ -832,6 +832,11 @@ final class UberClient: ObservableObject {
   private func sendTune() {
     let msg: [String: Any] = ["type": "tune", "frequency": Int(frequency), "mode": mode]
     audioSock.send(json: msg)
+    // NOTE: we deliberately do NOT flush the audio/spectrum on tune. The buffer draining at the
+    // old frequency is the "swishing through the stations" sweep as you cross signals — Stuart
+    // likes it, and it keeps audio+waterfall in sync. The residual tune lag is the server
+    // round-trip + this cushion, and the cushion is wanted, so we leave it. (flush() exists on
+    // WatchAudio if we ever want an instant-jump mode.)
   }
 
   // ── Crown-tune DEBOUNCE (100ms) — MATCH THE MAIN APP / COMPANION ──────────────

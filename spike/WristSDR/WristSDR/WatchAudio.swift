@@ -39,6 +39,10 @@ final class WatchAudio {
   /// permanently behind live — you hear the backlog, and tuning feels laggy. (Learned on
   /// the phone, 2026-06-11; the same trap is waiting here.)
   private var queuedSeconds: Double = 0
+  /// Bumped by flush() (on tune). Buffer completions capture the generation at schedule time and
+  /// skip their queuedSeconds decrement if a flush happened since — so discarded buffers can't
+  /// corrupt the counter.
+  private var flushGen = 0
   /// Feeds the player node silence whenever the stream is late, so the audio hardware
   /// never idles — see startSilenceKeeper(). Idle hardware = suspended app = dead socket.
   private var keeper: DispatchSourceTimer?
@@ -393,8 +397,9 @@ final class WatchAudio {
       }
       let dur = Double(frames) / fmt.sampleRate
       queuedSeconds += dur
+      let gen = flushGen
       player.scheduleBuffer(buf) { [weak self] in
-        self?.q.async { self?.queuedSeconds -= dur }
+        self?.q.async { guard self?.flushGen == gen else { return }; self?.queuedSeconds -= dur }
       }
     }
   }
@@ -496,12 +501,30 @@ final class WatchAudio {
 
     let dur = Double(outBuf.frameLength) / outFmt.sampleRate
     queuedSeconds += dur
+    let gen = flushGen
     player.scheduleBuffer(outBuf) { [weak self] in
       // BACK ONTO THE QUEUE. This completion fires on the AUDIO thread, and it was
       // decrementing a counter that `play` increments on the WebSocket thread — one
       // counter, two threads, no lock. Moving `play` onto a serial queue and leaving its
       // completion off it fixed nothing at all.
-      self?.q.async { self?.queuedSeconds -= dur }
+      // `gen` guard: a flush() (tune) stops the player, which fires these completions for
+      // buffers we've already discarded — without the guard they'd drive queuedSeconds
+      // negative and the cushion logic would over-fill.
+      self?.q.async { guard self?.flushGen == gen else { return }; self?.queuedSeconds -= dur }
+    }
+  }
+
+  /// Drop everything currently queued and restart clean — called on TUNE so the listener stops
+  /// hearing the OLD frequency play out of the cushion (the ~queue-depth of tune latency). The
+  /// keeper refills a small silence floor immediately so the node never starves.
+  func flush() {
+    q.async { [weak self] in
+      guard let self, self.started, self.engine.isRunning else { return }
+      self.flushGen &+= 1            // stale completions from the stopped buffers become no-ops
+      self.player.stop()            // discards all scheduled (old-frequency) buffers
+      self.queuedSeconds = 0
+      self.player.play()            // ready for the new-frequency packets
+      self.topUp(to: self.floorQueued)
     }
   }
 }
