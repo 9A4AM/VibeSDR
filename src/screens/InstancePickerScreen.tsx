@@ -171,17 +171,26 @@ function favDist(f: Favourite, meta: FavMeta, loc: { lat: number; lon: number } 
 function favSnr(f: Favourite, meta: FavMeta): number | null {
   return meta[normUrl(f.url)]?.snr ?? f.bestSnr ?? null;
 }
+// Grouping order + display names for the by-type sort.
+const TYPE_ORDER: Record<string, number> = { ubersdr: 0, kiwi: 1, owrx: 2, fmdx: 3, vibeserver: 4, spyserver: 5, rtltcp: 6 };
+const TYPE_NAME: Record<string, string> = {
+  ubersdr: 'UberSDR', kiwi: 'KiwiSDR', owrx: 'OpenWebRX', fmdx: 'FM-DX', vibeserver: 'VibeServer',
+  spyserver: 'SpyServer', rtltcp: 'RTL-TCP',
+};
+const favType = (f: Favourite) => (f.serverType ?? 'ubersdr') as string;
 function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null, meta: FavMeta): Favourite[] {
   const arr = [...list];
   if (mode === 'used')         arr.sort((a, b) => (b.visits ?? 0) - (a.visits ?? 0));
   else if (mode === 'alpha')   arr.sort((a, b) => a.name.localeCompare(b.name));
   else if (mode === 'nearest') arr.sort((a, b) => favDist(a, meta, loc) - favDist(b, meta, loc));
   else if (mode === 'snr')     arr.sort((a, b) => (favSnr(b, meta) ?? -Infinity) - (favSnr(a, meta) ?? -Infinity));
+  else if (mode === 'type')    arr.sort((a, b) =>
+    ((TYPE_ORDER[favType(a)] ?? 99) - (TYPE_ORDER[favType(b)] ?? 99)) || a.name.localeCompare(b.name));
   return arr;   // 'manual' → unchanged
 }
-const FAV_SORT_CYCLE: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'manual'];
+const FAV_SORT_CYCLE: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'type', 'manual'];
 const FAV_SORT_LABEL: Record<FavSort, string> = {
-  used: '★ MOST USED', alpha: 'A–Z', nearest: 'NEAREST', snr: 'SNR', manual: 'MANUAL',
+  used: '★ MOST USED', alpha: 'A–Z', nearest: 'NEAREST', snr: 'SNR', type: 'TYPE', manual: 'MANUAL',
 };
 
 // Collapsible band a server falls into for NEAR mode. Closest band opens by default; unknowns last.
@@ -1123,6 +1132,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 } else if (favSort === 'snr') {
                   const s = favSnr(fav, favMeta);
                   bits.push(s != null ? `▲ SNR ${Math.round(s)} dB` : '▽ no SNR data');
+                } else if (favSort === 'type') {
+                  bits.push(`▣ ${TYPE_NAME[favType(fav)] ?? 'Custom'}`);
                 }
                 if (favSort !== 'snr' && favSort !== 'nearest' && (fav.visits ?? 0) > 0)
                   bits.push(`★ ${fav.visits} visit${fav.visits === 1 ? '' : 's'}`);

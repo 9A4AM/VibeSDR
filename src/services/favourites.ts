@@ -17,11 +17,12 @@ export type Favourite = {
   visits?: number; latitude?: number; longitude?: number; bestSnr?: number;
 };
 
-export type FavSort = 'used' | 'alpha' | 'nearest' | 'snr' | 'manual';
+export type FavSort = 'used' | 'alpha' | 'nearest' | 'snr' | 'type' | 'manual';
 const FAV_SORT_KEY = 'vibe.fav.sort';
+const FAV_SORTS: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'type', 'manual'];
 export async function getFavSort(): Promise<FavSort> {
-  try { const v = await AsyncStorage.getItem(FAV_SORT_KEY);
-    return (v === 'used' || v === 'alpha' || v === 'nearest' || v === 'snr' || v === 'manual') ? v : 'used';
+  try { const v = await AsyncStorage.getItem(FAV_SORT_KEY) as FavSort;
+    return FAV_SORTS.includes(v) ? v : 'used';
   } catch { return 'used'; }
 }
 export async function setFavSort(v: FavSort): Promise<void> {
