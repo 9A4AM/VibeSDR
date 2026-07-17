@@ -185,7 +185,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         }
       }
     }
-    sndSock.open(url: wsURL("SND"))
+    sndSock.open(url: wsURL("SND"), headers: [("User-Agent", Self.ua)])
   }
   private var sndAuthed = false
 
@@ -206,7 +206,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.sendZoom()
       }
     }
-    wfSock.open(url: wsURL("W/F"))
+    wfSock.open(url: wsURL("W/F"), headers: [("User-Agent", Self.ua)])
   }
 
   private func startKeepalive() {

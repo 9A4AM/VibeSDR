@@ -35,7 +35,9 @@ final class AudioSocket {
   /// an event, not a guessed sleep.
   var onReady: (() -> Void)?
 
-  func open(url: URL) {
+  /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
+  /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
+  func open(url: URL, headers: [(name: String, value: String)] = []) {
     gen &+= 1
     let g = gen
     cancel()
@@ -44,6 +46,7 @@ final class AudioSocket {
     let params: NWParameters = secure ? .tls : .tcp
     let ws = NWProtocolWebSocket.Options()
     ws.autoReplyPing = true                       // answer the server's pings natively
+    if !headers.isEmpty { ws.setAdditionalHeaders(headers) }
     params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
 
     let c = NWConnection(to: .url(url), using: params)
