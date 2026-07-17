@@ -187,15 +187,16 @@ struct BatteryPillV: View {
               .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
               .padding(1)
           }
+          // Percentage INSIDE the cell — below it, the digits ran into the watch's rounded
+          // corner and clipped. The cell is widened to 17pt so "100" fits upright.
+          Text("\(pct)")
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .minimumScaleFactor(0.6)
+            .lineLimit(1)
         }
-        .frame(width: 13, height: 24)
-        // Percentage BELOW the cell — 13pt is too narrow to hold "100" inside it legibly.
-        Text("\(pct)")
-          .font(.system(size: 8, weight: .bold, design: .rounded))
-          .monospacedDigit()
-          .foregroundStyle(tint)
-          .lineLimit(1)
-          .fixedSize()
+        .frame(width: 17, height: 26)
       }
       // The scrim — darkening, never frosting, same rule as every other piece of chrome.
       .padding(.horizontal, 4)
