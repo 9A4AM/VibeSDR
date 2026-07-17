@@ -158,14 +158,24 @@ function normUrl(u: string): string {
     .replace(/^www\./, '').replace(/\/+$/, '');
 }
 
-function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null): Favourite[] {
+// Live per-favourite metrics, keyed by normUrl, harvested from the directories (server-provided
+// distance works even with no device-location permission; snr = best band condition).
+type FavMeta = Record<string, { dist: number | null; snr: number | null }>;
+function favDist(f: Favourite, meta: FavMeta, loc: { lat: number; lon: number } | null): number {
+  const m = meta[normUrl(f.url)];
+  if (m?.dist != null) return m.dist;                                   // server-computed, preferred
+  if (f.latitude != null && f.longitude != null && loc) return haversineKm(loc.lat, loc.lon, f.latitude, f.longitude);
+  return Infinity;
+}
+function favSnr(f: Favourite, meta: FavMeta): number | null {
+  return meta[normUrl(f.url)]?.snr ?? f.bestSnr ?? null;
+}
+function sortFavs(list: Favourite[], mode: FavSort, loc: { lat: number; lon: number } | null, meta: FavMeta): Favourite[] {
   const arr = [...list];
-  const km = (f: Favourite) => (f.latitude != null && f.longitude != null && loc)
-    ? haversineKm(loc.lat, loc.lon, f.latitude, f.longitude) : Infinity;
   if (mode === 'used')         arr.sort((a, b) => (b.visits ?? 0) - (a.visits ?? 0));
   else if (mode === 'alpha')   arr.sort((a, b) => a.name.localeCompare(b.name));
-  else if (mode === 'nearest') arr.sort((a, b) => km(a) - km(b));
-  else if (mode === 'snr')     arr.sort((a, b) => (b.bestSnr ?? -Infinity) - (a.bestSnr ?? -Infinity));
+  else if (mode === 'nearest') arr.sort((a, b) => favDist(a, meta, loc) - favDist(b, meta, loc));
+  else if (mode === 'snr')     arr.sort((a, b) => (favSnr(b, meta) ?? -Infinity) - (favSnr(a, meta) ?? -Infinity));
   return arr;   // 'manual' → unchanged
 }
 const FAV_SORT_CYCLE: FavSort[] = ['used', 'alpha', 'nearest', 'snr', 'manual'];
@@ -424,59 +434,43 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     setFavourites(next);
   }, [favourites]);
 
-  // Patch favourite lat/lon/bestSnr snapshots from a normUrl → {lat,lon,snr} map, so Nearest/SNR
-  // sorts have real data. Only fills MISSING/changed fields; persists if anything moved.
-  const patchFavSnapshots = useCallback((map: Map<string, { lat: number | null; lon: number | null; snr: number | null }>) => {
-    setFavourites(prev => {
-      let changed = false;
-      const next = prev.map(f => {
-        const hit = map.get(normUrl(f.url));
-        if (!hit) return f;
-        const lat = hit.lat ?? f.latitude, lon = hit.lon ?? f.longitude, snr = hit.snr ?? f.bestSnr;
-        if (lat === f.latitude && lon === f.longitude && snr === f.bestSnr) return f;
-        changed = true;
-        return { ...f, latitude: lat ?? undefined, longitude: lon ?? undefined, bestSnr: snr ?? undefined };
-      });
-      if (changed) saveFavourites(next).catch(() => {});
-      return changed ? next : prev;
+  // Live directory metrics for favourites (normUrl → {dist, snr}). Held in STATE, not written onto
+  // the stored favourite — the focus effect reloads favourites from storage on every focus, which
+  // used to clobber any snapshot we wrote. Distance here is the server-computed value (works with no
+  // location permission — that's why the directory shows km but a client haversine can't).
+  const [favMeta, setFavMeta] = useState<FavMeta>({});
+  const mergeMeta = useCallback((list: SDRInstance[]) => {
+    if (!list.length) return;
+    setFavMeta(prev => {
+      const next = { ...prev };
+      for (const i of list) {
+        const k = normUrl(i.url);
+        const snr = i.bestSnr;
+        const dist = i.distance ?? (i.latitude != null && i.longitude != null && userLocRef.current
+          ? haversineKm(userLocRef.current.lat, userLocRef.current.lon, i.latitude, i.longitude) : null);
+        const cur = next[k];
+        next[k] = { dist: dist ?? cur?.dist ?? null, snr: snr ?? cur?.snr ?? null };
+      }
+      return next;
     });
   }, []);
 
-  // Keep snapshots fresh whenever a directory the user opens loads its instances.
-  useEffect(() => {
-    if (!instances.length) return;
-    const map = new Map(instances.map(i => [normUrl(i.url), { lat: i.latitude, lon: i.longitude, snr: i.bestSnr }]));
-    patchFavSnapshots(map);
-  }, [instances, patchFavSnapshots]);
+  // Merge whatever directory the user opens.
+  useEffect(() => { mergeMeta(instances); }, [instances, mergeMeta]);
 
-  // On-demand enrichment: the chooser screen never loads any directory, so a favourite made before
-  // its directory was ever opened has no lat/lon/SNR. The FIRST time the user sorts by Nearest or
-  // SNR, fetch ALL directories in the background and snapshot every favourite that matches — one
-  // pass per session (a ref guards re-fetching the whole set on every chip tap).
+  // Eagerly harvest ALL directories once on mount so Nearest/SNR have data the moment the user taps
+  // the chip — the chooser itself never opens a directory, so favourites would otherwise be blank.
   const enrichedRef = useRef(false);
   useEffect(() => {
     if (enrichedRef.current) return;
-    if (favSort !== 'nearest' && favSort !== 'snr') return;
-    if (!favourites.length) return;
     enrichedRef.current = true;
     (async () => {
-      const map = new Map<string, { lat: number | null; lon: number | null; snr: number | null }>();
       await Promise.all(DIRECTORIES.map(async d => {
-        try {
-          const list = await fetchDirectory(d.id, userLocRef.current?.lat, userLocRef.current?.lon);
-          for (const i of list) {
-            const k = normUrl(i.url);
-            const cur = map.get(k);
-            // Prefer an entry that actually carries SNR/coords over a bare one (same server, two dirs).
-            if (!cur || (cur.snr == null && i.bestSnr != null) || (cur.lat == null && i.latitude != null)) {
-              map.set(k, { lat: i.latitude ?? cur?.lat ?? null, lon: i.longitude ?? cur?.lon ?? null, snr: i.bestSnr ?? cur?.snr ?? null });
-            }
-          }
-        } catch { /* one directory failing must not abort the rest */ }
+        try { mergeMeta(await fetchDirectory(d.id, userLocRef.current?.lat, userLocRef.current?.lon)); }
+        catch { /* one directory failing must not abort the rest */ }
       }));
-      if (map.size) patchFavSnapshots(map);
     })();
-  }, [favSort, favourites, patchFavSnapshots]);
+  }, [mergeMeta]);
 
   const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
     if (!url) return;
@@ -979,7 +973,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const showFavs = selectedDir === null;
     const instanceUrls = new Set(instances.map(i => i.url));
     const favItems: ListItem[] = showFavs ? [
-      ...sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current)
+      ...sortFavs(favourites.filter(f => !instanceUrls.has(f.url)).filter(mFav), favSort, userLocRef.current, favMeta)
           .map(f => ({ kind: 'custom' as const, fav: f })),
       ...instances.filter(i => isFav(i.url)).filter(mInst).map(i => ({ kind: 'instance' as const, data: i })),
     ] : [];
@@ -1033,7 +1027,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
     }
     return out;
-  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir, favSort]);
+  }, [instances, favourites, filter, effectiveSort, isFav, userCountry, openGroups, selectedDir, favSort, favMeta]);
 
   // Expand/Collapse-ALL — the escape hatch for a user who wants the whole flat list.
   const collapsibleKeys = useMemo(
@@ -1099,12 +1093,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               {(() => {
                 const bits: string[] = [];
                 if (favSort === 'nearest') {
-                  const loc = userLocRef.current;
-                  if (loc && fav.latitude != null && fav.longitude != null)
-                    bits.push(`◍ ${Math.round(haversineKm(loc.lat, loc.lon, fav.latitude, fav.longitude)).toLocaleString()} km`);
-                  else bits.push('◍ distance unknown');
+                  const d = favDist(fav, favMeta, userLocRef.current);
+                  bits.push(Number.isFinite(d) ? `◍ ${Math.round(d).toLocaleString()} km` : '◍ distance unknown');
                 } else if (favSort === 'snr') {
-                  bits.push(fav.bestSnr != null ? `▲ SNR ${Math.round(fav.bestSnr)} dB` : '▽ no SNR data');
+                  const s = favSnr(fav, favMeta);
+                  bits.push(s != null ? `▲ SNR ${Math.round(s)} dB` : '▽ no SNR data');
                 }
                 if (favSort !== 'snr' && favSort !== 'nearest' && (fav.visits ?? 0) > 0)
                   bits.push(`★ ${fav.visits} visit${fav.visits === 1 ? '' : 's'}`);
