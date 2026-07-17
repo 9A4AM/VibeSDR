@@ -1165,23 +1165,38 @@ struct ContentView: View {
 
     // Dead-black base — the strip is carved space, not a window onto the waterfall.
     ctx.fill(Path(CGRect(x: 0, y: y0, width: size.width, height: h)), with: .color(.black))
-    // Band-plan colour WASH, edge to edge.
-    if let bc = link.bandColor {
-      ctx.fill(Path(CGRect(x: 0, y: y0, width: size.width, height: h)),
-               with: .color(bc.opacity(0.30)))
+
+    guard link.span > 0 else {
+      // No span yet — still draw the hairline so the axis reads as a line.
+      ctx.stroke(
+        Path { $0.move(to: CGPoint(x: 0, y: y1)); $0.addLine(to: CGPoint(x: size.width, y: y1)) },
+        with: .color(.white.opacity(0.18)), lineWidth: 1)
+      return
     }
+    let lo = link.frequency - link.span / 2
+    let hi = link.frequency + link.span / 2
+    let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
+
+    // BAND-PLAN COLOUR WASH, PER SEGMENT. Each band paints only ITS OWN slice of the visible
+    // span, so a boundary shows as two colours meeting (40m red | 41m broadcast blue at
+    // 7.2 MHz) instead of the whole bar being one colour that flips as you cross. Drawn in plan
+    // order so a ham band (listed after the broadcast band it sits inside) paints on top and
+    // wins on overlap — the same "ham preferred" rule as the label. Gaps stay dead black.
+    for b in BandPlan.bands where b.hi > lo && b.lo < hi {
+      let x0 = max(0, x(max(b.lo, lo)))
+      let x1 = min(size.width, x(min(b.hi, hi)))
+      guard x1 > x0 else { continue }
+      ctx.fill(Path(CGRect(x: x0, y: y0, width: x1 - x0, height: h)),
+               with: .color(b.color.opacity(0.30)))
+    }
+
     // Hairline under the strip, so the axis and the waterfall's top edge don't bleed together.
     // (The spectrum already draws one at y0, the strip's top.)
     ctx.stroke(
       Path { $0.move(to: CGPoint(x: 0, y: y1)); $0.addLine(to: CGPoint(x: size.width, y: y1)) },
       with: .color(.white.opacity(0.18)), lineWidth: 1)
 
-    guard link.span > 0 else { return }
-    let lo = link.frequency - link.span / 2
-    let hi = link.frequency + link.span / 2
     let stepHz = tickStep(span: link.span)
-    let x = { (hz: Double) in (hz - lo) / (hi - lo) * size.width }
-
     var hz = (lo / stepHz).rounded(.up) * stepHz
     while hz <= hi {
       let px = x(hz)

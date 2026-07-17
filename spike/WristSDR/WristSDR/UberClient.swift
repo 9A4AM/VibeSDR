@@ -214,6 +214,7 @@ final class UberClient: ObservableObject {
     return "unknown"
   }
 
+  private var lastPathRebuildAt = Date.distantPast
   private func onPathChange(_ iface: String, satisfied: Bool) {
     let prev = lastPathIface
     lastPathIface = iface
@@ -222,17 +223,23 @@ final class UberClient: ObservableObject {
     // repeat updates on the same interface (which would thrash a healthy feed).
     guard !prev.isEmpty, prev != "none", iface != prev else { return }
     wsDiag = "path \(prev)→\(iface)"
-    // Only while we're meant to be receiving, and only if the spectrum is actually starving —
-    // a feed that's still flowing has migrated fine and must not be disturbed.
     guard status == "live" else { return }
-    if framesPerSec == 0 {
-      specWsState = "path \(prev)→\(iface) · rebuilding spectrum"
-      specSock.cancel()
-      specRetries = 0
-      openSpectrum()
-    }
-    // Audio is durable, but if it too fell silent across the handoff, bring it back.
-    if audioPerSec == 0 { audioSock.cancel(); openAudio() }
+
+    // CONSERVATIVE ON PURPOSE — this exists ONLY for the "walk out of the house" stuck case,
+    // and must not disturb a connection that's coping on its own (the road test was already
+    // near-perfect without it). So:
+    //  - SPECTRUM ONLY. Never touch the audio socket: it's the durable one, NWConnection
+    //    migrates it across the handoff itself, and cancelling it here broke what worked.
+    //  - SUSTAINED starving, not a one-sample dip (frames absent >3s), so a healthy feed that
+    //    momentarily reads 0 fps between samples is left alone.
+    //  - A cooldown, so a flapping path (wifi↔iPhone relay at home) can't thrash the socket.
+    guard Date().timeIntervalSince(lastFrameAt) > 3,
+          Date().timeIntervalSince(lastPathRebuildAt) > 6 else { return }
+    lastPathRebuildAt = Date()
+    specWsState = "path \(prev)→\(iface) · rebuilding spectrum"
+    specSock.cancel()
+    specRetries = 0
+    openSpectrum()
   }
 
   private func connect() async {
@@ -345,18 +352,13 @@ final class UberClient: ObservableObject {
 
   // ── Spectrum ──────────────────────────────────────────────────────────────
 
-  /// Bumped on every (re)open so a stale watchdog from a superseded socket bails instead of
-  /// tearing down the fresh one — the connect-timeout and the ready-but-silent watchdog can
-  /// otherwise both fire and cancel each other's work.
+  /// Bumped on every (re)open so a stale ready-but-silent watchdog from a superseded socket
+  /// bails instead of tearing down the fresh one.
   private var specOpenSeq = 0
-  /// Did THIS socket ever reach `.ready`? A socket stuck in `.waiting` (bound to a dead
-  /// interface on a handoff) never does — that's the case the connect-timeout exists for.
-  private var specReady = false
 
   private func openSpectrum() {
     specOpenSeq &+= 1
     let seq = specOpenSeq
-    specReady = false
     let url = URL(string: "wss://\(Self.host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
 
     specSock.onData = { [weak self] d in
@@ -386,30 +388,11 @@ final class UberClient: ObservableObject {
     specSock.onReady = { [weak self] in
       Task { @MainActor in
         guard let self, self.specOpenSeq == seq else { return }
-        self.specReady = true
         self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
         self.armSpectrumWatchdog()
       }
     }
     specSock.open(url: url)
-    armSpectrumConnectTimeout(seq)
-  }
-
-  /// STUCK IN `.waiting` HAS NO WAY OUT ON ITS OWN. `armSpectrumWatchdog` only runs once the
-  /// socket is `.ready`; a socket that never gets there (opened onto a dying wifi interface as
-  /// you walk out, then never migrated) would otherwise hang silently until relaunch — which
-  /// is exactly the "audio worked, no waterfall, had to force-quit" bug. So arm a timeout the
-  /// moment we OPEN: if it hasn't reached `.ready` in 7s, tear it down and retry (the fresh
-  /// NWConnection binds to whatever interface is now live).
-  private func armSpectrumConnectTimeout(_ seq: Int) {
-    Task { @MainActor in
-      try? await Task.sleep(nanoseconds: 7_000_000_000)
-      guard self.specOpenSeq == seq else { return }   // a newer open supersedes us
-      guard !self.specReady else { return }            // it came up — the ready-watchdog has it
-      self.specWsState = "spec never readied (\(self.lastPathIface)) · reopening"
-      self.specSock.cancel()
-      self.retrySpectrum()
-    }
   }
 
   /// FRAMES OR IT DIDN'T HAPPEN. Ready and silent is a real state, and it needs its own way
