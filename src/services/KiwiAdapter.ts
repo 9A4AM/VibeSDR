@@ -355,7 +355,10 @@ export class KiwiAdapter implements SDRBackend {
         // don't have; the owner only allows their own WEB PAGE and blocks apps; or a slot/IP
         // limit. All are owner settings, not an app fault — say so in plain English (and NOT via
         // the UberSDR bypass-password box, which can't touch any of these; see SDRScreen.onError).
-        if (val !== '0') { this.errorShown = true; this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
+        // Guard on errorShown: badp arrives on BOTH the SND and W/F sockets, so without this it
+        // fired onError (a native Alert) twice — two stacked alerts, the second lost when the
+        // first navigates back. One refusal, one message.
+        if (val !== '0' && !this.errorShown) { this.errorShown = true; this.cb.onError('This KiwiSDR refused sign-in. It either needs the owner’s password, or only allows its own web page and blocks apps. That’s the owner’s setting, not a fault — try another KiwiSDR, or use UberSDR or OpenWebRX.'); }
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
