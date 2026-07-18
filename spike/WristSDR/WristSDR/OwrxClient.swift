@@ -108,11 +108,16 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0 { self.retries = 0 }
-        // NO app-level watchdog and NO WS keepalive ping — both broke the "rock solid" state (the
-        // client ping disrupts OWRX; the watchdog false-fired on stutters). Liveness is handled at
-        // the TCP layer (keepalive, see AudioSocket) which keeps the NAT mapping alive AND surfaces a
-        // truly dead peer as a socket error → the onState reconnect. Exactly the phone's "do nothing".
+        if self.frameCount > 0 {
+          self.retries = 0; self.zeroSecs = 0
+        } else if self.everFrame, !self.retrying {
+          self.zeroSecs += 1
+          // Recover a SILENT stall (data stops with no socket error → the spike shows 'reconnecting'
+          // but nothing reconnects → stuck). 15s is long enough to tolerate OWRX's normal multi-second
+          // audio stutters (FFT frames count too, so it only fires when EVERYTHING stops). No WS ping —
+          // that caused the server-visible connect/disconnect churn.
+          if self.zeroSecs >= 15 { self.retry(reason: "no data 15s") }
+        }
         if self.everFrame, !self.retrying {
           self.status = "P:\(self.profiles.count) f:\(Int(self.framesPerSec)) cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
