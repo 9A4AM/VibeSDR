@@ -104,8 +104,11 @@ final class KiwiClient: ObservableObject, SDRClient {
   private let ident: String
 
   // ── Sockets / audio / DSP ──
-  private let sndSock = AudioSocket(name: "kiwi-snd")
-  private let wfSock  = AudioSocket(name: "kiwi-wf")
+  // nonisolated so the BACKGROUND keepalive timer can send on them without hopping to main — a
+  // main-actor hop would miss whenever the waterfall DSP stalls main, and a missed keepalive is
+  // exactly what makes Kiwi drop us. AudioSocket.send is thread-safe (NWConnection.send).
+  nonisolated(unsafe) private let sndSock = AudioSocket(name: "kiwi-snd")
+  nonisolated(unsafe) private let wfSock  = AudioSocket(name: "kiwi-wf")
   nonisolated(unsafe) let waterfall: WaterfallBuffer
   private let proc = SignalProcessor()
   // audio + the persistent ADPCM decoder run on the SND socket's serial queue (OFF the main actor,
@@ -114,7 +117,8 @@ final class KiwiClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let audio = WatchAudio()
   nonisolated(unsafe) private let audioDec = ImaAdpcmDecoder(clampLo: -32768, clampHi: 32767)
   private var audioStarted = false
-  private var keepaliveTimer: Timer?
+  nonisolated(unsafe) private var keepaliveSource: DispatchSourceTimer?
+  private let keepaliveQueue = DispatchQueue(label: "kiwi.keepalive")
   private var rateTimer: Timer?
   private var frameCount = 0
 
@@ -279,11 +283,20 @@ final class KiwiClient: ObservableObject, SDRClient {
     wfSock.open(url: wsURL("W/F"), headers: browserHeaders)
   }
 
+  /// BACKGROUND keepalive — a DispatchSourceTimer on its own queue, sending directly on the sockets
+  /// (no main-actor hop, no main run loop). Kiwi kicks a client that misses keepalives, and the old
+  /// main-actor Timer stopped firing the moment the waterfall DSP stalled main → the drop.
   private func startKeepalive() {
-    let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.sndSend("SET keepalive"); self?.wfSend("SET keepalive") }
+    keepaliveSource?.cancel()
+    let t = DispatchSource.makeTimerSource(queue: keepaliveQueue)
+    t.schedule(deadline: .now() + 0.5, repeating: 1.0)
+    t.setEventHandler { [weak self] in
+      guard let self else { return }
+      self.sndSock.send(text: "SET keepalive")
+      self.wfSock.send(text: "SET keepalive")
     }
-    RunLoop.main.add(t, forMode: .common); keepaliveTimer = t
+    t.resume()
+    keepaliveSource = t
   }
 
   // ── Binary dispatch (MSG/SND/W/F all arrive as binary with a 3-char tag) ──
@@ -515,7 +528,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   private var goingIdle = false
   func goIdle() {
     goingIdle = true
-    keepaliveTimer?.invalidate(); keepaliveTimer = nil
+    keepaliveSource?.cancel(); keepaliveSource = nil
     rateTimer?.invalidate(); rateTimer = nil
     connectTimer?.invalidate(); connectTimer = nil
     sndSock.cancel(); wfSock.cancel(); audio.stop()
