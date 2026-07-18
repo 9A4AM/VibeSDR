@@ -79,7 +79,8 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let audioDec = OwrxAudioDecoder()      // 12k
   nonisolated(unsafe) private let hdAudioDec = OwrxAudioDecoder()    // 48k HD/WFM
   private var rateTimer: Timer?
-  private var frameCount = 0
+  nonisolated(unsafe) private var frameCount = 0        // bumped off-main; rateTimer reads/resets
+  nonisolated(unsafe) private var sawFirstFrame = false
   private var everFrame = false
   nonisolated(unsafe) private var goingIdle = false
 
@@ -159,7 +160,7 @@ final class OwrxClient: ObservableObject, SDRClient {
           let type = json["type"] as? String else { return }
     switch type {
     case "config":   onConfig(json["value"] as? [String: Any] ?? [:])
-    case "profiles": onProfiles(json["value"] as? [[String: Any]] ?? [])
+    case "profiles": onProfiles(json["value"] as? [Any] ?? [])
     case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { clients = n }
     case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { signalDb = 10 * log10(v) }
     case "sdr_error", "demodulator_error":
@@ -180,15 +181,21 @@ final class OwrxClient: ObservableObject, SDRClient {
       if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
     }
     viewCenter = frequency
-    viewBw = min(sampRate > 0 ? sampRate : 48_000, defaultSpanForMode())
+    // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
+    // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
+    viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
     audioDec.reset(); hdAudioDec.reset()
     sendDemod()
   }
 
-  private func onProfiles(_ list: [[String: Any]]) {
-    let raw = list.map { p -> (id: String, name: String) in
-      let id = (p["id"] as? String) ?? String(describing: p["id"] ?? "")
-      return (id, (p["name"] as? String) ?? id)
+  // Profile entries can be objects {id,name} OR bare strings — handle both (like the phone).
+  private func onProfiles(_ list: [Any]) {
+    let raw: [(id: String, name: String)] = list.compactMap { el in
+      if let d = el as? [String: Any] {
+        let id = (d["id"] as? String) ?? String(describing: d["id"] ?? "")
+        return id.isEmpty ? nil : (id, (d["name"] as? String) ?? id)
+      } else if let s = el as? String { return (s, s) }
+      return nil
     }
     // Group by SDR (id prefix before "|"); SDR name = common prefix of the group's profile names.
     var groups: [String: [(id: String, name: String)]] = [:]
@@ -243,11 +250,8 @@ final class OwrxClient: ObservableObject, SDRClient {
     // DAB speed fix: under-state the rate so the resampler stretches DAB back to correct speed.
     let playRate = (modeSnapshot == "dab") ? Int(Double(rate) * dabRateScale) : rate
     audio.play(pcm: pcm, rate: Int32(playRate), channels: 1)
-    Task { @MainActor in
-      self.frameCount += 1
-      if !self.everFrame { self.everFrame = true }
-      if self.status != "live" { self.status = "live" }
-    }
+    frameCount &+= 1                                   // off-main; no per-frame main hop
+    if !sawFirstFrame { sawFirstFrame = true; Task { @MainActor in self.everFrame = true; if self.status != "live" { self.status = "live" } } }
   }
   nonisolated(unsafe) private var modeSnapshot = "am"   // read off-main in onAudio; benign
 

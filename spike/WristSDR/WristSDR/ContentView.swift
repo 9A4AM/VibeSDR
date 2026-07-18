@@ -372,6 +372,18 @@ struct ContentView: View {
             .transition(.opacity)
         }
         if let h = hint { hintPill(h).padding(.bottom, 2) }
+        // Crown-mode pill — shows what the crown is doing when it's NOT plain tune (set by the
+        // Double-Tap cycle or the menu). Sits just above the band label.
+        if crownMode != .tune {
+          HStack(spacing: 4) {
+            Image(systemName: crownMode.glyph).font(.system(size: 10, weight: .semibold))
+            Text("Crown: \(crownMode.label)").font(.system(size: 11, weight: .semibold))
+          }
+          .foregroundStyle(.orange)
+          .padding(.horizontal, 8).padding(.vertical, 2)
+          .background(.black.opacity(0.55), in: Capsule())
+          .padding(.bottom, 2)
+        }
         // Band label sits just above the frequency readout now — like the VTS label under the
         // main app's waterfall. The ticker has moved UP into the axis strip between the
         // spectrum and the waterfall (see `drawAxisStrip`), where the frequency scale belongs.
@@ -396,6 +408,15 @@ struct ContentView: View {
       .padding(.bottom, 4)
 
       if crownMode != .tune && !locked { crownOverlay }
+
+      // DOUBLE TAP (pinch) → cycle the crown mode Tune → Zoom → Volume. watchOS routes the
+      // double-pinch to the view's primary action; without one you get the "not applicable"
+      // wobble. Disabled while locked, so the gesture is ignored like every other control.
+      Button(action: cycleCrownMode) { Color.clear.frame(width: 1, height: 1) }
+        .buttonStyle(.plain)
+        .handGestureShortcut(.primaryAction)
+        .disabled(locked)
+        .allowsHitTesting(false)
 
       // Control lock (Walkman hold): a floating padlock, bottom-left above the ticker. Always
       // tappable — it's the one control that still works while locked.
@@ -839,6 +860,15 @@ struct ContentView: View {
   /// The meter sits next to the crown because that's the thing you're turning —
   /// your eye shouldn't have to cross the screen to see the effect of your finger.
   /// And the X goes opposite it so your hand isn't covering the way out.
+  /// Double-Tap handler: rotate the crown through Tune → Zoom → Volume. Same idle timeout as the
+  /// menu (crownUsedAt reset → the 30s lapse in the driver reverts to Tune). Ignored when locked.
+  private func cycleCrownMode() {
+    guard !locked else { return }
+    crownMode = crownMode.nextPrimary
+    crownUsedAt = Date()
+    WKInterfaceDevice.current().play(.click)
+  }
+
   private var crownOverlay: some View {
     // Self-clocking at 12fps ONLY while this overlay is on screen (crownMode != .tune), so the
     // exit-ring's 30s drain stays smooth now that the global frame clock no longer re-evaluates

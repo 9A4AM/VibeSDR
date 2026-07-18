@@ -222,6 +222,16 @@ enum CrownMode: Equatable {
     case .volume:     return "speaker.wave.2.fill"
     }
   }
+  var label: String {
+    switch self {
+    case .tune: return "Tune"; case .zoom: return "Zoom"; case .volume: return "Volume"
+    case .brightness: return "Bright"; case .contrast: return "Contrast"
+    }
+  }
+  /// Double-Tap cycles just the three primary crown modes.
+  var nextPrimary: CrownMode {
+    switch self { case .tune: return .zoom; case .zoom: return .volume; default: return .tune }
+  }
 }
 
 /// Crown sensitivity — watchOS's own, exposed as three named levels.
