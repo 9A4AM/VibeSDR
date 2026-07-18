@@ -16,6 +16,15 @@ struct DabProgramme: Identifiable, Equatable {
   let name: String
 }
 
+/// One line in the server's shared chat. `mine` is our own message echoed back (OWRX broadcasts every
+/// message to all clients including the sender), drawn aligned right so the conversation reads naturally.
+struct ChatLine: Identifiable, Equatable {
+  let id = UUID()
+  let name: String
+  let text: String
+  var mine: Bool = false
+}
+
 /// One decoded aircraft from an ADS-B `secondary_demod` ADSB-LIST. Position is what the plane sends;
 /// distance/bearing are computed client-side from the receiver location.
 struct Aircraft: Identifiable, Equatable {
@@ -76,6 +85,9 @@ final class OwrxClient: ObservableObject, SDRClient {
   @Published var profiles: [SDRProfile] = []
   @Published var clients: Int = 0
   @Published var stationName = ""          // RDS programme-service name (WFM) → band pill
+  @Published var chatLog: [ChatLine] = []  // shared server chat (capped to the last 40 lines)
+  @Published var chatActivity = 0          // bumps on each INBOUND message → breathes the chat glyph
+  var supportsChat: Bool { true }          // OWRX has a shared text chat; other backends default off
   var rowsPushed = 0
   var displaySpanHz: Double { viewBw }
 
@@ -339,6 +351,26 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.send(text: s)
   }
 
+  // ── Shared chat ─────────────────────────────────────────────────────────────
+  /// Send a chat line under the user's shared callsign/chat name. The server echoes it back to
+  /// every client (us included) as a `chat_message`, so we DON'T optimistically append here —
+  /// `appendChat` marks the echo `mine` by matching our name. Same wire shape as the phone
+  /// (`OwrxAdapter.sendChat`): `{type:"sendmessage", text, name}`.
+  func sendChat(_ text: String) {
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !t.isEmpty else { return }
+    send(["type": "sendmessage", "text": t, "name": ChatIdentity.name])
+  }
+
+  /// Append an inbound line, dedup our own echo as `mine`, cap the log, and breathe the glyph
+  /// only for OTHER people's messages (our own send shouldn't pulse our own icon).
+  @MainActor private func appendChat(name: String, text: String) {
+    let mine = name == ChatIdentity.name
+    chatLog.append(ChatLine(name: name, text: text, mine: mine))
+    if chatLog.count > 40 { chatLog.removeFirst(chatLog.count - 40) }
+    if !mine { chatActivity &+= 1 }
+  }
+
   // ── inbound text / JSON — runs OFF the main actor; only the handled types hop to main, so the
   //    OWRX+ metadata/dial/secondary flood is parsed and dropped without ever touching the UI thread.
   nonisolated private func onText(_ data: String) {
@@ -359,6 +391,10 @@ final class OwrxClient: ObservableObject, SDRClient {
     case "config":   let v = json["value"] as? [String: Any] ?? [:]; Task { @MainActor in self.onConfig(v) }
     case "profiles": let ps = buildProfiles(json["value"] as? [Any] ?? []); Task { @MainActor in self.profiles = ps }
     case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { Task { @MainActor in self.clients = n } }
+    case "chat_message":
+      let nm = (json["name"] as? String) ?? "?"
+      let tx = (json["text"] as? String) ?? ""
+      if !tx.isEmpty { Task { @MainActor in self.appendChat(name: nm, text: tx) } }
     case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { let db = 10 * log10(v); Task { @MainActor in self.signalDb = db } }
     case "sdr_error", "demodulator_error":
       let msg = String(describing: json["value"] ?? "OpenWebRX error"); Task { @MainActor in self.lastError = msg }

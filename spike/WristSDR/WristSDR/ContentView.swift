@@ -171,6 +171,7 @@ struct ContentView: View {
   @State private var bwDismissed = false   // heavy-server advisory dismissed for this occurrence
   @AppStorage("seenSdrTutorial") private var seenSdrTut = false
   @State private var showSdrTut = false
+  @State private var showChat = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
   @State private var suspendWork: DispatchWorkItem?
@@ -321,6 +322,23 @@ struct ContentView: View {
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+      }
+
+      // Shared chat + client-count glyph — top-left, exactly where the dev CPU badge sits and where the
+      // companion's FM-DX screen carries the same icon. Passive until a message lands, then it breathes;
+      // tap opens the chat sheet with the canned replies. Only on chat-capable backends (OWRX today).
+      if link.supportsChat {
+        VStack {
+          HStack {
+            ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+              if !locked { showChat = true }
+            }
+            .padding(.leading, 6).padding(.top, 19)
+            Spacer()
+          }
+          Spacer()
+        }
+        .ignoresSafeArea()
       }
 
       // DEGRADE, DON'T BLOCK.
@@ -518,6 +536,9 @@ struct ContentView: View {
       TutorialSheet(title: "Using VibeSDR", tips: sdrTutorialTips(isOwrx: link.isOwrx), dismissLabel: "Start listening") {
         seenSdrTut = true; showSdrTut = false
       }
+    }
+    .sheet(isPresented: $showChat) {
+      NavigationStack { ChatSheet().environmentObject(link) }
     }
     .ignoresSafeArea()
     // Non-focusable in volume mode so SwiftUI RELINQUISHES the crown entirely — otherwise this

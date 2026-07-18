@@ -55,6 +55,12 @@ protocol SDRClient: AnyObject {
   /// The receiver's own location (SDR site), for the ADS-B map centre + aircraft distances. nil = unknown.
   var receiverLat: Double? { get }
   var receiverLon: Double? { get }
+  /// Shared server chat (OWRX today; FM-DX later). `supportsChat` gates the whole UI; `chatActivity`
+  /// bumps per inbound line to breathe the glyph. Default inert so non-chat backends need nothing.
+  var supportsChat: Bool { get }
+  var chatLog: [ChatLine] { get }
+  var chatActivity: Int { get }
+  func sendChat(_ text: String)
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -73,6 +79,10 @@ extension SDRClient {
   var aircraft: [Aircraft] { [] }
   var receiverLat: Double? { nil }
   var receiverLon: Double? { nil }
+  var supportsChat: Bool { false }
+  var chatLog: [ChatLine] { [] }
+  var chatActivity: Int { 0 }
+  func sendChat(_ text: String) {}
 }
 
 extension UberClient: SDRClient {

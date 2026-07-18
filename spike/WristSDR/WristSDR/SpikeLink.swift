@@ -92,6 +92,12 @@ final class SpikeLink: ObservableObject {
   /// OWRX profiles (grouped SDR→profiles) + connected-listener count, mirrored from the client.
   @Published var profiles: [SDRProfile] = []
   @Published var clients = 0
+
+  // ── Shared server chat (OWRX; FM-DX later) ──
+  @Published var chatLog: [ChatLine] = []
+  @Published var chatActivity = 0
+  var supportsChat: Bool { client?.supportsChat ?? false }
+  func sendChat(_ text: String) { client?.sendChat(text) }
   /// EXPLICIT profile switch from the profile menu — never automatic (etiquette).
   func selectProfile(_ id: String) { client?.selectProfile(id) }
 
@@ -264,6 +270,8 @@ final class SpikeLink: ObservableObject {
     if aircraft != client.aircraft { aircraft = client.aircraft }
     if receiverLat != client.receiverLat { receiverLat = client.receiverLat }
     if receiverLon != client.receiverLon { receiverLon = client.receiverLon }
+    if chatActivity != client.chatActivity { chatActivity = client.chatActivity }
+    if chatLog != client.chatLog { chatLog = client.chatLog }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode {

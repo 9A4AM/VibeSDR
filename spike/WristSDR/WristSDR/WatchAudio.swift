@@ -242,11 +242,7 @@ final class WatchAudio {
           // Reactivating the SESSION isn't enough — WATER LOCK (and other interruptions) STOP the engine,
           // so restart the engine + player or it stays silent (esp. on AirPods, where the user saw this).
           guard let self, ok else { return }
-          DispatchQueue.main.async {
-            if !self.engine.isRunning { try? self.engine.start() }
-            if !self.player.isPlaying { self.player.play() }
-            Vitals.crumb("AUDIO engine restart after interruption: running=\(self.engine.isRunning)")
-          }
+          self.restartAudio("interruption ended")
         }
       }
     }
@@ -266,11 +262,26 @@ final class WatchAudio {
       guard let self else { return }
       try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
       AVAudioSession.sharedInstance().activate(options: []) { _, _ in }
-      self.q.async {
-        if !self.engine.isRunning { try? self.engine.start() }
-        if !self.player.isPlaying { self.player.play() }
-        Vitals.crumb("AUDIO restart on didBecomeActive: running=\(self.engine.isRunning)")
+      self.restartAudio("didBecomeActive")
+    }
+  }
+
+  /// The ONE guarded path back to sound after an interruption / Water Lock / route change / foreground.
+  /// Serialised on `q` so the interruption-ended and didBecomeActive handlers (which both fire on Water
+  /// Lock exit) can't race a double engine.start()/play(). CRUCIALLY: `player.play()` raises an
+  /// UNCATCHABLE Obj-C exception if the engine isn't running — so only play once the engine is CONFIRMED
+  /// running. That is the Water-Lock-exit-on-speaker crash: the eject tone held the session, engine.start()
+  /// quietly failed, and play() on the dead engine took the app down. Guard it and a later notification retries.
+  private func restartAudio(_ why: String) {
+    q.async { [weak self] in
+      guard let self, self.started else { return }
+      if !self.engine.isRunning { try? self.engine.start() }
+      guard self.engine.isRunning else {
+        Vitals.crumb("AUDIO restart (\(why)): engine NOT running — skip play, will retry")
+        return
       }
+      if !self.player.isPlaying { self.player.play() }
+      Vitals.crumb("AUDIO restart (\(why)): running=\(self.engine.isRunning) playing=\(self.player.isPlaying)")
     }
   }
 
