@@ -11,7 +11,7 @@ import SwiftUI
 // ── Model ──────────────────────────────────────────────────────────────────────
 
 enum ServerType: String, Codable, CaseIterable {
-  case ubersdr, kiwi, owrx, fmdx, spyserver, rtltcp
+  case ubersdr, kiwi, owrx, fmdx, spyserver, rtltcp, vibeserver
 
   /// Display name for the by-type sort + row badge.
   var display: String {
@@ -22,17 +22,18 @@ enum ServerType: String, Codable, CaseIterable {
     case .fmdx:      return "FM-DX"
     case .spyserver: return "SpyServer"
     case .rtltcp:    return "RTL-TCP"
+    case .vibeserver: return "VibeServer"
     }
   }
   /// Grouping order for the by-type sort (mirrors the phone's TYPE_ORDER).
   var order: Int {
     switch self {
     case .ubersdr: return 0; case .kiwi: return 1; case .owrx: return 2
-    case .fmdx: return 3; case .spyserver: return 5; case .rtltcp: return 6
+    case .fmdx: return 3; case .vibeserver: return 4; case .spyserver: return 5; case .rtltcp: return 6
     }
   }
   /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx }
+  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx || self == .vibeserver }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.

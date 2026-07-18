@@ -240,7 +240,7 @@ final class SpikeLink: ObservableObject {
   /// Start (or switch to) a chosen server from the picker. Builds the backend client for the
   /// server's type (UberSDR or KiwiSDR), tearing down any previous one. One-time boot (battery +
   /// path monitor) runs on the first pick.
-  func start(url: String, host: String, type: ServerType, name: String) {
+  func start(url: String, host: String, type: ServerType, name: String, pin: String = "") {
     serverName = name
     client?.goIdle()
     everGotRow = false
@@ -254,6 +254,15 @@ final class SpikeLink: ObservableObject {
       c = OwrxClient(url: url, waterfall: waterfall)
     case .fmdx:
       c = FmDxClient(url: url)
+    case .vibeserver:
+      // VibeServer = the shim's UberSDR-style server → the UberClient in VibeServer mode (LAN ws://, PIN,
+      // ADPCM audio). `host` is host:port; scheme from the url (https/wss → secure).
+      let u = UberClient(waterfall: waterfall)
+      u.isVibe = true
+      u.secure = url.hasPrefix("https") || url.hasPrefix("wss")
+      u.host = host
+      u.vibePin = pin
+      c = u
     default:  // .ubersdr
       let u = UberClient(waterfall: waterfall)
       u.host = host

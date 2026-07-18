@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Network
+import CryptoKit
 
 /// A DIRECT UberSDR client, running on the WATCH. No phone anywhere in the chain.
 ///
@@ -18,6 +19,28 @@ final class UberClient: ObservableObject {
   /// The UberSDR host to connect to. Selectable now (was a hardcoded `static let`) so the
   /// instance picker can point the spike at any UberSDR server the user chooses.
   var host = "stuey3d.tunnel.ubersdr.org"
+
+  // ── VibeServer mode ──────────────────────────────────────────────────────────
+  // VibeServer is VibeSDR's OWN phone-hosted server: the shim's UberSDR-style WS protocol, so the whole
+  // SPECTRUM pipeline is reused unchanged. Only three things diverge, all behind these flags (which default
+  // to exact UberSDR behaviour, so a plain UberSDR client is byte-identical to before):
+  //   1. `secure` — VibeServer is plain ws:// on the LAN, UberSDR is wss://.
+  //   2. `authSuffix` — VibeServer PIN via HMAC (see resolveVibeAuth); "&vs_nonce=…&vs_auth=…" on the URLs.
+  //   3. `localAudio` — VibeServer audio is /ws/audio with ADPCM (self-seeded, mid-side stereo), not /ws Opus.
+  /// True for a VibeServer connection.
+  var isVibe = false
+  /// wss (UberSDR) vs ws (VibeServer LAN).
+  var secure = true
+  /// The PIN, if the VibeServer requires one (resolved to `authSuffix` during connect).
+  var vibePin = ""
+  private var authSuffix = ""
+  private var scheme: String { secure ? "wss" : "ws" }
+  private let adpcmL = ImaAdpcmDecoder(flavor: .kiwi)   // VibeServer audio: mid / left channel
+  private let adpcmR = ImaAdpcmDecoder(flavor: .kiwi)   // side / right channel
+  /// Server-advertised capabilities from the `hwinfo` message (offered capture rates + the owner's FFT/FPS
+  /// ceiling). The adaptive-quality loop clamps to `maxFftRate`.
+  @Published var offeredRates: [Int] = []
+  @Published var maxFftRate = 0
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"
@@ -228,6 +251,17 @@ final class UberClient: ObservableObject {
 
   private func connect() async {
     guard !goingIdle else { return }   // discarded mid-connect (server switch) — don't open anything
+
+    // VibeServer: resolve the PIN handshake up front (GET /vibeserver/auth → nonce → HMAC), then open the
+    // sockets with the auth suffix. No UberSDR /connection preflight — the shim answers that unconditionally
+    // and doesn't need it. The nonce is a reusable 1-hour session credential shared by both WS.
+    if isVibe {
+      status = "authenticating"
+      if !(await resolveVibeAuth()) { return }   // status carries the reason (PIN wrong / locked / offline)
+      openVibeSockets()
+      return
+    }
+
     status = "registering"
     if !(await postConnection()) {
       // DO NOT overwrite the reason. postConnection() already put the SERVER'S OWN words in
@@ -345,7 +379,7 @@ final class UberClient: ObservableObject {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     specOpenSeq &+= 1
     let seq = specOpenSeq
-    let url = URL(string: "wss://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
+    let url = URL(string: "\(scheme)://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(authSuffix)")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -791,21 +825,34 @@ final class UberClient: ObservableObject {
 
   private func openAudio() {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
-    // `/ws`, NOT `/ws/audio` — and the tune rides the QUERY STRING, not a message. Taken
-    // verbatim from VibePowerModule.audioWsURL.
-    guard let url = URL(string:
-      "wss://\(host)/ws?user_session_id=\(uuid)" +
-      "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2") else { return }
 
-    audioSock.onData = { [weak self] d in
-      guard let self else { return }
-      // Decode + play OFF the main actor: ~50 packets/sec, and it must never fight the
-      // waterfall for the main thread.
-      if let out = self.opus.decode(d) {
-        self.audio.play(pcm: out.pcm, rate: out.rate, channels: out.channels)
+    let url: URL?
+    if isVibe {
+      // VibeServer: /ws/audio (ADPCM), no session id in the path. The auth suffix leads with "&", but this
+      // path has no query yet, so swap the first "&" for "?".
+      let q = authSuffix.isEmpty ? "" : "?" + authSuffix.dropFirst()
+      url = URL(string: "\(scheme)://\(host)/ws/audio\(q)")
+      audioSock.onData = { [weak self] d in
+        guard let self else { return }
+        self.decodeVibeAudio(d)
         Task { @MainActor in self.audioCount += 1 }
       }
+    } else {
+      // UberSDR: `/ws`, tune rides the query string. Taken verbatim from VibePowerModule.audioWsURL.
+      url = URL(string:
+        "wss://\(host)/ws?user_session_id=\(uuid)" +
+        "&frequency=\(Int(frequency))&mode=\(mode)&format=opus&version=2")
+      audioSock.onData = { [weak self] d in
+        guard let self else { return }
+        // Decode + play OFF the main actor: ~50 packets/sec, and it must never fight the
+        // waterfall for the main thread.
+        if let out = self.opus.decode(d) {
+          self.audio.play(pcm: out.pcm, rate: out.rate, channels: out.channels)
+          Task { @MainActor in self.audioCount += 1 }
+        }
+      }
     }
+    guard let url else { return }
     audioSock.onState = { [weak self] s in
       Task { @MainActor in
         guard let self else { return }
@@ -816,6 +863,101 @@ final class UberClient: ObservableObject {
       }
     }
     audioSock.open(url: url)
+  }
+
+  // ── VibeServer: auth + sockets + ADPCM ───────────────────────────────────────
+
+  /// GET /vibeserver/auth → nonce → HMAC-SHA256(pin, nonce) → `authSuffix`. Reusable 1-hour credential.
+  /// Returns false (with `status` carrying the human reason) on offline / wrong-PIN / locked-out.
+  private func resolveVibeAuth() async -> Bool {
+    let httpScheme = secure ? "https" : "http"
+    guard let url = URL(string: "\(httpScheme)://\(host)/vibeserver/auth") else { status = "bad server URL"; return false }
+    do {
+      let (data, _) = try await httpSession.data(from: url)
+      guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        status = "not a VibeServer?"; return false
+      }
+      if !((j["required"] as? Bool) ?? false) { authSuffix = ""; return true }   // no PIN
+      guard let nonce = j["nonce"] as? String, !nonce.isEmpty else {
+        let locked = (j["lockedFor"] as? NSNumber)?.intValue ?? 0
+        status = locked > 0 ? "locked \(locked)s — too many PIN tries" : "PIN needed"
+        return false
+      }
+      // HMAC key = the PIN bytes, message = the nonce's ASCII-hex STRING (not decoded), lowercase hex out.
+      let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: Data(vibePin.utf8)))
+      let token = mac.map { String(format: "%02x", $0) }.joined()
+      authSuffix = "&vs_nonce=\(nonce)&vs_auth=\(token)"
+      return true
+    } catch {
+      status = "can't reach server"
+      return false
+    }
+  }
+
+  /// LAN, single-user, no 2/sec rate limit — open both sockets straight away (no UberSDR audio-ready dance).
+  private func openVibeSockets() {
+    specOpened = true          // suppress the UberSDR "audio never readied" fallback path
+    openAudio()
+    openSpectrum()
+    audio.start { [weak self] ok, info in
+      Task { @MainActor in self?.audioLive = ok; self?.audioRoute = ok ? info : "FAILED: \(info)" }
+    }
+    status = "live"
+  }
+
+  /// Decode one /ws/audio binary frame: [0]=ch [1]=format(0 raw/1 ADPCM mono/2 ADPCM mid-side)
+  /// [2..5]=rate LE. Raw → int16 from offset 6. ADPCM → [6..7]=count/ch, one self-seeded block per channel
+  /// from offset 8. Format is read PER FRAME (stereo silently drops to mono when the pilot is unlocked).
+  private func decodeVibeAudio(_ d: Data) {
+    guard d.count >= 6 else { return }
+    let format = d[1]
+    let rate = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self) })
+
+    if format == 0 {
+      let ch = max(1, Int(d[0]))
+      let pcm = d.subdata(in: 6..<d.count).withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+      audio.play(pcm: pcm, rate: Int32(rate), channels: Int32(ch))
+      return
+    }
+
+    guard d.count >= 8 else { return }
+    let count = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self) })
+    guard count > 0 else { return }
+    let blockBytes = 4 + (count + 1) / 2                    // [pred i16][index u8][pad] + ceil(count/2) nibbles
+
+    if format == 1 {
+      guard d.count >= 8 + blockBytes else { return }
+      let mono = decodeAdpcmBlock(d.subdata(in: 8..<(8 + blockBytes)), count: count, dec: adpcmL)
+      audio.play(pcm: mono, rate: Int32(rate), channels: 1)
+    } else if format == 2 {
+      guard d.count >= 8 + 2 * blockBytes else { return }
+      let mid  = decodeAdpcmBlock(d.subdata(in: 8..<(8 + blockBytes)), count: count, dec: adpcmL)
+      let side = decodeAdpcmBlock(d.subdata(in: (8 + blockBytes)..<(8 + 2 * blockBytes)), count: count, dec: adpcmR)
+      let n = min(mid.count, side.count)
+      var inter = [Int16](repeating: 0, count: n * 2)
+      for i in 0..<n {                                       // L = M+S, R = M-S
+        inter[i * 2]     = Int16(clamping: Int(mid[i]) + Int(side[i]))
+        inter[i * 2 + 1] = Int16(clamping: Int(mid[i]) - Int(side[i]))
+      }
+      audio.play(pcm: inter, rate: Int32(rate), channels: 2)
+    }
+  }
+
+  /// One self-seeded IMA-ADPCM block → PCM. Seed: [pred i16 LE][index u8][pad]; nibbles low-then-high.
+  private func decodeAdpcmBlock(_ block: Data, count: Int, dec: ImaAdpcmDecoder) -> [Int16] {
+    guard block.count >= 4 else { return [] }
+    let pred = Int(block.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: Int16.self) })
+    dec.setState(index: Int(block[2]), predictor: pred)
+    var out = [Int16](); out.reserveCapacity(count)
+    var off = 4
+    var i = 0
+    while i < count, off < block.count {
+      let byte = Int(block[off]); off += 1
+      out.append(Int16(clamping: dec.decodeNibble(byte & 0x0f)))          // even sample = low nibble
+      if i + 1 < count { out.append(Int16(clamping: dec.decodeNibble((byte >> 4) & 0x0f))) }  // odd = high
+      i += 2
+    }
+    return out
   }
 
   /// What the audio socket is doing, in its own words.
