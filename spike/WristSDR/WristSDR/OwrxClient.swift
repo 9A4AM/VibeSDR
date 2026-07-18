@@ -74,7 +74,8 @@ final class OwrxClient: ObservableObject, SDRClient {
 
   // ── Sockets / audio / DSP ──
   nonisolated(unsafe) private let sock = AudioSocket(name: "owrx")
-  nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // off the receive queue
+  nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // FFT decode
+  nonisolated(unsafe) private let audioQueue  = DispatchQueue(label: "owrx.audio")   // audio decode — SEPARATE so a slow FFT can't gap audio
   // FFT coalescing: keep only the LATEST frame so the decode queue can never build a backlog.
   private let fftLock = NSLock()
   nonisolated(unsafe) private var latestFft: [UInt8]? = nil
@@ -147,8 +148,8 @@ final class OwrxClient: ObservableObject, SDRClient {
         self.fftLock.unlock()
         if !alreadyScheduled { self.decodeQueue.async { self.drainFft() } }
       } else {
-        // Audio: must be continuous — process every frame (light decode).
-        self.decodeQueue.async { self.onBinary(bytes) }
+        // Audio: must be continuous — process every frame on its OWN queue (never blocked by FFT).
+        self.audioQueue.async { self.onBinary(bytes) }
       }
     }
     sock.onState = { [weak self] st in
