@@ -115,7 +115,7 @@ final class OwrxClient: ObservableObject, SDRClient {
         // DEBUG telemetry in the pill: profile count / clients / frames-per-sec, so we can see if
         // profiles ever arrive and when the stream stalls.
         if self.everFrame, !self.retrying {
-          self.status = "P:\(self.profiles.count) c:\(self.clients) f:\(Int(self.framesPerSec))"
+          self.status = "P:\(self.profiles.count) f:\(Int(self.framesPerSec)) cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
         self.frameCount = 0 }
     }
@@ -132,13 +132,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.onData = { [weak self] d in
       guard let self else { return }
       let bytes = [UInt8](d)
-      // DROP FFT frames if the decode queue is backing up (decode slower than arrival → the queue
-      // grows unbounded → memory pressure → freeze on a watch). NEVER drop audio (must stay
-      // continuous); the waterfall can miss frames harmlessly.
-      let isAudio = bytes.first == 2 || bytes.first == 4
-      if !isAudio, self.pendingDecodes > 3 { return }
-      self.pendingDecodes += 1
-      self.decodeQueue.async { self.onBinary(bytes); self.pendingDecodes -= 1 }
+      self.decodeQueue.async { self.onBinary(bytes) }
     }
     sock.onState = { [weak self] st in
       Task { @MainActor in
@@ -311,7 +305,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     // DSP — at full rate that pegged a watch core (>100%). The waterfall doesn't need more than
     // ~10 fps; SKIP the decode entirely on dropped frames (the decode is the expensive part).
     let now = ProcessInfo.processInfo.systemUptime
-    if now - lastFftAt < 0.095 { return }
+    if now - lastFftAt < 0.16 { return }        // ~6 fps — the watch can't chew OWRX's full FFT rate
     lastFftAt = now
     var row: [Float]
     if fftCompressionSnapshot == "adpcm" {
