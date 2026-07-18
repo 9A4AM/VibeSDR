@@ -31,9 +31,14 @@ protocol SDRClient: AnyObject {
   func reconnectIfNeeded()
   func suspend()
   func goIdle()
+  // OWRX profile surface — REQUIREMENTS (not just extension members) so dynamic dispatch reaches
+  // OwrxClient's real list through `any SDRClient`. UberSDR/Kiwi get the default-empty extension.
+  var profiles: [SDRProfile] { get }
+  var clients: Int { get }
+  func selectProfile(_ id: String)
 }
 
-// OWRX-only surface — default-empty so UberSDR/Kiwi don't implement it.
+// Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
 extension SDRClient {
   var profiles: [SDRProfile] { [] }
   var clients: Int { 0 }

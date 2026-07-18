@@ -74,6 +74,7 @@ final class OwrxClient: ObservableObject, SDRClient {
 
   // ── Sockets / audio / DSP ──
   nonisolated(unsafe) private let sock = AudioSocket(name: "owrx")
+  nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // off the receive queue
   nonisolated(unsafe) let waterfall: WaterfallBuffer
   private let proc = SignalProcessor()
   nonisolated(unsafe) private let audio = WatchAudio()
@@ -124,7 +125,14 @@ final class OwrxClient: ObservableObject, SDRClient {
 
   private func openSocket() {
     sock.onText = { [weak self] s in self?.onText(s) }   // parse OFF main (OWRX+ floods JSON)
-    sock.onData = { [weak self] d in self?.onBinary([UInt8](d)) }   // decode OFF main (Kiwi lesson)
+    // Decode on a DEDICATED queue, NOT the socket's receive queue. AudioSocket only reads the next
+    // frame AFTER onData returns — so decoding inline gates reads, OWRX's send buffer fills, and it
+    // STALLS after a few seconds. Copy fast + hand off, so the receive loop never waits on decode.
+    sock.onData = { [weak self] d in
+      guard let self else { return }
+      let bytes = [UInt8](d)
+      self.decodeQueue.async { self.onBinary(bytes) }
+    }
     sock.onState = { [weak self] st in
       Task { @MainActor in
         guard let self else { return }
