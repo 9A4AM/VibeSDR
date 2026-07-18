@@ -32,7 +32,7 @@ struct DabView: View {
     volTimeout?.cancel()
     let work = DispatchWorkItem { volumeMode = false }
     volTimeout = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)   // generous — native crown isn't visible to reset on
   }
 
   private var speedLabel: String {
@@ -60,14 +60,21 @@ struct DabView: View {
         .buttonStyle(.plain)
         .handGestureShortcut(.primaryAction)
     }
-    // We drive volume with OUR OWN crown (not the native VolumeControl) so every tick is visible —
-    // that's what lets the idle timeout reset on activity instead of firing mid-adjust.
-    .focusable(true)
+    // Volume uses the NATIVE WKInterfaceVolumeControl (Apple's HUD) — it drives the real output/speaker
+    // and reaches full volume; our own gain couldn't. In volume mode the list releases the crown so the
+    // native control owns it. The idle timeout is a generous FIXED window (native crown ticks aren't
+    // visible to us to reset on, same as the main screen).
+    .focusable(!volumeMode)
     .focused($crownFocused)
     .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
                           sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
-    .overlay(alignment: .trailing) { if volumeMode { volumeHud } }
-    .onChange(of: volumeMode) { _, v in if v { armVolTimeout() } else { volTimeout?.cancel() } }
+    .overlay(alignment: .trailing) {
+      if volumeMode { VolumeControl(focused: true).frame(width: 34, height: 120).padding(.trailing, 2) }
+    }
+    .onChange(of: volumeMode) { _, v in
+      if v { crownFocused = false; armVolTimeout() }               // release list crown → VolumeControl
+      else { volTimeout?.cancel(); DispatchQueue.main.async { crownFocused = true } }   // re-grab for the cursor
+    }
     .onChange(of: crown) { _, new in
       let detent = Int(new.rounded())
       guard detent != lastDetent else { return }
@@ -76,11 +83,6 @@ struct DabView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
-      if volumeMode {
-        link.volume(delta: delta)   // engine gain
-        armVolTimeout()             // ACTIVITY resets the timeout — it only fires after the last turn
-        return
-      }
       let n = link.dabProgrammes.count
       guard n > 0 else { return }
       cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
@@ -125,24 +127,6 @@ struct DabView: View {
     }
     .padding(.leading, 28).padding(.top, 3)
     .ignoresSafeArea(edges: .top)
-  }
-
-  /// Volume HUD — a filling bar hugging the crown edge, shown while the crown drives volume.
-  private var volumeHud: some View {
-    HStack(spacing: 6) {
-      Image(systemName: link.volume < 0.01 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-        .font(.system(size: 12)).foregroundStyle(.white)
-      GeometryReader { geo in
-        ZStack(alignment: .bottom) {
-          Capsule().fill(.white.opacity(0.2))
-          Capsule().fill(.orange).frame(height: max(2, geo.size.height * CGFloat(link.volume)))
-        }
-      }.frame(width: 6)
-    }
-    .frame(height: 100)
-    .padding(8)
-    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-    .padding(.trailing, 6)
   }
 
   /// Commit the service under the cursor — from a tap OR the pinch gesture (the latter works in Water
