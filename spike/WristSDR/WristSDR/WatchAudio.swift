@@ -281,6 +281,10 @@ final class WatchAudio {
         return
       }
       if !self.player.isPlaying { self.player.play() }
+      // The config-change handler cancels the keeper before its surgery and, if engine.start() failed
+      // there, bailed before re-arming it. Now that we ARE running again, re-arm a dead keeper (only if
+      // nil, so we don't re-prime a silence burst on every didBecomeActive).
+      if self.keeper == nil { self.startSilenceKeeper() }
       Vitals.crumb("AUDIO restart (\(why)): running=\(self.engine.isRunning) playing=\(self.player.isPlaying)")
     }
   }
@@ -362,6 +366,14 @@ final class WatchAudio {
         guard out.sampleRate > 0, out.channelCount > 0 else { return }
         self.engine.connect(self.player, to: self.engine.mainMixerNode, format: out)
         if !self.engine.isRunning { try? self.engine.start() }
+        // GUARD THE PLAY. This is the WATER-LOCK-EXIT crash path: the eject tone triggers a config
+        // change here, but it also briefly holds the session, so engine.start() above fails and
+        // player.play() on a dead engine is an UNCATCHABLE Obj-C exception → app gone. Only play once
+        // the engine is confirmed running; the didBecomeActive/interruption handlers retry otherwise.
+        guard self.engine.isRunning else {
+          Vitals.crumb("AUDIO config-change: engine NOT running — skip play, will retry")
+          return
+        }
         self.player.play()
         self.started = true
         // A route change zeroed the queue above — so the cushion is gone, and an empty node
@@ -485,14 +497,18 @@ final class WatchAudio {
     // listener would be hearing the past, and every tune would feel a second late.
     if queuedSeconds > maxQueued { return }
 
-    let outFmt = engine.outputNode.outputFormat(forBus: 0)
+    // Build against the PLAYER'S OWN connected format, NOT the engine output node's. On a route
+    // change (WATER LOCK exit, speaker↔Bluetooth) the output node can already report the NEW format
+    // (e.g. speaker 48k MONO) while the player is still connected with the OLD one (48k STEREO) — and
+    // `player.scheduleBuffer` TRAPS (an UNCATCHABLE Obj-C exception, SIGABRT) when the buffer's format
+    // doesn't match the node's connection format. That is the Water-Lock-exit crash (WatchAudio.swift
+    // :558 in the report). The player's connection format is precisely what scheduleBuffer accepts, so
+    // convert to THAT and the two can never disagree. The reconnect on a config change updates it.
+    let outFmt = player.outputFormat(forBus: 0)
 
-    // GUARD THE OUTPUT FORMAT. If the route is not ready, `outputFormat(forBus:)` hands
-    // back 0 Hz / 0 channels — and `AVAudioPCMBuffer(pcmFormat:frameCapacity:)` TRAPS on a
-    // zero-channel format. That is the crash: audio starts, the first frames arrive, and
-    // the app dies. On relaunch the audio never starts at all, so nothing crashes and the
-    // waterfall runs perfectly — which is exactly the pattern that made it look like a
-    // SPECTRUM bug. It was never the spectrum.
+    // GUARD THE OUTPUT FORMAT. If the route is not ready (or the player isn't connected yet),
+    // `outputFormat(forBus:)` hands back 0 Hz / 0 channels — and `AVAudioPCMBuffer(pcmFormat:...)`
+    // TRAPS on a zero-channel format. Skip the frame; the next one (post-reconnect) will be valid.
     guard outFmt.sampleRate > 0, outFmt.channelCount > 0 else {
       lastError = "output format not ready (\(outFmt.sampleRate)Hz/\(outFmt.channelCount)ch)"
       return
