@@ -1,5 +1,6 @@
 import SwiftUI
 import WatchKit
+import Combine
 
 /// DAB: a LIST, not a band — ported from the shipping companion's DabView, wired to SpikeLink.
 ///
@@ -76,6 +77,12 @@ struct DabView: View {
     .sheet(isPresented: $showSpeed) {
       DabSpeedSheet(current: link.dabScale, speeds: speeds) { v in link.setDabScale(v); showSpeed = false }
     }
+    // Drive the client→UI mirror here too. driverTick lives on ContentView, which isn't rendered on the
+    // DAB screen — without this the service list never grows and the "playing" icon never moves once you
+    // land on DAB. 4 Hz is plenty for a list (no waterfall to keep smooth).
+    .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+      link.driverTick(now: ProcessInfo.processInfo.systemUptime)
+    }
     .onAppear {
       crownFocused = true
       if let i = link.dabProgrammes.firstIndex(where: { $0.id == link.dabActiveId }) { cursor = i }
@@ -121,7 +128,7 @@ struct DabView: View {
       Button { showSpeed = true } label: {
         HStack(spacing: 4) {
           Image(systemName: "gauge.with.dots.needle.bottom.50percent").font(.system(size: 10, weight: .semibold))
-          Text("Speed \(speedLabel)").font(.system(size: 11, weight: .semibold))
+          Text(link.dabScale != 1.0 ? "Speed Fix \(speedLabel)" : "Speed Fix").font(.system(size: 11, weight: .semibold))
         }
         .foregroundColor(link.dabScale != 1.0 ? .black : .white)
         .padding(.horizontal, 10).padding(.vertical, 4)
