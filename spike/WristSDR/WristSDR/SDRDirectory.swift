@@ -292,6 +292,8 @@ struct Favourite: Codable, Identifiable, Hashable {
   var latitude: Double? = nil
   var longitude: Double? = nil
   var bestSnr: Double? = nil
+  var host: String = ""            // VibeServer host:port (the url is a display key)
+  var pin: String = ""             // VibeServer PIN, saved so it auto-fills next time
 }
 
 @MainActor
@@ -323,6 +325,20 @@ final class FavStore: ObservableObject {
     }
     persist()
   }
+
+  /// Save (or update) a VibeServer favourite with its host + PIN, so next time it auto-fills / auto-connects.
+  func saveVibe(name: String, host: String, pin: String) {
+    let url = "ws://\(host)"
+    if let i = favourites.firstIndex(where: { $0.url == url }) {
+      favourites[i].host = host; favourites[i].pin = pin; favourites[i].name = name
+    } else {
+      favourites.append(Favourite(name: name.isEmpty ? host : name, url: url, serverType: .vibeserver, host: host, pin: pin))
+    }
+    persist()
+  }
+
+  /// The saved PIN for a VibeServer host, to pre-fill the prompt.
+  func savedPin(host: String) -> String { favourites.first(where: { $0.host == host })?.pin ?? "" }
 
   func addCustom(name: String, url: String, type: ServerType) {
     guard !favourites.contains(where: { $0.url == url }) else { return }

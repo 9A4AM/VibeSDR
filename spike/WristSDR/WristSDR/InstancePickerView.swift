@@ -60,8 +60,8 @@ struct InstancePickerView: View {
 
   var body: some View {
     List {
+      discoveredSection      // your own local servers first — the fastest, highest-quality link
       favouritesSection
-      discoveredSection
       directoriesSection
       customSection
     }
@@ -82,7 +82,7 @@ struct InstancePickerView: View {
       Section("ON YOUR NETWORK") {
         ForEach(mdns.found) { ad in
           Button {
-            if ad.pinRequired { pinEntry = ""; pinFor = ad }
+            if ad.pinRequired { pinEntry = favs.savedPin(host: ad.host); pinFor = ad }
             else { connectVibe(ad, pin: "") }
           } label: {
             HStack(spacing: 8) {
@@ -114,6 +114,15 @@ struct InstancePickerView: View {
         } label: {
           Text("Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
         }.tint(Self.amber)
+        // Save the PIN as a favourite so it auto-fills next time (matches the phone).
+        Button {
+          let p = pinEntry.trimmingCharacters(in: .whitespaces)
+          favs.saveVibe(name: ad.name, host: ad.host, pin: p)
+          pinFor = nil
+          connectVibe(ad, pin: p)
+        } label: {
+          Text("Save & Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+        }.tint(.green)
       }
     }
   }
@@ -150,7 +159,16 @@ struct InstancePickerView: View {
   }
 
   @ViewBuilder private func favRow(_ f: Favourite) -> some View {
-    Button { connect(url: f.url, name: f.name, type: f.serverType) } label: {
+    Button {
+      if f.serverType == .vibeserver {
+        // A saved VibeServer carries its own host + PIN — connect straight through (works out of house
+        // over a reachable address, without needing mDNS).
+        favs.registerVisit(f.url)
+        onConnect(SDRServer(name: f.name, url: f.url, host: f.host, serverType: .vibeserver, pin: f.pin))
+      } else {
+        connect(url: f.url, name: f.name, type: f.serverType)
+      }
+    } label: {
       HStack(spacing: 8) {
         typeBadge(f.serverType)
         VStack(alignment: .leading, spacing: 1) {

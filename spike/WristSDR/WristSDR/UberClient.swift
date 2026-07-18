@@ -40,7 +40,38 @@ final class UberClient: ObservableObject {
   /// Server-advertised capabilities from the `hwinfo` message (offered capture rates + the owner's FFT/FPS
   /// ceiling). The adaptive-quality loop clamps to `maxFftRate`.
   @Published var offeredRates: [Int] = []
+  @Published var offeredGains: [Int] = []      // tuner gain steps (tenths of dB) from hwinfo
+  @Published var lockedRate = 0                // >0 = the host pinned the capture rate; hide the picker
   @Published var maxFftRate = 0
+
+  // ── VibeServer hardware controls (the client drives the radio over the spectrum WS) ──
+  @Published var gainAuto = true
+  @Published var gainValue = 0.0               // tenths of dB
+  @Published var biasT = false
+  @Published var agc = false
+  @Published var ppm = 0
+  @Published var sampleRate = 0                // current capture rate (= spectrum span)
+  var hasHardwareControls: Bool { isVibe }
+
+  private func onHwInfo(_ j: [String: Any]) {
+    if let g = j["gains"] as? [Int] { offeredGains = g }
+    if let r = j["rates"] as? [Int] { offeredRates = r }
+    lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
+    maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
+  }
+
+  /// All hardware controls ride the SPECTRUM WS as JSON (matches UberSDRClient._sendCtl / the shim).
+  /// Guarded to VibeServer — a public UberSDR server would reject them.
+  func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]) }
+  func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]) }
+  func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]) }
+  func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]) }
+  func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]) }
+  func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]) }
+  /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
+  func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
+  /// Force mono — the ABR last resort (only meaningful on WFM).
+  func setStereo(_ on: Bool) { guard isVibe else { return }; specSock.send(json: ["type": "stereo", "on": on]) }
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"
@@ -723,7 +754,9 @@ final class UberClient: ObservableObject {
 
   private func onSpectrumJSON(_ d: Data) {
     guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
-    guard (j["type"] as? String) == "config" else { return }
+    let type = j["type"] as? String
+    if type == "hwinfo" { onHwInfo(j); return }         // VibeServer: offered gains/rates + owner ceiling
+    guard type == "config" else { return }
     if let bc = j["binCount"] as? Int { binCount = bc }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }
@@ -1032,11 +1065,16 @@ final class UberClient: ObservableObject {
 
   // ── Controls ──────────────────────────────────────────────────────────────
 
+  /// Tuning range. UberSDR is HF-only (≤30 MHz); a VibeServer serves an RTL-SDR dongle that reaches VHF/UHF
+  /// (up to ~1.8 GHz), so the 30 MHz clamp would have locked the whole VHF/UHF band away.
+  private var freqMin: Double { 10_000 }
+  private var freqMax: Double { isVibe ? 1_800_000_000 : 30_000_000 }
+
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
   func tune(delta: Int, step: Double) {
     guard delta != 0 else { return }
     let base = delta > 0 ? (frequency / step).rounded(.down) : (frequency / step).rounded(.up)
-    let f = max(10_000, min(30_000_000, (base + Double(delta)) * step))
+    let f = max(freqMin, min(freqMax, (base + Double(delta)) * step))
     guard f != frequency else { return }
     frequency = f
     sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
@@ -1078,7 +1116,7 @@ final class UberClient: ObservableObject {
   /// Absolute tune, for the numpad — jump straight from 648 kHz AM to the 40m band
   /// without spinning the crown across 6 MHz.
   func tuneTo(_ hz: Double) {
-    let f = max(10_000, min(30_000_000, hz))
+    let f = max(freqMin, min(freqMax, hz))
     guard f != frequency else { return }
     frequency = f
     sendTune()

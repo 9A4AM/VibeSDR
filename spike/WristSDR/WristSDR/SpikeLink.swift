@@ -119,6 +119,12 @@ final class SpikeLink: ObservableObject {
   @Published var fmdx: FmdxInfo? = nil
   var isFmDx: Bool { client is FmDxClient }
 
+  /// The VibeServer radio, if we're on one — the client that OWNS the dongle and accepts hardware controls
+  /// (gain / bias-T / AGC / PPM / sample rate). The hold-menu's "Radio" sub-sheet observes it directly, so
+  /// the hardware controls don't have to be mirrored through the whole SDRClient protocol.
+  var vibe: UberClient? { if let u = client as? UberClient, u.isVibe { return u }; return nil }
+  var hasHardwareControls: Bool { vibe != nil }
+
   /// LEARNED station memory for the FM-DX dial. On the phone this was built as you tuned; the watch
   /// COMPANION piggybacked off the phone over WCSession. The standalone spike has no phone, so it learns
   /// its OWN — PS name keyed by 100 kHz channel — and persists it so the dial fills in over time.
