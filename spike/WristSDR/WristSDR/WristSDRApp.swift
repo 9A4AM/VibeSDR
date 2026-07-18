@@ -97,7 +97,7 @@ func fmdxTutorialTips() -> [TutorialTip] {
     .init(icon: "timer", text: "The crown **disarms itself** after a few seconds — deliberate tuning only."),
     .init(icon: "speaker.wave.2", text: "Tap the **speaker** to give the crown the volume, with the native HUD."),
     .init(icon: "person.2.fill", text: "The **listener count** (top-left) tells you if you're alone. Tap it to **chat** — ask before you tune if others are on."),
-    .init(icon: "line.3.horizontal", text: "The **menu** switches receiver."),
+    .init(icon: "rectangle.stack", text: "The **servers** button goes back to pick a different receiver."),
   ]
 }
 

@@ -18,7 +18,6 @@ struct FmdxView: View {
   private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
   @State private var tick = 0
 
-  @State private var showMenu = false
   @State private var showChat = false
   @State private var armed = false
   @State private var volumeMode = false
@@ -106,7 +105,6 @@ struct FmdxView: View {
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
       if let d = disarmAt, Date() >= d { armed = false; disarmAt = nil }
     }
-    .navigationDestination(isPresented: $showMenu) { ControlMenu { _ in }.environmentObject(link) }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .onAppear {
       crownFocused = true
@@ -148,8 +146,11 @@ struct FmdxView: View {
     HStack(spacing: 8) {
       // Person+count glyph, breathing on inbound chat — same component + position as the waterfall screen.
       ChatGlyph(clients: st.users, activity: link.chatActivity) { showChat = true }
-      Button { showMenu = true } label: {
-        Image(systemName: "line.3.horizontal").font(.system(size: 13, weight: .semibold))
+      // SERVERS / back. FM-DX has no demod, step, profile or bandwidth to change, and volume is already on
+      // this screen — so the control menu has nothing to offer here. This button just goes back to pick a
+      // different receiver.
+      Button { link.backToPicker() } label: {
+        Image(systemName: "rectangle.stack").font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.white).padding(4).contentShape(Rectangle())
       }.buttonStyle(.plain)
       Spacer()
