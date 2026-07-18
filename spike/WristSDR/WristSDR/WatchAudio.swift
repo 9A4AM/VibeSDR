@@ -385,6 +385,9 @@ final class WatchAudio {
     let t = DispatchSource.makeTimerSource(queue: q)
     t.schedule(deadline: .now() + 0.1, repeating: 0.1)
     t.setEventHandler { [weak self] in
+      // If the engine stopped (flick to the watch face / crown-home), LEAVE it stopped — letting the app
+      // suspend saves battery, and didBecomeActive restarts audio on return. Wrist-down (screen off) keeps
+      // the app frontmost so audio plays on; that's the case that matters. Chosen behaviour, not a bug.
       guard let self, self.started, self.engine.isRunning else { return }
       guard self.queuedSeconds < self.floorQueued else { return }   // healthy — leave it alone
       // Running dry. Rebuild the whole cushion, not a token 50 ms: if the stream has stalled
