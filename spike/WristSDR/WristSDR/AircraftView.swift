@@ -30,8 +30,9 @@ struct AircraftView: View {
       if showMap { mapView }
       else if planes.isEmpty { empty } else { list }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .background(Color.black.ignoresSafeArea())
+    .ignoresSafeArea(edges: .top)   // reclaim the tall reserved top strip so content sits under the status band
     .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
@@ -78,7 +79,7 @@ struct AircraftView: View {
         Spacer(minLength: 0)
       }
     }
-    .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 4)   // top clears the status band
+    .padding(.horizontal, 10).padding(.top, 40).padding(.bottom, 4)   // clears the status band (top ignored)
   }
 
   private var empty: some View {

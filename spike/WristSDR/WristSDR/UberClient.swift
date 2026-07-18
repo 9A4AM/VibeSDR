@@ -227,6 +227,7 @@ final class UberClient: ObservableObject {
   }
 
   private func connect() async {
+    guard !goingIdle else { return }   // discarded mid-connect (server switch) — don't open anything
     status = "registering"
     if !(await postConnection()) {
       // DO NOT overwrite the reason. postConnection() already put the SERVER'S OWN words in
@@ -341,6 +342,7 @@ final class UberClient: ObservableObject {
   private var specOpenSeq = 0
 
   private func openSpectrum() {
+    guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     specOpenSeq &+= 1
     let seq = specOpenSeq
     let url = URL(string: "wss://\(host)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8")!
@@ -386,13 +388,13 @@ final class UberClient: ObservableObject {
     let seq = specOpenSeq
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 5_000_000_000)
-      guard self.specOpenSeq == seq else { return }          // a newer socket supersedes us
+      guard !self.goingIdle, self.specOpenSeq == seq else { return }   // torn down / newer socket supersedes
       guard self.frameCount == n else { return }             // frames arrived — all well
       self.specWsState = "spec ready but SILENT · re-subscribing"
       self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
 
       try? await Task.sleep(nanoseconds: 5_000_000_000)
-      guard self.specOpenSeq == seq else { return }
+      guard !self.goingIdle, self.specOpenSeq == seq else { return }
       guard self.frameCount == n else { return }
       self.specWsState = "spec SILENT · reopening"
       self.specSock.cancel()
@@ -450,6 +452,13 @@ final class UberClient: ObservableObject {
   /// Go quiet without dying — the user backed out to the instance picker. Drop both sockets and
   /// the audio, but leave the once-only timers/path monitor alone so a later reconnect is cheap.
   func goIdle() {
+    // TEAR DOWN FOR GOOD — this client is being discarded (server switch / back to picker). Without the
+    // goingIdle latch the retry Tasks (which pass their `framesPerSec == 0` guard precisely BECAUSE we
+    // zero it here) reopen the sockets, so the old client keeps reconnecting and pegs the CPU while the
+    // NEXT server starts on top of it (the "2nd server 93% hang"). Latch it and kill the once-only timers.
+    goingIdle = true
+    rateTimer?.invalidate(); rateTimer = nil
+    pathMonitor.cancel()
     specSock.cancel()
     audioSock.cancel()
     audio.stop()
@@ -457,6 +466,7 @@ final class UberClient: ObservableObject {
     framesPerSec = 0
     status = "idle"
   }
+  private var goingIdle = false
 
   /// Point at a DIFFERENT server and connect fresh (from the picker). `start()` did the one-time
   /// setup; this reuses it. Safe because connect() is built to run repeatedly (retry/wrist-up).
@@ -772,6 +782,7 @@ final class UberClient: ObservableObject {
   // ── Audio ─────────────────────────────────────────────────────────────────
 
   private func openAudio() {
+    guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     // `/ws`, NOT `/ws/audio` — and the tune rides the QUERY STRING, not a message. Taken
     // verbatim from VibePowerModule.audioWsURL.
     guard let url = URL(string:
@@ -811,7 +822,7 @@ final class UberClient: ObservableObject {
     let wait = UInt64(min(specRetries, 5)) * 2_000_000_000   // 2s → 10s, then hold
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: wait)
-      guard self.framesPerSec == 0 else { return }   // it recovered on its own
+      guard !self.goingIdle, self.framesPerSec == 0 else { return }   // torn down, or recovered on its own
       self.specWsState = "spec retry \(self.specRetries)…"
       self.openSpectrum()
     }
@@ -823,7 +834,7 @@ final class UberClient: ObservableObject {
     let wait = UInt64(min(audioRetries, 5)) * 2_000_000_000
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: wait)
-      guard self.audioPerSec == 0 else { return }   // it recovered on its own
+      guard !self.goingIdle, self.audioPerSec == 0 else { return }   // torn down, or recovered on its own
       self.audioWsState = "audio retry \(self.audioRetries)…"
       self.openAudio()
     }

@@ -259,7 +259,7 @@ struct ContentView: View {
   ///
   /// So: any turn resets the clock, and the mode only lapses once you have genuinely
   /// left it alone. Generous, because a short timeout WOULD be the HUD we rejected.
-  private static let crownIdleTimeout: TimeInterval = 30
+  private static let crownIdleTimeout: TimeInterval = 15
 
 
 

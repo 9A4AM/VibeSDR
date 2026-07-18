@@ -230,7 +230,7 @@ final class WatchAudio {
     let s = AVAudioSession.sharedInstance()
     NotificationCenter.default.addObserver(
       forName: AVAudioSession.interruptionNotification, object: s, queue: nil
-    ) { n in
+    ) { [weak self] n in
       let t = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(
         AVAudioSession.InterruptionType.init(rawValue:))
       Vitals.crumb("AUDIO interruption: \(t == .began ? "BEGAN" : "ended")")
@@ -239,6 +239,14 @@ final class WatchAudio {
         try? s.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
         s.activate(options: []) { ok, err in
           Vitals.crumb("AUDIO reactivate after interruption: ok=\(ok) err=\(err?.localizedDescription ?? "-")")
+          // Reactivating the SESSION isn't enough — WATER LOCK (and other interruptions) STOP the engine,
+          // so restart the engine + player or it stays silent (esp. on AirPods, where the user saw this).
+          guard let self, ok else { return }
+          DispatchQueue.main.async {
+            if !self.engine.isRunning { try? self.engine.start() }
+            if !self.player.isPlaying { self.player.play() }
+            Vitals.crumb("AUDIO engine restart after interruption: running=\(self.engine.isRunning)")
+          }
         }
       }
     }
