@@ -798,7 +798,7 @@ struct ContentView: View {
     let cw: CGFloat = 62
     let ch: CGFloat = 26
     ctx.fill(
-      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 12, width: cw, height: ch),
+      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 14, width: cw, height: ch),   // y 12→14: centre on the clock (was heavy above, thin below)
            cornerRadius: ch / 2),
       with: .color(.black.opacity(0.72))
     )

@@ -75,7 +75,10 @@ final class OwrxClient: ObservableObject, SDRClient {
   // ── Sockets / audio / DSP ──
   nonisolated(unsafe) private let sock = AudioSocket(name: "owrx")
   nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // off the receive queue
-  nonisolated(unsafe) private var pendingDecodes = 0                                  // decode-queue depth (drop FFT if high)
+  // FFT coalescing: keep only the LATEST frame so the decode queue can never build a backlog.
+  private let fftLock = NSLock()
+  nonisolated(unsafe) private var latestFft: [UInt8]? = nil
+  nonisolated(unsafe) private var fftScheduled = false
   nonisolated(unsafe) let waterfall: WaterfallBuffer
   private let proc = SignalProcessor()
   nonisolated(unsafe) private let audio = WatchAudio()
@@ -132,7 +135,21 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.onData = { [weak self] d in
       guard let self else { return }
       let bytes = [UInt8](d)
-      self.decodeQueue.async { self.onBinary(bytes) }
+      let type = bytes.first ?? 0
+      if type == 1 {
+        // FFT: COALESCE to the latest frame only. Never build a backlog — if decode falls a little
+        // behind over time the queue would grow unbounded (memory creep → the ~1-min freeze). The
+        // waterfall only needs the newest frame; older ones are stale anyway.
+        self.fftLock.lock()
+        self.latestFft = bytes
+        let alreadyScheduled = self.fftScheduled
+        self.fftScheduled = true
+        self.fftLock.unlock()
+        if !alreadyScheduled { self.decodeQueue.async { self.drainFft() } }
+      } else {
+        // Audio: must be continuous — process every frame (light decode).
+        self.decodeQueue.async { self.onBinary(bytes) }
+      }
     }
     sock.onState = { [weak self] st in
       Task { @MainActor in
@@ -226,8 +243,28 @@ final class OwrxClient: ObservableObject, SDRClient {
     // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
     // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
     viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
+    // ADOPT THE PROFILE'S DEFAULT DEMODULATOR. Each OWRX profile ships a `start_mod`; without this
+    // the user had to hand-change the demod on every profile switch. Map the OWRX wire mode back to
+    // our mode + its passband. (The tuning STEP is per-profile too, but lives on SpikeLink — TODO.)
+    if let sm = c["start_mod"] as? String, let spikeMode = Self.wireToSpike[sm.lowercased()] {
+      mode = spikeMode; modeSnapshot = spikeMode
+      if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
+    }
     audioDec.reset(); hdAudioDec.reset()
     sendDemod()
+  }
+
+  private static let wireToSpike: [String: String] = [
+    "nfm": "fm", "fm": "fm", "wfm": "wfm", "am": "am", "sam": "sam",
+    "usb": "usb", "lsb": "lsb", "cw": "cwu", "dab": "dab",
+  ]
+
+  // Decode the LATEST FFT frame (coalesced — see onData). Runs on decodeQueue.
+  nonisolated private func drainFft() {
+    fftLock.lock()
+    let b = latestFft; latestFft = nil; fftScheduled = false
+    fftLock.unlock()
+    if let b { onBinary(b) }
   }
 
   // Profile entries can be objects {id,name} OR bare strings — handle both (like the phone). Runs
