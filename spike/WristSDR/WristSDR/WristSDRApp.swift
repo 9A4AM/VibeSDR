@@ -89,6 +89,18 @@ func dabTutorialTips() -> [TutorialTip] {
   return t
 }
 
+/// FM-DX is a SHARED single tuner — the crown is armed deliberately so a wrist-nudge can't retune it for
+/// everyone. That shared nature is why the chat here is tuning etiquette.
+func fmdxTutorialTips() -> [TutorialTip] {
+  [
+    .init(icon: "dial.medium", text: "This receiver is **shared** — everyone hears the same tuner. So the crown is **off** until you arm it: tap the **dial button**, then turn to tune."),
+    .init(icon: "timer", text: "The crown **disarms itself** after a few seconds — deliberate tuning only."),
+    .init(icon: "speaker.wave.2", text: "Tap the **speaker** to give the crown the volume, with the native HUD."),
+    .init(icon: "person.2.fill", text: "The **listener count** (top-left) tells you if you're alone. Tap it to **chat** — ask before you tune if others are on."),
+    .init(icon: "line.3.horizontal", text: "The **menu** switches receiver."),
+  ]
+}
+
 /// ADS-B is a whole-block mode — a live aircraft list/map, nothing to tune.
 func adsbTutorialTips() -> [TutorialTip] {
   [
@@ -145,6 +157,11 @@ struct WristSDRApp: App {
               .navigationBarHidden(true)
           case .adsb:
             AircraftView()
+              .environmentObject(link)
+              .environmentObject(favs)
+              .navigationBarHidden(true)
+          case .fmdx:
+            FmdxView()
               .environmentObject(link)
               .environmentObject(favs)
               .navigationBarHidden(true)

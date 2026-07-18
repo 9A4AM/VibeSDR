@@ -514,10 +514,32 @@ final class WatchAudio {
       return
     }
 
-    guard let inFmt = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                    sampleRate: Double(rate),
-                                    channels: AVAudioChannelCount(channels),
-                                    interleaved: true) else { return }
+    // STEREO → MONO SPEAKER: DOWNMIX IN SOFTWARE. AVAudioConverter simply does NOT fold stereo down to
+    // the mono built-in speaker on watchOS — it returns pure silence (no error, no layout helps: stereo
+    // →stereo on AirPods played fine, stereo→mono speaker stayed dead). So when the output is mono and
+    // the source is stereo, average L/R ourselves and feed the proven mono→mono path (same as OWRX). On
+    // a stereo output (AirPods) we leave it stereo and let the converter pass it through.
+    var pcm = pcm
+    var channels = channels
+    if channels == 2, outFmt.channelCount == 1 {
+      var mono = [Int16](); mono.reserveCapacity(pcm.count / 2)
+      var i = 0
+      while i + 1 < pcm.count { mono.append(Int16((Int(pcm[i]) + Int(pcm[i + 1])) / 2)); i += 2 }
+      pcm = mono
+      channels = 1
+    }
+
+    // STEREO NEEDS AN EXPLICIT LAYOUT (AirPods path). A bare 2-channel AVAudioFormat has no channel
+    // layout; tag stereo so the converter treats L/R correctly on a stereo output.
+    let inFmt: AVAudioFormat?
+    if channels == 2, let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_Stereo) {
+      inFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(rate),
+                            interleaved: true, channelLayout: layout)
+    } else {
+      inFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(rate),
+                            channels: AVAudioChannelCount(channels), interleaved: true)
+    }
+    guard let inFmt else { return }
 
     if srcFormat != inFmt || dstFormat != outFmt {
       srcFormat = inFmt

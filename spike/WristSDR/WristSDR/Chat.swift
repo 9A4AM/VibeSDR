@@ -136,7 +136,8 @@ struct ChatSheet: View {
     .navigationTitle("Chat")
   }
 
-  private var cannedForBackend: [String] { Canned.owrx }   // OWRX for now; FM-DX set arrives with task #14
+  // OWRX = profile-switch etiquette; FM-DX = tuning etiquette (one shared tuner).
+  private var cannedForBackend: [String] { link.isFmDx ? Canned.fmdx : Canned.owrx }
 
   private var header: some View {
     HStack(spacing: 6) {

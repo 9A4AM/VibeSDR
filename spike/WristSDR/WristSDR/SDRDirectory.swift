@@ -32,7 +32,7 @@ enum ServerType: String, Codable, CaseIterable {
     }
   }
   /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx }
+  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.
@@ -151,9 +151,13 @@ enum Directories {
       guard (r["status"] as? NSNumber)?.intValue == 1 else { return nil }   // 1 = active
       let u = ((r["url"] as? String) ?? "").trimmedTrailingSlash
       guard !u.isEmpty else { return nil }
+      // The FM-DX API returns coords as STRINGS (e.g. ["52.1","-0.9"]) — the phone reads them with
+      // Number(), which coerces strings; a plain NSNumber cast returns nil, leaving lat/lon empty so
+      // the distance sort never runs. Coerce both number and string forms.
       let coords = r["coords"] as? [Any] ?? []
-      let lat = coords.count >= 2 ? (coords[0] as? NSNumber)?.doubleValue : nil
-      let lon = coords.count >= 2 ? (coords[1] as? NSNumber)?.doubleValue : nil
+      func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue ?? Double((v as? String) ?? "") }
+      let lat = coords.count >= 2 ? num(coords[0]) : nil
+      let lon = coords.count >= 2 ? num(coords[1]) : nil
       return SDRServer(
         name: (r["name"] as? String) ?? "FM-DX",
         url: u,

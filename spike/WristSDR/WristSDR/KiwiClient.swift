@@ -61,6 +61,8 @@ protocol SDRClient: AnyObject {
   var chatLog: [ChatLine] { get }
   var chatActivity: Int { get }
   func sendChat(_ text: String)
+  /// FM-DX tuner state (nil unless this is an FM-DX server). Default inert.
+  var fmdxInfo: FmdxInfo? { get }
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -83,6 +85,7 @@ extension SDRClient {
   var chatLog: [ChatLine] { [] }
   var chatActivity: Int { 0 }
   func sendChat(_ text: String) {}
+  var fmdxInfo: FmdxInfo? { nil }
 }
 
 extension UberClient: SDRClient {

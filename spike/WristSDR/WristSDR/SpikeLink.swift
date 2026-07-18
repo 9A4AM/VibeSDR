@@ -115,10 +115,31 @@ final class SpikeLink: ObservableObject {
   @Published var receiverLat: Double? = nil       // SDR site → ADS-B map centre + home marker
   @Published var receiverLon: Double? = nil
 
-  /// Which top-level screen to show. DAB and ADS-B are LISTS, not bands — those profiles get their own
-  /// full screen (no waterfall), exactly as the companion routes it.
-  enum Screen { case sdr, dab, adsb }
+  /// FM-DX tuner state (mirrored from the client). nil = not on an FM-DX server.
+  @Published var fmdx: FmdxInfo? = nil
+  var isFmDx: Bool { client is FmDxClient }
+
+  /// LEARNED station memory for the FM-DX dial. On the phone this was built as you tuned; the watch
+  /// COMPANION piggybacked off the phone over WCSession. The standalone spike has no phone, so it learns
+  /// its OWN — PS name keyed by 100 kHz channel — and persists it so the dial fills in over time.
+  @Published var stations: [LearnedStation] = LearnedStation.load()
+  private func learnStation(_ i: FmdxInfo) {
+    let name = i.ps.trimmingCharacters(in: .whitespaces)
+    guard i.freq > 0, name.count >= 2 else { return }              // need a real PS to learn
+    let ch = (i.freq / 100_000).rounded() * 100_000                 // snap to the FM raster
+    if let idx = stations.firstIndex(where: { $0.freqHz == ch }) {
+      if stations[idx].name != name { stations[idx].name = name; LearnedStation.save(stations) }
+    } else {
+      stations.append(LearnedStation(freqHz: ch, name: name))
+      LearnedStation.save(stations)
+    }
+  }
+
+  /// Which top-level screen to show. DAB, ADS-B and FM-DX are their own full screens (no waterfall),
+  /// exactly as the companion routes it.
+  enum Screen { case sdr, dab, adsb, fmdx }
   var screen: Screen {
+    if client is FmDxClient { return .fmdx }
     // Route on the ACTUAL demod — the source of truth. Using `!aircraft.isEmpty` too meant a reconnect
     // that landed back on FM still showed the ADS-B screen (stale list) over an FM demod.
     if mode == "dab", !dabProgrammes.isEmpty { return .dab }
@@ -231,12 +252,18 @@ final class SpikeLink: ObservableObject {
       c = KiwiClient(url: url, waterfall: waterfall)
     case .owrx:
       c = OwrxClient(url: url, waterfall: waterfall)
+    case .fmdx:
+      c = FmDxClient(url: url)
     default:  // .ubersdr
       let u = UberClient(waterfall: waterfall)
       u.host = host
       c = u
     }
     client = c
+    // Clear cross-backend state so nothing from the previous server lingers (e.g. OWRX's profiles menu
+    // showing over an FM-DX session). driverTick re-mirrors from the new client on the next tick anyway.
+    profiles = []; clients = 0; chatLog = []; chatActivity = 0
+    dabProgrammes = []; aircraft = []; fmdx = nil; stationName = ""
     connectError = nil
     frequency = c.frequency
     mode = c.mode
@@ -272,6 +299,7 @@ final class SpikeLink: ObservableObject {
     if receiverLon != client.receiverLon { receiverLon = client.receiverLon }
     if chatActivity != client.chatActivity { chatActivity = client.chatActivity }
     if chatLog != client.chatLog { chatLog = client.chatLog }
+    if fmdx != client.fmdxInfo { fmdx = client.fmdxInfo; if let i = client.fmdxInfo { learnStation(i) } }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode {

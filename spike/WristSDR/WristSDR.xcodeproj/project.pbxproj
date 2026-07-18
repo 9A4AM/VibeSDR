@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F7 /* OwrxClient.swift */; };
 		A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F9 /* AircraftView.swift */; };
+		AA0000000000000000000103 /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* FmdxView.swift */; };
+		AA0000000000000000000102 /* FmDxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* FmDxClient.swift */; };
+		AA0000000000000000000101 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* FmdxMp3Decoder.swift */; };
 		CA7CA7CA7CA7CA7CA7CA7001 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7CA7CA7CA7CA7CA7CA7002 /* Chat.swift */; };
 		A1936C9D44AFF44DEFAAD0F7 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F8 /* DabView.swift */; };
 		A1936C9D44AFF44DEFAAD0E5 /* OwrxSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */; };
@@ -44,6 +47,9 @@
 /* Begin PBXFileReference section */
 		BB20E378E2831CA4F85135F7 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135F9 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000203 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000202 /* FmDxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmDxClient.swift; sourceTree = "<group>"; };
+		AA0000000000000000000201 /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
 		CA7CA7CA7CA7CA7CA7CA7002 /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135F8 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxSocket.swift; sourceTree = "<group>"; };
@@ -96,6 +102,9 @@
 			children = (
 				BB20E378E2831CA4F85135F7 /* OwrxClient.swift */,
 				BB20E378E2831CA4F85135F9 /* AircraftView.swift */,
+				AA0000000000000000000203 /* FmdxView.swift */,
+				AA0000000000000000000202 /* FmDxClient.swift */,
+				AA0000000000000000000201 /* FmdxMp3Decoder.swift */,
 				CA7CA7CA7CA7CA7CA7CA7002 /* Chat.swift */,
 				BB20E378E2831CA4F85135F8 /* DabView.swift */,
 				BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */,
@@ -231,6 +240,9 @@
 			files = (
 				A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */,
+				AA0000000000000000000103 /* FmdxView.swift in Sources */,
+				AA0000000000000000000102 /* FmDxClient.swift in Sources */,
+				AA0000000000000000000101 /* FmdxMp3Decoder.swift in Sources */,
 				CA7CA7CA7CA7CA7CA7CA7001 /* Chat.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0F7 /* DabView.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0E5 /* OwrxSocket.swift in Sources */,
