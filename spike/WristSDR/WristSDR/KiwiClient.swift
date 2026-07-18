@@ -94,7 +94,9 @@ final class KiwiClient: ObservableObject, SDRClient {
 
   // ── Kiwi state ──
   private var rxBw = KiwiClient.fullBW
-  private var trueAudioRate = 12000.0
+  /// Read from the audio decode on the SND socket queue (off main) — a benign Double race; the
+  /// value only changes once at stream start (MSG sample_rate).
+  nonisolated(unsafe) private var trueAudioRate = 12000.0
   private var viewCenter = KiwiClient.fullBW / 2
   private var viewBw = KiwiClient.fullBW
   private var viewInit = false
@@ -106,8 +108,11 @@ final class KiwiClient: ObservableObject, SDRClient {
   private let wfSock  = AudioSocket(name: "kiwi-wf")
   nonisolated(unsafe) let waterfall: WaterfallBuffer
   private let proc = SignalProcessor()
-  private let audio = WatchAudio()
-  private let audioDec = ImaAdpcmDecoder(clampLo: -32768, clampHi: 32767)
+  // audio + the persistent ADPCM decoder run on the SND socket's serial queue (OFF the main actor,
+  // like UberClient) so the audio path never fights the waterfall for the main thread — a saturated
+  // main actor freezes the UI AND stalls the keepalive, which is what made Kiwi drop us.
+  nonisolated(unsafe) private let audio = WatchAudio()
+  nonisolated(unsafe) private let audioDec = ImaAdpcmDecoder(clampLo: -32768, clampHi: 32767)
   private var audioStarted = false
   private var keepaliveTimer: Timer?
   private var rateTimer: Timer?
@@ -170,11 +175,13 @@ final class KiwiClient: ObservableObject, SDRClient {
   // ── Reconnect on a mid-session drop (UberClient's proven pattern) ──
   private var retries = 0
   private var retrying = false
-  private func retrySnd() {
+  @Published var dropReason = ""     // shown so we can see WHY Kiwi keeps dropping (failed vs recv)
+  private func retrySnd(reason: String = "") {
     guard !retrying, !goingIdle else { return }
     retrying = true
     retries += 1
-    status = "reconnecting \(retries)…"
+    if !reason.isEmpty { dropReason = reason }
+    status = "reconnecting \(retries): \(dropReason)"
     sndSock.cancel(); wfSock.cancel()
     sndAuthed = false; wfAuthed = false; wfOpened = false
     let wait = UInt64(min(retries, 5)) * 1_500_000_000   // 1.5s → 7.5s, then hold
@@ -187,7 +194,41 @@ final class KiwiClient: ObservableObject, SDRClient {
   }
 
   private func openSnd() {
-    sndSock.onData = { [weak self] d in Task { @MainActor in self?.onBinary(d, "SND") } }
+    // Audio (SND frames) decoded + played HERE, on the socket's serial queue — off the main actor.
+    // Only UI state hops to main. MSG/other frames go to the main dispatcher (rare).
+    sndSock.onData = { [weak self] d in
+      guard let self else { return }
+      let buf = [UInt8](d)
+      guard buf.count >= 10, buf[0] == 0x53, buf[1] == 0x4e, buf[2] == 0x44 else {
+        Task { @MainActor in self.onBinary(d, "SND") }   // MSG / W-F-tagged / control
+        return
+      }
+      let flags = Int(buf[3])
+      let smeter = (Int(buf[8]) << 8) | Int(buf[9])
+      let offset = (flags & 0x0008) != 0 ? 20 : 10       // SND_STEREO
+      guard buf.count > offset else { return }
+      let payload = buf[offset...]
+      var pcm: [Int16]
+      if (flags & 0x0010) != 0 {                          // SND_COMPRESSED → IMA-ADPCM
+        pcm = self.audioDec.decode(payload)
+      } else {
+        let little = (flags & 0x0080) != 0
+        let bytes = Array(payload); let n = bytes.count >> 1
+        pcm = [Int16](repeating: 0, count: n)
+        for i in 0..<n {
+          let b0 = Int16(bytes[i*2]), b1 = Int16(bytes[i*2+1])
+          pcm[i] = little ? (b1 << 8) | b0 : (b0 << 8) | b1
+        }
+      }
+      guard !pcm.isEmpty else { return }
+      self.audio.play(pcm: pcm, rate: Int32(self.trueAudioRate.rounded()), channels: 1)
+      Task { @MainActor in
+        self.signalDb = Double(smeter) / 10 - 127
+        self.frameCount += 1
+        self.markFrame()
+        if self.status != "live" { self.status = "live" }
+      }
+    }
     sndSock.onText = { [weak self] s in Task { @MainActor in self?.onText(s, "SND") } }
     // AudioSocket.onReady is DEAD (never invoked) — drive the handshake off the .ready STATE instead.
     sndSock.onState = { [weak self] st in
@@ -207,10 +248,7 @@ final class KiwiClient: ObservableObject, SDRClient {
         }
         if (st.contains("failed") || st.contains("recv:")), !self.goingIdle {
           if self.everFrame {
-            // REOPEN, don't die. AudioSocket.receive stops on any recv error (shared fragility),
-            // so we stop reading, Kiwi's buffer fills, and it drops SND (ENOTCONN) a few seconds
-            // later. UberClient survives exactly this by reopening — so do we. Full re-handshake.
-            self.retrySnd()
+            self.retrySnd(reason: st)
           } else {
             self.fail("This KiwiSDR wouldn’t open a connection.\n[\(st)]")
           }
