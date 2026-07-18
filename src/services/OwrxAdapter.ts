@@ -1081,21 +1081,15 @@ export class OwrxAdapter implements SDRBackend {
       this.cb.onStatus(this.getStatus());
       return;
     }
-    // Outside the current profile window — try to auto-switch to one that contains it.
-    const target = this.profiles.find((p) => p.centerHz != null && p.bwHz != null &&
-      Math.abs(frequency - (p.centerHz as number)) <= (p.bwHz as number) / 2);
-    if (target) {
-      this.freq = frequency;            // applied after the new config arrives
-      this.viewCenter = frequency;
-      this.selectProfile(target.id);
-    } else {
-      // clamp to the window edge (UI pulses the drum at band edge)
-      this.freq = this.cfg.centerFreq + Math.sign(offset) * half;
-      this.viewCenter = this.freq;
-      this.sendDemod();
-      if (this.lastRow) this.emitSlice(this.lastRow);
-      this.cb.onStatus(this.getStatus());
-    }
+    // Outside the current profile window — CLAMP to the edge. We do NOT auto-switch profiles:
+    // an OWRX profile change retunes the SHARED SDR for every listener, so switching is an
+    // EXPLICIT user action only (Stuart's rule from when OWRX was added — etiquette). Tuning past
+    // the edge pulses the drum at the band edge; the user picks another profile deliberately.
+    this.freq = this.cfg.centerFreq + Math.sign(offset) * half;
+    this.viewCenter = this.freq;
+    this.sendDemod();
+    if (this.lastRow) this.emitSlice(this.lastRow);
+    this.cb.onStatus(this.getStatus());
   }
 
   syncFrequency(frequency: number, mode?: SDRMode): void {
