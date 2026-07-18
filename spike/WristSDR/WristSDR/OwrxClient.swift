@@ -107,7 +107,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   }
 
   private func openSocket() {
-    sock.onText = { [weak self] s in Task { @MainActor in self?.onText(s) } }
+    sock.onText = { [weak self] s in self?.onText(s) }   // parse OFF main (OWRX+ floods JSON)
     sock.onData = { [weak self] d in self?.onBinary([UInt8](d)) }   // decode OFF main (Kiwi lesson)
     sock.onState = { [weak self] st in
       Task { @MainActor in
@@ -140,32 +140,32 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
   }
 
-  private func send(_ obj: [String: Any]) {
+  nonisolated private func send(_ obj: [String: Any]) {
     guard let d = try? JSONSerialization.data(withJSONObject: obj),
           let s = String(data: d, encoding: .utf8) else { return }
     sock.send(text: s)
   }
 
-  // ── inbound text / JSON ──
-  private func onText(_ data: String) {
+  // ── inbound text / JSON — runs OFF the main actor; only the handled types hop to main, so the
+  //    OWRX+ metadata/dial/secondary flood is parsed and dropped without ever touching the UI thread.
+  nonisolated private func onText(_ data: String) {
     if data.hasPrefix("CLIENT DE SERVER") {
-      // Server ack → negotiate output rate, then start the DSP.
       send(["type": "connectionproperties", "params": ["output_rate": 12000, "hd_output_rate": 48000]])
       send(["type": "dspcontrol", "action": "start"])
-      status = "connecting"
+      Task { @MainActor in self.status = "connecting" }
       return
     }
     guard let d = data.data(using: .utf8),
           let json = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
           let type = json["type"] as? String else { return }
     switch type {
-    case "config":   onConfig(json["value"] as? [String: Any] ?? [:])
-    case "profiles": onProfiles(json["value"] as? [Any] ?? [])
-    case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { clients = n }
-    case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { signalDb = 10 * log10(v) }
+    case "config":   let v = json["value"] as? [String: Any] ?? [:]; Task { @MainActor in self.onConfig(v) }
+    case "profiles": let v = json["value"] as? [Any] ?? [];          Task { @MainActor in self.onProfiles(v) }
+    case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { Task { @MainActor in self.clients = n } }
+    case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { let db = 10 * log10(v); Task { @MainActor in self.signalDb = db } }
     case "sdr_error", "demodulator_error":
-      lastError = String(describing: json["value"] ?? "OpenWebRX error")
-    default: break
+      let msg = String(describing: json["value"] ?? "OpenWebRX error"); Task { @MainActor in self.lastError = msg }
+    default: break   // parsed off-main, ignored — never reaches the UI thread
     }
   }
 
