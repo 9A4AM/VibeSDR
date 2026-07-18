@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// A compact HF band plan for the standalone spike — Region 1 (UK), ported from the phone's
+/// A band plan for the standalone spike — Region 1 (UK), ported from the phone's
 /// src/constants/bandPlan.ts. Feeds the ticker's band label + boundary dividers (the companion
-/// got these from the phone; here we compute them from the tuned frequency). UberSDR is HF
-/// (10 kHz–30 MHz), so that's all we carry.
+/// got these from the phone; here we compute them from the tuned frequency). Covers HF for UberSDR
+/// (10 kHz–30 MHz) PLUS VHF/UHF up to 23 cm for the wideband backends (OWRX etc.) — FM broadcast,
+/// airband, 2 m/70 cm ham, marine, DAB. No mode/step here (the spike doesn't auto-tune modes on a
+/// boundary cross); labels + colours only.
 struct BandEntry {
   let lo: Double
   let hi: Double
@@ -46,6 +48,18 @@ enum BandPlan {
     BandEntry(lo:  24_890_000, hi: 24_990_000, name: "12m Ham Band",                color: ham),
     BandEntry(lo:  26_965_000, hi: 27_405_000, name: "11m CB Band",                 color: cb),
     BandEntry(lo:  28_000_000, hi: 29_700_000, name: "10m Ham Band",                color: ham),
+    // ── VHF / UHF (wideband backends: OWRX etc.; UberSDR caps at 30 MHz) — Region 1 (UK) ──
+    BandEntry(lo:  30_000_000, hi:  50_000_000, name: "VHF Low / Public Service",   color: utility),
+    BandEntry(lo:  50_000_000, hi:  54_000_000, name: "6m Ham Band",                color: ham),
+    BandEntry(lo:  70_000_000, hi:  70_500_000, name: "4m Ham Band",                color: ham),
+    BandEntry(lo:  87_500_000, hi: 108_000_000, name: "FM Broadcast Band",          color: broadcast),
+    BandEntry(lo: 108_000_000, hi: 137_000_000, name: "Airband (VHF Air)",          color: utility),
+    BandEntry(lo: 144_000_000, hi: 146_000_000, name: "2m Ham Band",                color: ham),
+    BandEntry(lo: 156_000_000, hi: 162_050_000, name: "Marine VHF",                 color: utility),
+    BandEntry(lo: 174_000_000, hi: 240_000_000, name: "DAB / DAB+ (Band III)",      color: broadcast),
+    BandEntry(lo: 430_000_000, hi: 440_000_000, name: "70cm Ham Band",              color: ham),
+    BandEntry(lo: 446_000_000, hi: 446_200_000, name: "PMR446",                     color: utility),
+    BandEntry(lo: 1_240_000_000, hi: 1_300_000_000, name: "23cm Ham Band",          color: ham),
   ]
 
   /// The band containing this frequency (ham preferred on any overlap, as the phone does).

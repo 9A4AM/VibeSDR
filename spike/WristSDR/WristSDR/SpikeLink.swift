@@ -85,6 +85,10 @@ final class SpikeLink: ObservableObject {
   /// The backend client's own status string (Kiwi: 'live' / 'registering' / 'reconnecting N: <reason>').
   /// Surfaced small on screen so a mid-session drop's REASON is visible (debug).
   @Published var backendStatus = ""
+  /// Non-fatal "heavy server for the phone link" advisory — set only when on the iPhone relay and the
+  /// inbound load sits above what that relay reliably carries. nil = nothing to say.
+  @Published var bandwidthWarning: String? = nil
+  private var relayHeavySince: Double? = nil
   /// OWRX profiles (grouped SDR→profiles) + connected-listener count, mirrored from the client.
   @Published var profiles: [SDRProfile] = []
   @Published var clients = 0
@@ -93,6 +97,8 @@ final class SpikeLink: ObservableObject {
 
   // ── Band plan: NONE yet in the spike. Left blank; the label/edges simply don't draw. ──
   @Published var bandName = ""
+  /// Live station name (RDS ps on FM) — shown in place of the band label when present.
+  @Published var stationName = ""
   @Published var bandColor: Color? = nil
   @Published var bandLo = 0.0
   @Published var bandHi = 0.0
@@ -137,11 +143,15 @@ final class SpikeLink: ObservableObject {
   private let pathQueue = DispatchQueue(label: "spikelink.path")
   private func startPathMonitor() {
     pathMonitor.pathUpdateHandler = { [weak self] path in
+      // Order matters. The watch↔phone companion bridge advertises BOTH `.other` AND `.wifi`, so a
+      // naive `.wifi`-first check shows WiFi whenever the phone is near even though every byte is
+      // actually egressing through the relay. `.other` present = the phone link is up and IS the route,
+      // so it wins; WiFi/cellular only mean direct egress once the relay is truly gone (phone off/away).
       let tr: Transport
       if path.status != .satisfied { tr = .none }
+      else if path.usesInterfaceType(.other) { tr = .iphone }
       else if path.usesInterfaceType(.wifi) { tr = .wifi }
       else if path.usesInterfaceType(.cellular) { tr = .cellular }
-      else if path.usesInterfaceType(.other) { tr = .iphone }
       else { tr = .none }
       Task { @MainActor in if self?.transport != tr { self?.transport = tr } }
     }
@@ -155,6 +165,23 @@ final class SpikeLink: ObservableObject {
     bandColor = b?.color
     bandLo = b?.lo ?? 0
     bandHi = b?.hi ?? 0
+  }
+
+  /// A sensible tuning step for a demod + frequency, adopted on a mode/profile change (mirrors the
+  /// phone's mode+step conventions). Must be a member of the STEP menu's options.
+  static func defaultStep(mode: String, hz: Double) -> Double {
+    switch mode {
+    case "wfm":            return 100_000                          // FM broadcast
+    case "fm":             return hz > 30_000_000 ? 12_500 : 1_000 // VHF/UHF NFM channels vs HF
+    case "am", "sam":
+      if hz > 108_000_000, hz < 137_000_000 { return 25_000 }     // airband
+      if hz < 1_705_000                       { return 9_000 }     // MW broadcast (Region 1)
+      return 1_000                                                 // SW broadcast
+    case "usb", "lsb":     return 1_000
+    case "cwu", "cwl":     return 100
+    case "dab":            return 1_000
+    default:               return 1_000
+    }
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -209,9 +236,15 @@ final class SpikeLink: ObservableObject {
     if backendStatus != client.status { backendStatus = client.status }
     if clients != client.clients { clients = client.clients }
     if profiles != client.profiles { profiles = client.profiles }
+    if stationName != client.stationName { stationName = client.stationName }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
-    if mode != client.mode { mode = client.mode }
+    if mode != client.mode {
+      mode = client.mode
+      // Adopt a mode/band-appropriate tuning step on a demod change (profile switch or manual mode).
+      // Matches the phone's mode+step pairing; the user can still override via the STEP menu after.
+      step = Self.defaultStep(mode: mode, hz: client.frequency)
+    }
     let sp = client.displaySpanHz   // the on-screen width, held across a reconnect (no snap)
     if span != sp { span = sp }
     // Passband edges → the VFO's dashed LSB/USB lines (drawVFO), and the bandwidth UI.
@@ -233,6 +266,21 @@ final class SpikeLink: ObservableObject {
     // Our own socket-health score, standing in for the phone's link meter.
     let sl = client.framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)
     if serverLink != sl { serverLink = sl }
+
+    // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).
+    // Most servers stream ~18-40 KB/s and never trip this; only a deliberately-cranked FFT (like an
+    // 8192@20 box) sits above ~55. Require it SUSTAINED ~4s so a momentary spike doesn't nag; clear
+    // when the load drops or the watch moves off the relay.
+    let kb = client.inboundKbPerSec
+    if transport == .iphone, kb > 55 {
+      if relayHeavySince == nil { relayHeavySince = now }
+      if let s = relayHeavySince, now - s >= 4, bandwidthWarning == nil {
+        bandwidthWarning = "Heavy server (~\(kb) KB/s) — may stutter over the phone. Best on the watch’s own Wi-Fi."
+      }
+    } else {
+      relayHeavySince = nil
+      if bandwidthWarning != nil, transport != .iphone || kb <= 45 { bandwidthWarning = nil }
+    }
 
     // Surface a RECONNECT so the UI shows the "Reconnecting" pill, not the hard "link lost"
     // overlay (a phone-companion concept — there's no watch↔phone link to lose here). We're

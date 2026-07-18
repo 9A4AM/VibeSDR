@@ -42,6 +42,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   @Published var lastError: String? = nil
   @Published var profiles: [SDRProfile] = []
   @Published var clients: Int = 0
+  @Published var stationName = ""          // RDS programme-service name (WFM) → band pill
   var rowsPushed = 0
   var displaySpanHz: Double { viewBw }
 
@@ -73,6 +74,10 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) var dabRateScale = 1.0
 
   // ── Sockets / audio / DSP ──
+  // NWConnection (AudioSocket). A URLSessionWebSocketTask swap was tried and made the stall WORSE on
+  // watchOS (~15 s cycles vs ~60 s) — reverted. The stall is NOT the transport: OWRX force-feeds a
+  // full-profile 8192-bin FFT (~64-80 KB/s, ~16-20 fps) that it will NOT let the client throttle
+  // (fps/fft_fps are ignored — measured), and the watch's link/CPU can't sustain it where a desktop can.
   nonisolated(unsafe) private let sock = AudioSocket(name: "owrx")
   nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // FFT decode
   nonisolated(unsafe) private let audioQueue  = DispatchQueue(label: "owrx.audio")   // audio decode — SEPARATE so a slow FFT can't gap audio
@@ -87,8 +92,20 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let hdAudioDec = OwrxAudioDecoder()    // 48k HD/WFM
   private var rateTimer: Timer?
   nonisolated(unsafe) private var frameCount = 0        // bumped off-main; rateTimer reads/resets
+  nonisolated(unsafe) private var bytesThisSec = 0      // all inbound WS bytes this second → live KB/s
+  nonisolated(unsafe) private var fftThisSec = 0        // FFT frames this second → live FFT fps
+  private var kbPerSec = 0                               // read by the status pill + advisory
+  var inboundKbPerSec: Int { kbPerSec }                 // SDRClient — drives the heavy-server advisory
+  private var fftFps = 0
   nonisolated(unsafe) private var sawFirstFrame = false
   private var everFrame = false
+  // OFF by default. We PROVED (2026-07-18) watchOS will not hand the watch a direct wifi route while the
+  // phone is reachable — prohibiting the `.other` relay just fails and falls back, costing a ~6 s connect
+  // delay for nothing. OWRX's heavy FFT firehose only sustains on the watch's OWN wifi/cellular (phone
+  // off/away), and that's the OS's call, not ours. Kept as a lever but disabled; instrumentation stays.
+  private var avoidRelayActive = false
+  private var preFrameSecs = 0
+  private var linkIface = "?"       // which interface the socket actually came up on (wifi/cell/relay)
   nonisolated(unsafe) private var goingIdle = false
 
   init(url: String, waterfall: WaterfallBuffer) {
@@ -108,8 +125,20 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
+        self.kbPerSec = self.bytesThisSec / 1024; self.bytesThisSec = 0
+        self.fftFps = self.fftThisSec; self.fftThisSec = 0
         if self.frameCount > 0 {
           self.retries = 0; self.zeroSecs = 0
+        } else if !self.everFrame, self.avoidRelayActive, !self.retrying {
+          // Still waiting for the FIRST frame on a wifi/cellular-only socket. If it never comes, the
+          // watch has no non-relay route right now (phone near, wifi asleep) → drop the restriction and
+          // reopen so it connects over the relay. Out-of-house this is the normal path.
+          self.preFrameSecs += 1
+          if self.preFrameSecs >= 6 {
+            self.avoidRelayActive = false
+            self.status = "no wifi — using phone"
+            self.reopen()
+          }
         } else if self.everFrame, !self.retrying {
           self.zeroSecs += 1
           // Recover a SILENT stall (data stops with no socket error → the spike shows 'reconnecting'
@@ -119,7 +148,7 @@ final class OwrxClient: ObservableObject, SDRClient {
           if self.zeroSecs >= 15 { self.retry(reason: "no data 15s") }
         }
         if self.everFrame, !self.retrying {
-          self.status = "P:\(self.profiles.count) f:\(Int(self.framesPerSec)) cpu:\(Int(CpuMeter.processCpuPercent()))"
+          self.status = "\(self.linkIface) \(self.kbPerSec)KB/s \(self.fftFps)fft cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
         self.frameCount = 0 }
     }
@@ -137,6 +166,8 @@ final class OwrxClient: ObservableObject, SDRClient {
       guard let self else { return }
       let bytes = [UInt8](d)
       let type = bytes.first ?? 0
+      self.bytesThisSec &+= d.count                        // live link load (all inbound bytes)
+      if type == 1 { self.fftThisSec &+= 1 }               // live FFT rate
       if type == 1 {
         // FFT: COALESCE to the latest frame only. Never build a backlog — if decode falls a little
         // behind over time the queue would grow unbounded (memory creep → the ~1-min freeze). The
@@ -165,11 +196,16 @@ final class OwrxClient: ObservableObject, SDRClient {
           self.handshaked = false
           self.status = "retrying (ws)…"
           self.sock.cancel()
-          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
+          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false, avoidRelay: self.avoidRelayActive)
           return
         }
         if !self.everFrame, self.status != "live" { self.status = st }
         if st.contains("ready"), !self.handshaked {
+          // AudioSocket reports the live interface as "owrx ws ready [wifi]" — surface it so the pill
+          // shows whether OWRX is on real wifi/cellular or the phone relay.
+          if let a = st.firstIndex(of: "["), let b = st.firstIndex(of: "]"), a < b {
+            self.linkIface = String(st[st.index(after: a)..<b])
+          }
           self.handshaked = true
           self.status = "registering"
           self.sock.send(text: "SERVER DE CLIENT client=vibesdr type=receiver")
@@ -179,7 +215,16 @@ final class OwrxClient: ObservableObject, SDRClient {
         }
       }
     }
-    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
+    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false, avoidRelay: avoidRelayActive)
+  }
+
+  // Reopen the socket in place (same handshake path) — used to drop the wifi-only restriction and fall
+  // back to the relay when no non-relay route came up.
+  private func reopen() {
+    preFrameSecs = 0
+    handshaked = false
+    sock.cancel()
+    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false, avoidRelay: avoidRelayActive)
   }
 
   // Reconnect on a mid-session drop (flaky server / receive-loop stop), with backoff.
@@ -196,7 +241,7 @@ final class OwrxClient: ObservableObject, SDRClient {
       try? await Task.sleep(nanoseconds: wait)
       self.retrying = false
       guard !self.goingIdle else { return }
-      self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
+      self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false, avoidRelay: self.avoidRelayActive)
     }
   }
 
@@ -210,6 +255,10 @@ final class OwrxClient: ObservableObject, SDRClient {
   //    OWRX+ metadata/dial/secondary flood is parsed and dropped without ever touching the UI thread.
   nonisolated private func onText(_ data: String) {
     if data.hasPrefix("CLIENT DE SERVER") {
+      // 12 kHz for the narrow demods (output_rate) but keep the full 48 kHz HD channel (hd_output_rate)
+      // for WFM — broadcast FM needs the wide audio for hi-fi/stereo, and that's the whole point of the
+      // BC FM listening experience. The stall fix rides on the URLSession transport, not on starving the
+      // audio. If the watch still can't keep up under load, 24000 here halves the WFM decode as a fallback.
       send(["type": "connectionproperties", "params": ["output_rate": 12000, "hd_output_rate": 48000]])
       send(["type": "dspcontrol", "action": "start"])
       Task { @MainActor in self.status = "connecting" }
@@ -225,11 +274,26 @@ final class OwrxClient: ObservableObject, SDRClient {
     case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { let db = 10 * log10(v); Task { @MainActor in self.signalDb = db } }
     case "sdr_error", "demodulator_error":
       let msg = String(describing: json["value"] ?? "OpenWebRX error"); Task { @MainActor in self.lastError = msg }
+    case "metadata":
+      if let v = json["value"] as? [String: Any] { onMetadata(v) }
     default: break   // parsed off-main, ignored — never reaches the UI thread
     }
   }
 
+  /// RDS (broadcast FM) station name from the `metadata` message. Keyed protocol:'WFM'; `ps` is the
+  /// 8-char programme-service name. Incremental (ps and radiotext arrive separately) so a radiotext-only
+  /// update must NOT blank a known ps — only a non-empty ps updates the name. DAB/digital-voice
+  /// metadata is handled on the DAB/ADS-B screens, not here.
+  nonisolated private func onMetadata(_ v: [String: Any]) {
+    let proto = v["protocol"] as? String
+    guard proto == "WFM" || v["ps"] != nil || v["radiotext"] != nil else { return }
+    if let ps = (v["ps"] as? String)?.trimmingCharacters(in: .whitespaces), !ps.isEmpty {
+      Task { @MainActor in if self.stationName != ps { self.stationName = ps } }
+    }
+  }
+
   private var lastConfigCenter = 0.0
+  private var pendingProfileSwitch = false   // set by selectProfile; forces demod adoption on next config
   private func onConfig(_ c: [String: Any]) {
     let prevCenter = centerFreq
     if let cf = (c["center_freq"] as? NSNumber)?.doubleValue { centerFreq = cf }
@@ -238,9 +302,13 @@ final class OwrxClient: ObservableObject, SDRClient {
     if let ac = c["audio_compression"] as? String { audioCompression = ac; audioCompressionSnapshot = ac }
     modeSnapshot = mode
     // A RECONNECT re-sends config for the SAME profile — preserve the VFO, zoom and demod so a blip
-    // doesn't yank the view/mode back. Only reset those on a genuinely NEW profile (centre changed).
+    // doesn't yank the view/mode back. Only reset those on a genuinely NEW profile (centre changed) OR
+    // on an EXPLICIT profile switch (pendingProfileSwitch) — a switch that happens to land on a same-
+    // centre profile must still adopt its demod, or the "auto demod on switch" is silently lost.
     let sameProfile = (centerFreq == prevCenter && prevCenter != 0)
-    if !sameProfile {
+    let adopt = !sameProfile || pendingProfileSwitch
+    pendingProfileSwitch = false
+    if adopt {
       if frequency == 0 || abs(frequency - centerFreq) > sampRate / 2, centerFreq != 0 {
         frequency = centerFreq
         if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
@@ -254,6 +322,7 @@ final class OwrxClient: ObservableObject, SDRClient {
         mode = spikeMode; modeSnapshot = spikeMode
         if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
       }
+      stationName = ""   // new profile/station — drop any stale RDS name until fresh metadata lands
     }
     lastConfigCenter = centerFreq
     audioDec.reset(); hdAudioDec.reset()
@@ -472,6 +541,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   /// EXPLICIT profile switch (from the profile menu only — never automatic). Retunes the shared SDR.
   func selectProfile(_ id: String) {
     activeProfileId = id
+    pendingProfileSwitch = true   // force the incoming config to adopt this profile's start_mod
     profiles = profiles.map { var p = $0; p.active = (p.id == id); return p }
     audioDec.reset(); hdAudioDec.reset()
     send(["type": "selectprofile", "params": ["profile": id]])

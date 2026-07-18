@@ -674,26 +674,36 @@ struct ProfileSheet: View {
   }
 
   var body: some View {
-    List {
-      Section {
-        Text("⚠︎ Switching retunes this receiver for everyone (\(link.clients) listening). Please ask in chat first.")
-          .font(.system(size: 10.5)).foregroundColor(.orange).lineLimit(nil)
-      }
-      ForEach(sdrs, id: \.self) { sdr in
-        Section(sdr) {
-          ForEach(link.profiles.filter { $0.sdrName == sdr }) { p in
-            Button { onSelect(p.id) } label: {
-              HStack(spacing: 8) {
-                Text(p.name).font(.system(size: 14)).foregroundColor(p.active ? .green : .white).lineLimit(1)
-                Spacer()
-                // In-use / active indicator (the profile we're currently on).
-                if p.active { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
-              }
-            }.buttonStyle(.plain)
+    // Open scrolled to the CURRENT profile (71-profile lists are painful to scroll from the top to
+    // reach the neighbour of the one you're on — the phone opens on the active one too).
+    ScrollViewReader { proxy in
+      List {
+        Section {
+          Text("⚠︎ Switching retunes this receiver for everyone (\(link.clients) listening). Please ask in chat first.")
+            .font(.system(size: 10.5)).foregroundColor(.orange).lineLimit(nil)
+        }
+        ForEach(sdrs, id: \.self) { sdr in
+          Section(sdr) {
+            ForEach(link.profiles.filter { $0.sdrName == sdr }) { p in
+              Button { onSelect(p.id) } label: {
+                HStack(spacing: 8) {
+                  Text(p.name).font(.system(size: 14)).foregroundColor(p.active ? .green : .white).lineLimit(1)
+                  Spacer()
+                  // In-use / active indicator (the profile we're currently on).
+                  if p.active { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
+                }
+              }.buttonStyle(.plain)
+              .id(p.id)
+            }
           }
         }
       }
+      .navigationTitle("Profiles")
+      .onAppear {
+        guard let active = link.profiles.first(where: { $0.active })?.id else { return }
+        // A tick after layout, else the List hasn't built its rows and scrollTo is a no-op.
+        DispatchQueue.main.async { proxy.scrollTo(active, anchor: .center) }
+      }
     }
-    .navigationTitle("Profiles")
   }
 }

@@ -37,13 +37,20 @@ final class AudioSocket {
 
   /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
   /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
-  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false, autoReplyPing: Bool = true) {
+  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false, autoReplyPing: Bool = true, avoidRelay: Bool = false) {
     gen &+= 1
     let g = gen
     cancel()
 
     let secure = (url.scheme == "wss")
     let params: NWParameters = secure ? .tls : .tcp
+    // avoidRelay: refuse the iPhone Bluetooth relay (it presents as the `.other` interface) so a
+    // bandwidth-heavy feed goes over the watch's OWN wifi/cellular instead. watchOS often powers the
+    // watch's wifi down while the phone is near, so a caller MUST have a fallback: if no data arrives,
+    // reopen with avoidRelay=false or the connection just waits forever.
+    if avoidRelay {
+      params.prohibitedInterfaceTypes = [.other]
+    }
     // Force IPv4 when asked: a dynamic-DNS host (freemyip etc.) can hand back an AAAA the watch
     // can't route home ("no route to host") while IPv4 works fine — pin to v4 to dodge it.
     if forceIPv4, let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
@@ -62,7 +69,8 @@ final class AudioSocket {
       guard let self, self.gen == g else { return }
       switch state {
       case .ready:
-        self.onState?("\(name) ws ready")
+        // Tag the interface actually in use so the UI can show wifi vs the phone relay (.other).
+        self.onState?("\(name) ws ready [\(Self.pathName(c.currentPath))]")
         self.receive(c, g)
       case .waiting(let e):
         // Path not satisfiable YET. NWConnection retries toward .ready on its own — do not

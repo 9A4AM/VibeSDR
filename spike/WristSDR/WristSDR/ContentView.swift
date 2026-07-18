@@ -168,6 +168,7 @@ struct ContentView: View {
   /// What the crown does. Explicit and persistent — never a timed-out HUD, because
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
+  @State private var bwDismissed = false   // heavy-server advisory dismissed for this occurrence
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
   @State private var suspendWork: DispatchWorkItem?
@@ -371,6 +372,22 @@ struct ContentView: View {
             .padding(.bottom, 2)
             .transition(.opacity)
         }
+        // Heavy-server advisory — non-fatal, dismissible. Only appears on the phone relay with a
+        // cranked server (see SpikeLink.bandwidthWarning). Tap to dismiss; re-arms if it clears.
+        if let warn = link.bandwidthWarning, !bwDismissed {
+          Button { bwDismissed = true } label: {
+            HStack(alignment: .top, spacing: 5) {
+              Image(systemName: "wifi.exclamationmark").font(.system(size: 11, weight: .bold))
+              Text(warn).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.orange.opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
+          }
+          .buttonStyle(.plain)
+          .padding(.bottom, 2)
+          .transition(.opacity)
+        }
         if let h = hint { hintPill(h).padding(.bottom, 2) }
         // Crown-mode pill — shows what the crown is doing when it's NOT plain tune (set by the
         // Double-Tap cycle or the menu). Sits just above the band label.
@@ -406,6 +423,9 @@ struct ContentView: View {
       }
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
+      // Re-arm the advisory dismiss once the warning clears (moved to wifi / server calmed down), so a
+      // fresh heavy-relay situation later can show it again.
+      .onChange(of: link.bandwidthWarning) { _, n in if n == nil { bwDismissed = false } }
 
       if crownMode != .tune && !locked { crownOverlay }
 
@@ -1406,9 +1426,13 @@ struct ContentView: View {
   ///
   /// Coloured by the band, so the label and the ticker underneath agree at a glance.
   private var bandLabel: some View {
-    Group {
-      if !link.bandName.isEmpty {
-        Text(link.bandName)
+    // Prefer a LIVE station name (RDS ps on FM broadcast) over the static band name — "BBC R2"
+    // beats "FM Broadcast Band" when we know it. Falls back to the band name off-station.
+    let station = link.stationName.trimmingCharacters(in: .whitespaces)
+    let label = station.isEmpty ? link.bandName : station
+    return Group {
+      if !label.isEmpty {
+        Text(label)
           // WHITE. It was drawn in the BAND'S colour, and that is a mistake this app has
           // a rule against: legibility comes from darkening, never from the accent. A
           // band-blue label 11pt tall on a dark strip is simply not readable — the colour

@@ -36,6 +36,12 @@ protocol SDRClient: AnyObject {
   var profiles: [SDRProfile] { get }
   var clients: Int { get }
   func selectProfile(_ id: String)
+  /// Live inbound link load (KB/s of all WS bytes). Drives the "heavy server" advisory when on the
+  /// phone relay. REQUIREMENT (not just extension) so `any SDRClient` reaches the real number. 0 = the
+  /// backend doesn't measure it (fine — no advisory).
+  var inboundKbPerSec: Int { get }
+  /// Live station name (RDS ps / DAB service) to show in place of the band label. "" = none.
+  var stationName: String { get }
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -43,6 +49,8 @@ extension SDRClient {
   var profiles: [SDRProfile] { [] }
   var clients: Int { 0 }
   func selectProfile(_ id: String) {}
+  var inboundKbPerSec: Int { 0 }
+  var stationName: String { "" }
 }
 
 extension UberClient: SDRClient {
