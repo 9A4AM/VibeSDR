@@ -99,7 +99,10 @@ final class OwrxClient: ObservableObject, SDRClient {
   func start() {
     started = true
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-      Task { @MainActor in guard let self else { return }; self.framesPerSec = Double(self.frameCount); self.frameCount = 0 }
+      Task { @MainActor in guard let self else { return }
+        self.framesPerSec = Double(self.frameCount)
+        if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
+        self.frameCount = 0 }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
     audio.start { _, _ in }
@@ -132,12 +135,29 @@ final class OwrxClient: ObservableObject, SDRClient {
           self.sock.send(text: "SERVER DE CLIENT client=vibesdr type=receiver")
         }
         if (st.contains("failed") || st.contains("recv:")), !self.goingIdle {
-          self.lastError = "Lost the connection to this OpenWebRX server.\n[\(st)]"
-          self.status = "dropped"
+          self.retry(reason: st)
         }
       }
     }
     sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
+  }
+
+  // Reconnect on a mid-session drop (flaky server / receive-loop stop), with backoff.
+  private var retries = 0
+  private var retrying = false
+  private func retry(reason: String) {
+    guard !retrying, !goingIdle else { return }
+    retrying = true; retries += 1
+    status = "reconnect \(retries): \(reason)"
+    handshaked = false
+    sock.cancel()
+    let wait = UInt64(min(retries, 5)) * 1_500_000_000
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: wait)
+      self.retrying = false
+      guard !self.goingIdle else { return }
+      self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
+    }
   }
 
   nonisolated private func send(_ obj: [String: Any]) {
