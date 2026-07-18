@@ -252,7 +252,14 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private var modeSnapshot = "am"   // read off-main in onAudio; benign
 
   // FFT decoded off main; slice the view window; hop to main to enqueue the row.
+  nonisolated(unsafe) private var lastFftAt = 0.0
   nonisolated private func onFft(_ payload: ArraySlice<UInt8>) {
+    // THROTTLE to ~10 fps. OWRX pushes FFT fast and each frame is a whole-profile ADPCM decode +
+    // DSP — at full rate that pegged a watch core (>100%). The waterfall doesn't need more than
+    // ~10 fps; SKIP the decode entirely on dropped frames (the decode is the expensive part).
+    let now = ProcessInfo.processInfo.systemUptime
+    if now - lastFftAt < 0.095 { return }
+    lastFftAt = now
     var row: [Float]
     if fftCompressionSnapshot == "adpcm" {
       row = decodeOwrxFftFrame(payload)

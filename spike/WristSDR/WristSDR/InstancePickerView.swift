@@ -277,29 +277,56 @@ struct CustomServerSheet: View {
   let onAdd: (_ name: String, _ url: String, _ type: ServerType) -> Void
   @State private var url = ""
   @State private var name = ""
+  @State private var auto = true
   @State private var type: ServerType = .ubersdr
+  @State private var detecting = false
+  @State private var detectMsg = ""
 
   var body: some View {
     List {
       Section("ADDRESS") {
-        TextField("sdr.example.com", text: $url).font(.system(size: 14))
+        TextField("sdr.example.com", text: $url).font(.system(size: 14)).autocorrectionDisabled()
         TextField("Name (optional)", text: $name).font(.system(size: 14))
       }
       Section("TYPE") {
-        Picker("Type", selection: $type) {
-          ForEach(ServerType.allCases, id: \.self) { Text($0.display).tag($0) }
+        Toggle("Auto-detect", isOn: $auto).font(.system(size: 14))
+        if !auto {
+          Picker("Type", selection: $type) {
+            ForEach(ServerType.allCases, id: \.self) { Text($0.display).tag($0) }
+          }
         }
+        if detecting { HStack(spacing: 6) { ProgressView().scaleEffect(0.7); Text("Detecting…").font(.system(size: 12)) } }
+        else if !detectMsg.isEmpty { Text(detectMsg).font(.system(size: 11)).foregroundColor(.orange) }
       }
       Section {
-        Button("Save favourite") {
-          let clean = url.trimmingCharacters(in: .whitespaces)
-          guard !clean.isEmpty else { return }
-          let full = clean.contains("://") ? clean : "https://\(clean)"
-          onAdd(name.trimmingCharacters(in: .whitespaces), full.trimmedTrailingSlash, type)
-          dismiss()
-        }.disabled(url.trimmingCharacters(in: .whitespaces).isEmpty)
+        Button(auto ? "Detect & save" : "Save favourite") { save() }
+          .disabled(url.trimmingCharacters(in: .whitespaces).isEmpty || detecting)
       }
     }
     .navigationTitle("Custom server")
+  }
+
+  private func save() {
+    let clean = url.trimmingCharacters(in: .whitespaces)
+    guard !clean.isEmpty else { return }
+    if !auto {
+      let full = clean.contains("://") ? clean : "https://\(clean)"
+      onAdd(name.trimmingCharacters(in: .whitespaces), full.trimmedTrailingSlash, type); dismiss(); return
+    }
+    detecting = true; detectMsg = ""
+    Task {
+      // Bare host → try http first (self-hosted SDRs on a port are usually plain HTTP), then https.
+      let candidates: [String] = clean.contains("://") ? [clean] : ["http://\(clean)", "https://\(clean)"]
+      for cand in candidates {
+        if let t = await detectServerType(cand) {
+          await MainActor.run { onAdd(name.trimmingCharacters(in: .whitespaces), cand.trimmedTrailingSlash, t); dismiss() }
+          return
+        }
+      }
+      await MainActor.run {
+        detecting = false; auto = false
+        detectMsg = "Couldn't reach the server — pick the type below and save."
+      }
+    }
   }
 }

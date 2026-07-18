@@ -61,6 +61,27 @@ struct DirectoryMeta: Identifiable {
   let desc: String
 }
 
+/// Probe a custom URL's landing page to work out which backend it is — a Swift port of the phone's
+/// `detectServerType` (sdrTypes.ts). ORDER MATTERS (a later backend's page contains an earlier one's
+/// marker). VibeServer speaks the UberSDR protocol, so it maps to `.ubersdr` on the spike.
+func detectServerType(_ url: String) async -> ServerType? {
+  var base = url.trimmingCharacters(in: .whitespaces)
+  while base.hasSuffix("/") { base.removeLast() }
+  base = base.replacingOccurrences(of: "ws://", with: "http://").replacingOccurrences(of: "wss://", with: "https://")
+  guard let u = URL(string: base + "/") else { return nil }
+  var req = URLRequest(url: u); req.timeoutInterval = 5
+  do {
+    let (data, _) = try await URLSession.shared.data(for: req)
+    let body = (String(data: data, encoding: .utf8) ?? "").lowercased()
+    if body.contains("vibeserver") { return .ubersdr }                          // UberSDR-protocol
+    if body.contains("ubersdr") { return .ubersdr }
+    if body.range(of: "kiwisdr|kiwi sdr|/kiwi/|kiwi_util|owrx_ws_open", options: .regularExpression) != nil { return .kiwi }
+    if body.contains("openwebrx") { return .owrx }
+    if body.range(of: "fm-dx|fmdx", options: .regularExpression) != nil { return .fmdx }
+    return .ubersdr   // reachable but unidentifiable → assume UberSDR
+  } catch { return nil }
+}
+
 enum Directories {
   static let all: [DirectoryMeta] = [
     .init(id: "ubersdr",      name: "UberSDR",      desc: "Official UberSDR instances"),
