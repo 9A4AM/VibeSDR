@@ -58,8 +58,9 @@ final class OwrxClient: ObservableObject, SDRClient {
   private var audioCompression = "none"
   // Snapshots read by the off-main decode paths (benign single-writer-on-config races).
   nonisolated(unsafe) private var audioCompressionSnapshot = "none"
-  private var activeProfileId = ""
+  nonisolated(unsafe) private var activeProfileId = ""   // read off-main in buildProfiles
   private var started = false
+  private var zeroSecs = 0                                // consecutive no-data seconds (watchdog)
   private var handshaked = false
 
   // ── View (client-side slice of the whole-profile FFT) ──
@@ -101,7 +102,19 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
+        if self.frameCount > 0 {
+          self.retries = 0; self.zeroSecs = 0                          // data flowing → all good
+        } else if self.everFrame, !self.retrying {
+          self.zeroSecs += 1
+          // DATA WATCHDOG: OWRX can stop sending WITHOUT the socket erroring (silent stall — status
+          // stays 'live', connection glyph goes red, no reconnect fires). Force one after 3s.
+          if self.zeroSecs >= 3 { self.retry(reason: "no data 3s") }
+        }
+        // DEBUG telemetry in the pill: profile count / clients / frames-per-sec, so we can see if
+        // profiles ever arrive and when the stream stalls.
+        if self.everFrame, !self.retrying {
+          self.status = "P:\(self.profiles.count) c:\(self.clients) f:\(Int(self.framesPerSec))"
+        }
         self.frameCount = 0 }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
@@ -180,7 +193,7 @@ final class OwrxClient: ObservableObject, SDRClient {
           let type = json["type"] as? String else { return }
     switch type {
     case "config":   let v = json["value"] as? [String: Any] ?? [:]; Task { @MainActor in self.onConfig(v) }
-    case "profiles": let v = json["value"] as? [Any] ?? [];          Task { @MainActor in self.onProfiles(v) }
+    case "profiles": let ps = buildProfiles(json["value"] as? [Any] ?? []); Task { @MainActor in self.profiles = ps }
     case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { Task { @MainActor in self.clients = n } }
     case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { let db = 10 * log10(v); Task { @MainActor in self.signalDb = db } }
     case "sdr_error", "demodulator_error":
@@ -208,8 +221,9 @@ final class OwrxClient: ObservableObject, SDRClient {
     sendDemod()
   }
 
-  // Profile entries can be objects {id,name} OR bare strings — handle both (like the phone).
-  private func onProfiles(_ list: [Any]) {
+  // Profile entries can be objects {id,name} OR bare strings — handle both (like the phone). Runs
+  // OFF main (a large profiles list must not be grouped on the UI thread — that's the stall).
+  nonisolated private func buildProfiles(_ list: [Any]) -> [SDRProfile] {
     let raw: [(id: String, name: String)] = list.compactMap { el in
       if let d = el as? [String: Any] {
         let id = (d["id"] as? String) ?? String(describing: d["id"] ?? "")
@@ -230,10 +244,10 @@ final class OwrxClient: ObservableObject, SDRClient {
                               sdrName: sdrName.isEmpty ? "SDR" : sdrName, active: it.id == activeProfileId))
       }
     }
-    profiles = out
+    return out
   }
 
-  private func commonPrefix(_ strs: [String]) -> String {
+  nonisolated private func commonPrefix(_ strs: [String]) -> String {
     guard var pre = strs.first else { return "" }
     for s in strs.dropFirst() {
       var k = pre.startIndex, j = s.startIndex
