@@ -386,18 +386,26 @@ final class UberClient: ObservableObject {
   private func armSpectrumWatchdog() {
     let n = frameCount
     let seq = specOpenSeq
+    // "Initialised" = BOTH the binary frames flowing AND a config JSON confirmed for THIS
+    // subscription. They arrive as separate messages: if the config is lost but the binary
+    // frames aren't, the paint gate fails open and draws with a zero/stale span — a waterfall
+    // that never scales, while frameCount happily ticks. Checking frames alone let that slide
+    // through forever (audio fine, waterfall dead-on-arrival). Require the config too.
+    func healthy() -> Bool { frameCount != n && specConfigSeq == specSubscribeSeq }
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: 5_000_000_000)
       guard !self.goingIdle, self.specOpenSeq == seq else { return }   // torn down / newer socket supersedes
-      guard self.frameCount == n else { return }             // frames arrived — all well
-      self.specWsState = "spec ready but SILENT · re-subscribing"
+      guard !healthy() else { return }                       // frames AND config — all well
+      self.specWsState = "spec ready but not INITIALISED · re-subscribing"
       self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
 
       try? await Task.sleep(nanoseconds: 5_000_000_000)
       guard !self.goingIdle, self.specOpenSeq == seq else { return }
-      guard self.frameCount == n else { return }
-      self.specWsState = "spec SILENT · reopening"
+      guard !healthy() else { return }
+      self.specWsState = "spec not INITIALISED · reopening"
       self.specSock.cancel()
+      self.framesPerSec = 0    // we just cancelled — let retrySpectrum's `framesPerSec == 0` guard pass
+                               // even though binary frames WERE flowing (only the config was missing)
       self.retrySpectrum()
     }
   }
@@ -959,7 +967,11 @@ final class UberClient: ObservableObject {
   /// thing that beats the bin-resolution ceiling, and it is why the watch feels sharp.
   func zoom(delta: Int) {
     guard delta != 0, viewBinBw > 0 else { return }
-    let factor = pow(2.0, -Double(delta) / 6.0)
+    // Half an octave per detent. The server zooms in DISCRETE octaves, so a small per-detent
+    // creep (was /6 = 6 clicks) produced no visible change until the server's nearest level
+    // finally flipped — the "ring fills as you spin, then pops back" stickiness. Half-octave
+    // steps cross a server level every ~1–2 clicks, snappy without being a full-octave lurch.
+    let factor = pow(2.0, -Double(delta) / 2.0)
     let n = Double(max(binCount, 256))
     let bb = max(6_000 / n, min(viewBinBw * factor, 30_000_000 / n))
     // Anchor the zoom on the TUNED frequency, not viewCenterHz. viewCenterHz gets
