@@ -75,6 +75,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   // ── Sockets / audio / DSP ──
   nonisolated(unsafe) private let sock = AudioSocket(name: "owrx")
   nonisolated(unsafe) private let decodeQueue = DispatchQueue(label: "owrx.decode")  // off the receive queue
+  nonisolated(unsafe) private var pendingDecodes = 0                                  // decode-queue depth (drop FFT if high)
   nonisolated(unsafe) let waterfall: WaterfallBuffer
   private let proc = SignalProcessor()
   nonisolated(unsafe) private let audio = WatchAudio()
@@ -131,7 +132,13 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.onData = { [weak self] d in
       guard let self else { return }
       let bytes = [UInt8](d)
-      self.decodeQueue.async { self.onBinary(bytes) }
+      // DROP FFT frames if the decode queue is backing up (decode slower than arrival → the queue
+      // grows unbounded → memory pressure → freeze on a watch). NEVER drop audio (must stay
+      // continuous); the waterfall can miss frames harmlessly.
+      let isAudio = bytes.first == 2 || bytes.first == 4
+      if !isAudio, self.pendingDecodes > 3 { return }
+      self.pendingDecodes += 1
+      self.decodeQueue.async { self.onBinary(bytes); self.pendingDecodes -= 1 }
     }
     sock.onState = { [weak self] st in
       Task { @MainActor in
