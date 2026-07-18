@@ -108,14 +108,11 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0 {
-          self.retries = 0; self.zeroSecs = 0                          // data flowing → all good
-        } else if self.everFrame, !self.retrying {
-          self.zeroSecs += 1
-          // DATA WATCHDOG: OWRX can stop sending WITHOUT the socket erroring (silent stall — status
-          // stays 'live', connection glyph goes red, no reconnect fires). Force one after 3s.
-          if self.zeroSecs >= 3 { self.retry(reason: "no data 3s") }
-        }
+        if self.frameCount > 0 { self.retries = 0 }
+        // NO DATA WATCHDOG. The phone keeps OWRX alive by doing NOTHING — no keepalive, no reconnect
+        // on data gaps; it only reacts to a real socket CLOSE. Our old 'no data 3s' watchdog was
+        // tearing down healthy connections on a brief audio gap, which WAS the instability. We now
+        // only reconnect on a genuine socket failed/recv (handled in onState), exactly like the phone.
         // DEBUG telemetry in the pill: profile count / clients / frames-per-sec, so we can see if
         // profiles ever arrive and when the stream stalls.
         if self.everFrame, !self.retrying {
