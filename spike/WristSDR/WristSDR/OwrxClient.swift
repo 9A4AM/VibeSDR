@@ -460,7 +460,6 @@ final class OwrxClient: ObservableObject, SDRClient {
   func goIdle() {
     goingIdle = true
     rateTimer?.invalidate(); rateTimer = nil
-    pingSource?.cancel(); pingSource = nil
     sock.cancel(); audio.stop()
     if status != "dropped" { status = "idle" }
   }
