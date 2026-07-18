@@ -546,7 +546,9 @@ struct ControlMenu: View {
   }
 
   // Mirrors sdrTypes.ts. Kept in the order the phone lists them.
-  static let modes = ["usb", "lsb", "am", "sam", "fm", "nfm", "cwu", "cwl"]
+  // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
+  // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
+  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
