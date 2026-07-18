@@ -1543,12 +1543,14 @@ struct ContentView: View {
         // CW case; scaling costs nothing and is always readable at a glance.
         .lineLimit(1)
         .minimumScaleFactor(0.55)
+        .outlined()          // legible over the bright SNR bar when the screen dims
       // Whatever the phone's meter says — S-meter, dBFS, SNR or FM-DX's dBf. We
       // do not choose the metric here; see WatchLink.meter.
       Text(link.meter.isEmpty ? "—" : link.meter)
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.9))
+        .outlined()
         .layoutPriority(-1)   // the frequency wins the space
     }
     .padding(.horizontal, 12)
@@ -1633,5 +1635,17 @@ enum SignalGradient {
             .init(color: orange, location: 0.15),
             .init(color: amber, location: 0.45),
             .init(color: green, location: 1)]
+  }
+}
+
+extension View {
+  /// A crisp black outline (4-way offset shadows) so light digits stay legible over the bright
+  /// SNR bar — especially when the screen dims. Cheap: no blur, radius 0.
+  func outlined(_ color: Color = .black, _ w: CGFloat = 0.9) -> some View {
+    self
+      .shadow(color: color, radius: 0, x:  w, y: 0)
+      .shadow(color: color, radius: 0, x: -w, y: 0)
+      .shadow(color: color, radius: 0, x: 0, y:  w)
+      .shadow(color: color, radius: 0, x: 0, y: -w)
   }
 }
