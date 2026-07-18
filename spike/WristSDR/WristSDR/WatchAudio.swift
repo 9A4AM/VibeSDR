@@ -257,6 +257,21 @@ final class WatchAudio {
       let out = s.currentRoute.outputs.first?.portType.rawValue ?? "NONE"
       Vitals.crumb("AUDIO route change (reason \(r)) → \(out)")
     }
+    // BACK TO THE FOREGROUND. A wrist-flick / dismiss backgrounds the app and can stop the engine
+    // (audio then dead until a force-quit). Restart the engine + player whenever the app becomes active
+    // again — global, so it covers every screen (waterfall, DAB, ADS-B), not just ContentView.
+    NotificationCenter.default.addObserver(
+      forName: WKApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+      AVAudioSession.sharedInstance().activate(options: []) { _, _ in }
+      self.q.async {
+        if !self.engine.isRunning { try? self.engine.start() }
+        if !self.player.isPlaying { self.player.play() }
+        Vitals.crumb("AUDIO restart on didBecomeActive: running=\(self.engine.isRunning)")
+      }
+    }
   }
 
   private func startEngine() throws {
@@ -307,6 +322,10 @@ final class WatchAudio {
     startSilenceKeeper()
     watchSession()
     becomeNowPlaying()
+    // Keep the app FRONTMOST longer on wrist-down — extends the default ~2 min return-to-clock timeout to
+    // ~8 min WITHOUT the user changing the OS "Return to App" setting. Not a full replacement (their
+    // setting keeps it up indefinitely), but it makes wrist-down-and-resume work out of the box.
+    DispatchQueue.main.async { WKExtension.shared().isFrontmostTimeoutExtended = true }
     Vitals.crumb("AUDIO engine started · out=\(out) · silence-keeper ON")
 
     // WHEN THE ENGINE RECONFIGURES, THE GRAPH IS ALREADY TORN DOWN. AVAudioEngine posts this

@@ -16,6 +16,10 @@ import SwiftUI
 struct WristSDRApp: App {
   @StateObject private var link = SpikeLink()
   @StateObject private var favs = FavStore()
+  /// One-time first-use tip: the "Return to App" watch setting is what makes wrist-down listening +
+  /// spectrum-resume-on-raise work (the killer feature — half-hour drives on cellular). Shown once.
+  @AppStorage("seenReturnToAppTip") private var seenReturnTip = false
+  @State private var showReturnTip = false
 
   var body: some Scene {
     WindowGroup {
@@ -48,6 +52,42 @@ struct WristSDRApp: App {
           }
         }
       }
+      // First-use card: show once the FIRST time a server is connected (so it lands in context, not on
+      // the empty picker). Explains the "Return to App" setting behind wrist-down listening.
+      .onChange(of: link.serverName) { _, name in
+        if !name.isEmpty, !seenReturnTip { showReturnTip = true }
+      }
+      .sheet(isPresented: $showReturnTip) {
+        ReturnToAppTip { seenReturnTip = true; showReturnTip = false }
+      }
     }
+  }
+}
+
+/// One-time onboarding card: how to get uninterrupted wrist-down listening (audio keeps playing, the
+/// spectrum resumes the instant you raise your wrist). It hinges on the watch NOT jumping back to the
+/// clock face — the "Return to App" / "Return to Last App" setting.
+struct ReturnToAppTip: View {
+  let onDismiss: () -> Void
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 6) {
+          Image(systemName: "applewatch.radiowaves.left.and.right").foregroundStyle(.orange)
+          Text("Wrist-down listening").font(.headline)
+        }
+        Text("Great for out and about — audio keeps playing with your wrist down, and the waterfall is ready to go the instant you raise it.")
+          .font(.system(size: 13)).foregroundStyle(.white.opacity(0.85))
+        Text("For it to work, stop the watch jumping to the clock face:")
+          .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+        Text("Settings › General › Return to Clock → set VibeSDR to **Return to App** (or a long delay).")
+          .font(.system(size: 12, weight: .medium)).foregroundStyle(.cyan)
+        Button(action: onDismiss) {
+          Text("Got it").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+        }.tint(.orange).padding(.top, 4)
+      }
+      .padding(.horizontal, 4)
+    }
+    .navigationTitle("Tip")
   }
 }

@@ -876,7 +876,10 @@ final class OwrxClient: ObservableObject, SDRClient {
     sendDemod()
   }
   func setBandwidth(_ low: Double, _ high: Double) { bwLow = low; bwHigh = high; sendDemod() }
-  func resumeSpectrum() {}
+  // OWRX never dropped its socket on suspend (the FFT keeps flowing), so resume just clears the
+  // background status — otherwise it stays "background · audio only" forever on return, and isBackground
+  // stays stuck true (the debug pill showed this even with the waterfall live).
+  func resumeSpectrum() { if status.hasPrefix("background") { status = "live" } }
   func suspend() { specQueue.removeAll(); status = "background · audio only" }
   func reconnectIfNeeded() {}
   func goIdle() {

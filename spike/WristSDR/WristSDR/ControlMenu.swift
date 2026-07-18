@@ -427,6 +427,13 @@ struct ControlMenu: View {
             dismiss(); link.backToPicker()
           }
 
+          // STOP — the ONLY in-app way to actually stop the audio. Background-audio mode keeps the app
+          // playing through a wrist-flick / crown press, so without this the only ways to silence it are
+          // force-quit or the Now Playing screen. Drops audio + sockets and lands back on the picker.
+          tile(icon: "stop.circle.fill", label: "Stop", h: h) {
+            dismiss(); link.backToPicker()
+          }
+
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to
           // undo it with — and no obvious way to tell that the WATCH is what they
