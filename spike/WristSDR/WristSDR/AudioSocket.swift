@@ -49,6 +49,15 @@ final class AudioSocket {
     if forceIPv4, let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
       ip.version = .v4
     }
+    // TCP keepalive — invisible to the WebSocket layer (unlike a WS ping the server sees). Keeps the
+    // NAT/idle mapping alive on a long stream AND surfaces a truly dead peer as a socket error →
+    // clean reconnect. This is the right tool for the ~5-min idle drop.
+    if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+      tcp.enableKeepalive = true
+      tcp.keepaliveIdle = 20
+      tcp.keepaliveInterval = 10
+      tcp.keepaliveCount = 4
+    }
     let ws = NWProtocolWebSocket.Options()
     // autoReplyPing=false surfaces .ping to receive() so we PONG manually — belt-and-braces where the
     // native auto-reply seems not to fire (OWRX stalls the stream after a few seconds otherwise).

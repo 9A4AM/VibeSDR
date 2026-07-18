@@ -108,34 +108,20 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0 {
-          self.retries = 0; self.zeroSecs = 0
-        } else if self.everFrame, !self.retrying {
-          self.zeroSecs += 1
-          // GENTLE watchdog (15s, not 3s). The keepalive ping prevents the idle drop; this only
-          // catches a GENUINE silent stall (both audio AND FFT stopped — frameCount counts both), and
-          // tolerates OWRX's normal multi-second audio stutters that the old 3s watchdog false-fired on.
-          if self.zeroSecs >= 15 { self.retry(reason: "no data 15s") }
-        }
+        if self.frameCount > 0 { self.retries = 0 }
+        // NO app-level watchdog and NO WS keepalive ping — both broke the "rock solid" state (the
+        // client ping disrupts OWRX; the watchdog false-fired on stutters). Liveness is handled at
+        // the TCP layer (keepalive, see AudioSocket) which keeps the NAT mapping alive AND surfaces a
+        // truly dead peer as a socket error → the onState reconnect. Exactly the phone's "do nothing".
         if self.everFrame, !self.retrying {
           self.status = "P:\(self.profiles.count) f:\(Int(self.framesPerSec)) cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
         self.frameCount = 0 }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
-
-    // KEEPALIVE PING — every 25s, on a background timer, to keep the connection alive outbound
-    // (browsers/RN do this; a raw NWConnection doesn't → a ~5-min idle drop). See AudioSocket.sendPing.
-    let ping = DispatchSource.makeTimerSource(queue: pingQueue)
-    ping.schedule(deadline: .now() + 25, repeating: 25)
-    ping.setEventHandler { [weak self] in self?.sock.sendPing() }
-    ping.resume(); pingSource = ping
-
     audio.start { _, _ in }
     openSocket()
   }
-  nonisolated(unsafe) private var pingSource: DispatchSourceTimer?
-  private let pingQueue = DispatchQueue(label: "owrx.ping")
 
   private func openSocket() {
     sock.onText = { [weak self] s in self?.onText(s) }   // parse OFF main (OWRX+ floods JSON)
@@ -238,28 +224,33 @@ final class OwrxClient: ObservableObject, SDRClient {
     }
   }
 
+  private var lastConfigCenter = 0.0
   private func onConfig(_ c: [String: Any]) {
+    let prevCenter = centerFreq
     if let cf = (c["center_freq"] as? NSNumber)?.doubleValue { centerFreq = cf }
     if let sr = (c["samp_rate"] as? NSNumber)?.doubleValue { sampRate = sr }
     if let fc = c["fft_compression"] as? String { fftCompression = fc; fftCompressionSnapshot = fc }
     if let ac = c["audio_compression"] as? String { audioCompression = ac; audioCompressionSnapshot = ac }
     modeSnapshot = mode
-    // Fresh profile → land the VFO at (or near) the profile centre, reset the view to a sensible span.
-    if frequency == 0 || abs(frequency - centerFreq) > sampRate / 2, centerFreq != 0 {
-      frequency = centerFreq
-      if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
+    // A RECONNECT re-sends config for the SAME profile — preserve the VFO, zoom and demod so a blip
+    // doesn't yank the view/mode back. Only reset those on a genuinely NEW profile (centre changed).
+    let sameProfile = (centerFreq == prevCenter && prevCenter != 0)
+    if !sameProfile {
+      if frequency == 0 || abs(frequency - centerFreq) > sampRate / 2, centerFreq != 0 {
+        frequency = centerFreq
+        if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
+      }
+      viewCenter = frequency
+      // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
+      // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
+      viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
+      // ADOPT THE PROFILE'S DEFAULT DEMODULATOR (start_mod) so a switch lands on the right demod.
+      if let sm = c["start_mod"] as? String, let spikeMode = Self.wireToSpike[sm.lowercased()] {
+        mode = spikeMode; modeSnapshot = spikeMode
+        if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
+      }
     }
-    viewCenter = frequency
-    // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
-    // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
-    viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
-    // ADOPT THE PROFILE'S DEFAULT DEMODULATOR. Each OWRX profile ships a `start_mod`; without this
-    // the user had to hand-change the demod on every profile switch. Map the OWRX wire mode back to
-    // our mode + its passband. (The tuning STEP is per-profile too, but lives on SpikeLink — TODO.)
-    if let sm = c["start_mod"] as? String, let spikeMode = Self.wireToSpike[sm.lowercased()] {
-      mode = spikeMode; modeSnapshot = spikeMode
-      if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
-    }
+    lastConfigCenter = centerFreq
     audioDec.reset(); hdAudioDec.reset()
     sendDemod()
   }
