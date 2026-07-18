@@ -46,7 +46,10 @@ final class OwrxClient: ObservableObject, SDRClient {
   var displaySpanHz: Double { viewBw }
 
   // ── Endpoint ──
-  private let wsURL: URL
+  private let hostPart: String          // host:port
+  private var secure: Bool              // wss vs ws (auto-falls-back to ws on a TLS error)
+  private var triedInsecureFallback = false
+  private var wsURL: URL { URL(string: "\(secure ? "wss" : "ws")://\(hostPart)/ws/")! }
 
   // ── Server / profile state ──
   private var centerFreq = 0.0
@@ -84,10 +87,10 @@ final class OwrxClient: ObservableObject, SDRClient {
     self.waterfall = waterfall
     // http(s)://host:port[/path] → ws(s)://host:port/ws/  (bare /ws 404s — the route is exactly "/ws/")
     var u = url
-    let secure = u.hasPrefix("https") || u.hasPrefix("wss")
+    self.secure = u.hasPrefix("https") || u.hasPrefix("wss")
     for p in ["https://", "http://", "wss://", "ws://"] { if u.hasPrefix(p) { u.removeFirst(p.count) } }
     if let slash = u.firstIndex(of: "/") { u = String(u[..<slash]) }
-    self.wsURL = URL(string: "\(secure ? "wss" : "ws")://\(u)/ws/")!
+    self.hostPart = u
     proc.autoContrast = 5
   }
 
@@ -108,6 +111,19 @@ final class OwrxClient: ObservableObject, SDRClient {
     sock.onState = { [weak self] st in
       Task { @MainActor in
         guard let self else { return }
+        // wss → ws auto-fallback: a plain-HTTP OWRX box (most self-hosted ones) refuses TLS with
+        // "-9836 bad protocol version". If we tried wss and hit that, retry once as ws.
+        let lower = st.lowercased()
+        if self.secure, !self.triedInsecureFallback,
+           lower.contains("9836") || lower.contains("protocol version") || lower.contains("tls") || lower.contains("secure") {
+          self.triedInsecureFallback = true
+          self.secure = false
+          self.handshaked = false
+          self.status = "retrying (ws)…"
+          self.sock.cancel()
+          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)])
+          return
+        }
         if !self.everFrame, self.status != "live" { self.status = st }
         if st.contains("ready"), !self.handshaked {
           self.handshaked = true
