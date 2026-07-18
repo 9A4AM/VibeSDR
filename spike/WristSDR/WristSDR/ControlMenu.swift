@@ -292,6 +292,8 @@ struct ControlMenu: View {
   @State private var showModes = false
   @State private var showSteps = false
   @State private var showCrown = false
+  @State private var showProfiles = false
+  private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
   @State private var showBw = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
@@ -343,6 +345,24 @@ struct ControlMenu: View {
         .padding(.leading, 8)
 
         ScrollView {
+          // PROFILES — top of the menu, full width (OWRX only). Shows the active profile + listener
+          // count; opens the grouped picker. Switching is EXPLICIT (etiquette) — never automatic.
+          if !link.profiles.isEmpty {
+            Button { showProfiles = true } label: {
+              HStack(spacing: 8) {
+                Image(systemName: "dial.medium.fill").font(.system(size: 18)).foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                  Text("PROFILES").font(.system(size: 11, weight: .bold)).foregroundColor(.orange)
+                  Text("\(activeProfileName) · \(link.clients) listening").font(.system(size: 11)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                }
+                Spacer(); Image(systemName: "chevron.right").foregroundColor(.white.opacity(0.4))
+              }
+              .padding(.horizontal, 10).padding(.vertical, 8)
+              .frame(maxWidth: .infinity)
+              .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain).padding(.bottom, 5)
+          }
           LazyVGrid(columns: cols, spacing: 5) {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
@@ -419,6 +439,10 @@ struct ControlMenu: View {
     .toolbar(.hidden, for: .navigationBar)
     .sheet(isPresented: $showCrown) {
       CrownPicker(current: $crownSens) { showCrown = false; dismiss() }
+    }
+    .sheet(isPresented: $showProfiles) {
+      ProfileSheet { id in link.selectProfile(id); showProfiles = false; dismiss() }
+        .environmentObject(link)
     }
     .sheet(isPresented: $showModes) {
       PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
@@ -622,5 +646,42 @@ struct PickerList: View {
       }
     }
     .navigationTitle(title)
+  }
+}
+
+/// OWRX profile picker — grouped SDR → profiles, matching the phone. Active profile flagged; opens
+/// with a brief etiquette reminder (switching retunes the SHARED receiver for everyone here).
+struct ProfileSheet: View {
+  @EnvironmentObject var link: SpikeLink
+  let onSelect: (String) -> Void
+
+  private var sdrs: [String] {
+    var seen = Set<String>(); var out = [String]()
+    for p in link.profiles where !seen.contains(p.sdrName) { seen.insert(p.sdrName); out.append(p.sdrName) }
+    return out
+  }
+
+  var body: some View {
+    List {
+      Section {
+        Text("⚠︎ Switching retunes this receiver for everyone (\(link.clients) listening). Please ask in chat first.")
+          .font(.system(size: 10.5)).foregroundColor(.orange).lineLimit(nil)
+      }
+      ForEach(sdrs, id: \.self) { sdr in
+        Section(sdr) {
+          ForEach(link.profiles.filter { $0.sdrName == sdr }) { p in
+            Button { onSelect(p.id) } label: {
+              HStack(spacing: 8) {
+                Text(p.name).font(.system(size: 14)).foregroundColor(p.active ? .green : .white).lineLimit(1)
+                Spacer()
+                // In-use / active indicator (the profile we're currently on).
+                if p.active { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
+              }
+            }.buttonStyle(.plain)
+          }
+        }
+      }
+    }
+    .navigationTitle("Profiles")
   }
 }

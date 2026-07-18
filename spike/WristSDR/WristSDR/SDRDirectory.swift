@@ -32,7 +32,7 @@ enum ServerType: String, Codable, CaseIterable {
     }
   }
   /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr || self == .kiwi }
+  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.

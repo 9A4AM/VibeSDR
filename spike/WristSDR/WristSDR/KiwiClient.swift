@@ -33,6 +33,13 @@ protocol SDRClient: AnyObject {
   func goIdle()
 }
 
+// OWRX-only surface — default-empty so UberSDR/Kiwi don't implement it.
+extension SDRClient {
+  var profiles: [SDRProfile] { [] }
+  var clients: Int { 0 }
+  func selectProfile(_ id: String) {}
+}
+
 extension UberClient: SDRClient {
   /// UberSDR surfaces its own refusals via its status/cards; no separate channel here.
   var lastError: String? { nil }

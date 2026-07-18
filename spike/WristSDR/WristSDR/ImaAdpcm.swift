@@ -25,28 +25,46 @@ final class ImaAdpcmDecoder {
   private let clampLo: Int
   private let clampHi: Int
 
-  init(clampLo: Int = -32768, clampHi: Int = 32767) {
+  /// 'kiwi' (libcsdr): step from CURRENT index before decoding, index adjusts after.
+  /// 'owrx' (openwebrx AudioEngine): index adjusts FIRST, diff uses the step LATCHED at the end of
+  /// the previous nibble; first nibble after reset uses step=0; a state load leaves step stale.
+  enum Flavor { case kiwi, owrx }
+  private let flavor: Flavor
+  private var step = 0   // owrx: latched step
+
+  init(flavor: Flavor = .kiwi, clampLo: Int = -32768, clampHi: Int = 32767) {
+    self.flavor = flavor
     self.clampLo = clampLo
     self.clampHi = clampHi
   }
 
-  func reset() { index = 0; predictor = 0 }
+  func reset() { index = 0; predictor = 0; step = 0 }
 
-  /// Kiwi `MSG audio_adpcm_state=<index>,<prev>`.
+  /// Kiwi `MSG audio_adpcm_state=<index>,<prev>` / OWRX sync-frame state (owrx keeps `step` stale).
   func setState(index: Int, predictor: Int) {
     self.index = min(max(index, 0), 88)
     self.predictor = predictor
   }
 
-  @inline(__always) private func decodeNibble(_ nibble: Int) -> Int {
-    let step = Self.stepTable[index]
-    var diff = step >> 3
-    if nibble & 1 != 0 { diff += step >> 2 }
-    if nibble & 2 != 0 { diff += step >> 1 }
-    if nibble & 4 != 0 { diff += step }
+  @inline(__always) func decodeNibble(_ nibble: Int) -> Int {
+    let s: Int
+    if flavor == .kiwi {
+      s = Self.stepTable[index]
+    } else {
+      index = min(max(index + Self.indexTable[nibble], 0), 88)
+      s = step
+    }
+    var diff = s >> 3
+    if nibble & 1 != 0 { diff += s >> 2 }
+    if nibble & 2 != 0 { diff += s >> 1 }
+    if nibble & 4 != 0 { diff += s }
     if nibble & 8 != 0 { diff = -diff }
     predictor = min(max(predictor + diff, clampLo), clampHi)
-    index = min(max(index + Self.indexTable[nibble], 0), 88)
+    if flavor == .kiwi {
+      index = min(max(index + Self.indexTable[nibble], 0), 88)
+    } else {
+      step = Self.stepTable[index]
+    }
     return predictor
   }
 
@@ -71,4 +89,56 @@ func decodeKiwiWaterfallFrame(_ data: ArraySlice<UInt8>) -> [UInt8] {
   let pad = 10
   guard all.count > pad else { return [] }
   return all[pad...].map { UInt8(clamping: $0) }
+}
+
+/// OWRX compressed FFT frame → Float32 dB row. Fresh 'owrx' state per frame; first 10 samples are
+/// COMPRESS_FFT_PAD_N padding, then dB = int16 / 100. (Port of imaAdpcm.ts decodeOwrxFftFrame.)
+func decodeOwrxFftFrame(_ data: ArraySlice<UInt8>) -> [Float] {
+  let dec = ImaAdpcmDecoder(flavor: .owrx)
+  let all = dec.decode(data)
+  let pad = 10
+  guard all.count > pad else { return [] }
+  return all[pad...].map { Float($0) / 100.0 }
+}
+
+/// OWRX audio ADPCM stream with embedded "SYNC" framing — a port of AudioEngine.js decodeWithSync.
+/// Every sync frame carries the codec state (stepIndex s16 LE, predictor s16 LE) then 1000 payload
+/// bytes. Persistent across frames; reset on profile change.
+final class OwrxAudioDecoder {
+  private let codec = ImaAdpcmDecoder(flavor: .owrx)
+  private var phase = 0            // 0=hunt SYNC, 1=read 4-byte state, 2=payload
+  private var synchronized = 0
+  private var syncBuffer = [UInt8](repeating: 0, count: 4)
+  private var syncBufferIndex = 0
+  private var syncCounter = 0
+  private static let sync: [UInt8] = [0x53, 0x59, 0x4e, 0x43]   // "SYNC"
+
+  func reset() { codec.reset(); phase = 0; synchronized = 0; syncBufferIndex = 0; syncCounter = 0 }
+
+  func decode(_ data: ArraySlice<UInt8>) -> [Int16] {
+    var out = [Int16](); out.reserveCapacity(data.count * 2)
+    for b in data {
+      switch phase {
+      case 0:
+        if b != Self.sync[synchronized] { synchronized = 0 } else { synchronized += 1 }
+        if synchronized == 4 { syncBufferIndex = 0; phase = 1 }
+      case 1:
+        syncBuffer[syncBufferIndex] = b; syncBufferIndex += 1
+        if syncBufferIndex == 4 {
+          let stepIndex = Int(Int16(bitPattern: UInt16(syncBuffer[0]) | (UInt16(syncBuffer[1]) << 8)))
+          let predictor = Int(Int16(bitPattern: UInt16(syncBuffer[2]) | (UInt16(syncBuffer[3]) << 8)))
+          codec.setState(index: stepIndex, predictor: predictor)
+          syncCounter = 1000
+          phase = 2
+        }
+      default:
+        out.append(Int16(clamping: codec.decodeNibble(Int(b) & 0x0f)))
+        out.append(Int16(clamping: codec.decodeNibble(Int(b) >> 4)))
+        syncCounter -= 1
+        if syncCounter < 0 { synchronized = 0; phase = 0 }
+      }
+    }
+    return out
+  }
+  func decode(_ data: [UInt8]) -> [Int16] { decode(data[...]) }
 }

@@ -85,6 +85,11 @@ final class SpikeLink: ObservableObject {
   /// The backend client's own status string (Kiwi: 'live' / 'registering' / 'reconnecting N: <reason>').
   /// Surfaced small on screen so a mid-session drop's REASON is visible (debug).
   @Published var backendStatus = ""
+  /// OWRX profiles (grouped SDR→profiles) + connected-listener count, mirrored from the client.
+  @Published var profiles: [SDRProfile] = []
+  @Published var clients = 0
+  /// EXPLICIT profile switch from the profile menu — never automatic (etiquette).
+  func selectProfile(_ id: String) { client?.selectProfile(id) }
 
   // ── Band plan: NONE yet in the spike. Left blank; the label/edges simply don't draw. ──
   @Published var bandName = ""
@@ -171,7 +176,9 @@ final class SpikeLink: ObservableObject {
     switch type {
     case .kiwi:
       c = KiwiClient(url: url, waterfall: waterfall)
-    default:  // .ubersdr (only connectable web backends for now)
+    case .owrx:
+      c = OwrxClient(url: url, waterfall: waterfall)
+    default:  // .ubersdr
       let u = UberClient(waterfall: waterfall)
       u.host = host
       c = u
@@ -200,6 +207,8 @@ final class SpikeLink: ObservableObject {
     client.drainSpectrum(now: now)
     if connectError != client.lastError { connectError = client.lastError }
     if backendStatus != client.status { backendStatus = client.status }
+    if clients != client.clients { clients = client.clients }
+    if profiles != client.profiles { profiles = client.profiles }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode { mode = client.mode }
