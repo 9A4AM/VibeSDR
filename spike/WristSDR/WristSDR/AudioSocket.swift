@@ -81,7 +81,14 @@ final class AudioSocket {
       }
       let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                 as? NWProtocolWebSocket.Metadata)?.opcode
-      if let data, !data.isEmpty {
+      if op == .ping {
+        // MANUAL PONG. `autoReplyPing` is set, but if it silently doesn't fire on watchOS the
+        // server (KiwiSDR) sees a missed pong and RSTs us after a few seconds (recv ENOTCONN).
+        // Answer every ping ourselves — harmless if the framework already did.
+        let meta = NWProtocolWebSocket.Metadata(opcode: .pong)
+        let ctx = NWConnection.ContentContext(identifier: "pong", metadata: [meta])
+        c.send(content: data ?? Data(), contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+      } else if let data, !data.isEmpty {
         if op == .text {
           if let t = String(data: data, encoding: .utf8) { self.onText?(t) }
         } else if op == .binary {
