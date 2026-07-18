@@ -37,13 +37,18 @@ final class AudioSocket {
 
   /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
   /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
-  func open(url: URL, headers: [(name: String, value: String)] = []) {
+  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false) {
     gen &+= 1
     let g = gen
     cancel()
 
     let secure = (url.scheme == "wss")
     let params: NWParameters = secure ? .tls : .tcp
+    // Force IPv4 when asked: a dynamic-DNS host (freemyip etc.) can hand back an AAAA the watch
+    // can't route home ("no route to host") while IPv4 works fine — pin to v4 to dodge it.
+    if forceIPv4, let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+      ip.version = .v4
+    }
     let ws = NWProtocolWebSocket.Options()
     ws.autoReplyPing = true                       // answer the server's pings natively
     if !headers.isEmpty { ws.setAdditionalHeaders(headers) }

@@ -121,7 +121,7 @@ final class OwrxClient: ObservableObject, SDRClient {
           self.handshaked = false
           self.status = "retrying (ws)…"
           self.sock.cancel()
-          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)])
+          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
           return
         }
         if !self.everFrame, self.status != "live" { self.status = st }
@@ -136,7 +136,7 @@ final class OwrxClient: ObservableObject, SDRClient {
         }
       }
     }
-    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)])
+    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
   }
 
   private func send(_ obj: [String: Any]) {
