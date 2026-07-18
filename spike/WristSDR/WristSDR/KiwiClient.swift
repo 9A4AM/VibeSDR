@@ -118,6 +118,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let audioDec = ImaAdpcmDecoder(clampLo: -32768, clampHi: 32767)
   private var audioStarted = false
   nonisolated(unsafe) private var keepaliveSource: DispatchSourceTimer?
+  nonisolated(unsafe) private var kaCount = 0     // keepalives actually sent (debug)
   private let keepaliveQueue = DispatchQueue(label: "kiwi.keepalive")
   private var rateTimer: Timer?
   private var frameCount = 0
@@ -185,7 +186,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     retrying = true
     retries += 1
     if !reason.isEmpty { dropReason = reason }
-    status = "reconnecting \(retries): \(dropReason)"
+    status = "reconnect \(retries) ka=\(kaCount): \(dropReason)"
     sndSock.cancel(); wfSock.cancel()
     sndAuthed = false; wfAuthed = false; wfOpened = false
     let wait = UInt64(min(retries, 5)) * 1_500_000_000   // 1.5s → 7.5s, then hold
@@ -292,6 +293,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     t.schedule(deadline: .now() + 0.5, repeating: 1.0)
     t.setEventHandler { [weak self] in
       guard let self else { return }
+      self.kaCount &+= 1
       self.sndSock.send(text: "SET keepalive")
       self.wfSock.send(text: "SET keepalive")
     }
