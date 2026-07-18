@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F7 /* OwrxClient.swift */; };
+		A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F9 /* AircraftView.swift */; };
 		A1936C9D44AFF44DEFAAD0F7 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F8 /* DabView.swift */; };
 		A1936C9D44AFF44DEFAAD0E5 /* OwrxSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */; };
 		B67CAAC9C40F82EDD20C83D9 /* rtltcp.png in Resources */ = {isa = PBXBuildFile; fileRef = 5109AD6983CF9B61DFD0B470 /* rtltcp.png */; };
@@ -41,6 +42,7 @@
 
 /* Begin PBXFileReference section */
 		BB20E378E2831CA4F85135F7 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
+		BB20E378E2831CA4F85135F9 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135F8 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxSocket.swift; sourceTree = "<group>"; };
 		5109AD6983CF9B61DFD0B470 /* rtltcp.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Logos/rtltcp.png"; sourceTree = "<group>"; };
@@ -91,6 +93,7 @@
 			isa = PBXGroup;
 			children = (
 				BB20E378E2831CA4F85135F7 /* OwrxClient.swift */,
+				BB20E378E2831CA4F85135F9 /* AircraftView.swift */,
 				BB20E378E2831CA4F85135F8 /* DabView.swift */,
 				BB20E378E2831CA4F85135E5 /* OwrxSocket.swift */,
 				5109AD6983CF9B61DFD0B470 /* rtltcp.png */,
@@ -224,6 +227,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */,
+				A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0F7 /* DabView.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0E5 /* OwrxSocket.swift in Sources */,
 				0FF91F53C13F2C0276A0F3D1 /* KiwiClient.swift in Sources */,

@@ -19,7 +19,19 @@ struct DabView: View {
   @State private var showProfiles = false
   @State private var showMenu = false
   @State private var showSpeed = false
+  @State private var locked = false
+  @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
+  @State private var volTimeout: DispatchWorkItem?
   @FocusState private var crownFocused: Bool
+
+  /// Auto-exit volume mode after a few idle seconds (reset on each volume change). Matches the native
+  /// volume HUD, which fades out on its own.
+  private func armVolTimeout() {
+    volTimeout?.cancel()
+    let work = DispatchWorkItem { volumeMode = false }
+    volTimeout = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+  }
 
   private var speedLabel: String {
     speeds.first { abs(link.dabScale - $0.v) < 0.001 }?.l ?? "×\(String(format: "%.2f", link.dabScale))"
@@ -44,10 +56,21 @@ struct DabView: View {
         .buttonStyle(.plain)
         .handGestureShortcut(.primaryAction)
     }
-    .focusable(true)
+    // In volume mode the list releases the crown so the native VolumeControl can own it (+ Apple's HUD).
+    .focusable(!volumeMode)
     .focused($crownFocused)
     .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
                           sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
+    .overlay(alignment: .trailing) {
+      if volumeMode {
+        VolumeControl(focused: true).frame(width: 34, height: 120).padding(.trailing, 2)
+      }
+    }
+    .onChange(of: volumeMode) { _, v in
+      if v { crownFocused = false; armVolTimeout() }               // release list crown → VolumeControl
+      else { volTimeout?.cancel(); DispatchQueue.main.async { crownFocused = true } }   // re-grab for the cursor
+    }
+    .onChange(of: link.volume) { _, _ in if volumeMode { armVolTimeout() } }   // activity resets the timeout
     .onChange(of: crown) { _, new in
       let detent = Int(new.rounded())
       guard detent != lastDetent else { return }
@@ -64,22 +87,16 @@ struct DabView: View {
       ProfileSheet { id in link.selectProfile(id); showProfiles = false }
         .environmentObject(link)
     }
-    // Hold-menu, same as the main screen — the familiar way back to Profiles/Servers/Volume. The list
-    // rows use tap; a long press on the background opens the menu. (The header dial button is the quick
-    // path; this is the muscle-memory one.)
-    .onLongPressGesture(minimumDuration: 0.45) {
-      WKInterfaceDevice.current().play(.click)
-      showMenu = true
-    }
     .navigationDestination(isPresented: $showMenu) {
       ControlMenu { _ in }.environmentObject(link)
     }
+    // Passive status icons in the clock's band, top-left (clock keeps the right corner).
+    .overlay(alignment: .topLeading) { chrome }
     .sheet(isPresented: $showSpeed) {
       DabSpeedSheet(current: link.dabScale, speeds: speeds) { v in link.setDabScale(v); showSpeed = false }
     }
-    // Drive the client→UI mirror here too. driverTick lives on ContentView, which isn't rendered on the
-    // DAB screen — without this the service list never grows and the "playing" icon never moves once you
-    // land on DAB. 4 Hz is plenty for a list (no waterfall to keep smooth).
+    // Drive the client→UI mirror here — driverTick lives on ContentView (not rendered on this screen), so
+    // without this the service list never grows and the "playing" icon never moves. 4 Hz suits a list.
     .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
@@ -92,9 +109,22 @@ struct DabView: View {
     }
   }
 
+  // PASSIVE status icons only — safe up in the clock's band (which doesn't take touches). The lock/menu
+  // BUTTONS live in the header (tappable area).
+  private var chrome: some View {
+    HStack(spacing: 6) {
+      BatteryPill(level: link.battery)
+      ConnGlyph(transport: link.transport).font(.system(size: 11))
+      QualityGlyph(link: link)
+    }
+    .padding(.leading, 28).padding(.top, 3)
+    .ignoresSafeArea(edges: .top)
+  }
+
   /// Commit the service under the cursor — from a tap OR the pinch gesture (the latter works in Water
   /// Lock, where taps don't). No-op if the cursor's service is already playing.
   private func commitCursor() {
+    guard !locked else { return }
     guard link.dabProgrammes.indices.contains(cursor) else { return }
     let id = link.dabProgrammes[cursor].id
     guard id != link.dabActiveId else { return }
@@ -105,7 +135,8 @@ struct DabView: View {
   // MARK: - Header (ensemble + speed fix + a way out)
 
   private var header: some View {
-    VStack(spacing: 3) {
+    VStack(alignment: .leading, spacing: 4) {
+      // Ensemble label — non-interactive, rides high just under the status band.
       HStack(spacing: 5) {
         Image(systemName: "square.stack.3d.up.fill")
           .font(.system(size: 10, weight: .semibold)).foregroundStyle(.cyan)
@@ -113,19 +144,27 @@ struct DabView: View {
           .font(.system(size: 12, weight: .semibold, design: .rounded))
           .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         Spacer(minLength: 0)
-        // No hold-menu on the DAB screen (it's a list, not a control surface), so profile + server
-        // switching live in the header instead.
-        Button { showProfiles = true } label: {
-          Image(systemName: "dial.medium.fill").font(.system(size: 13)).foregroundStyle(.orange)
-        }.buttonStyle(.plain)
-        Button { link.backToPicker() } label: {
-          Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
-        }.buttonStyle(.plain)
-        Color.clear.frame(width: 40, height: 1)   // the clock's territory
+      }
+      // Buttons row — Lock · Volume · Menu (TAPPABLE area).
+      HStack(spacing: 24) {
+        LockButton(locked: $locked, size: 20)
+        // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
+        Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
+          Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
+            .padding(6).contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(locked)
+        Button { if !locked { showMenu = true } } label: {
+          Image(systemName: "line.3.horizontal").font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(locked ? .white.opacity(0.3) : .white)
+            .padding(6).contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(locked)
+        Spacer(minLength: 0)
       }
       // Speed fix — ONE compact button (the inline presets were too small to hit). Opens a sheet with
       // big targets. The label shows the current factor so it doubles as a status readout.
-      Button { showSpeed = true } label: {
+      Button { if !locked { showSpeed = true } } label: {
         HStack(spacing: 4) {
           Image(systemName: "gauge.with.dots.needle.bottom.50percent").font(.system(size: 10, weight: .semibold))
           Text(link.dabScale != 1.0 ? "Speed Fix \(speedLabel)" : "Speed Fix").font(.system(size: 11, weight: .semibold))
@@ -133,10 +172,11 @@ struct DabView: View {
         .foregroundColor(link.dabScale != 1.0 ? .black : .white)
         .padding(.horizontal, 10).padding(.vertical, 4)
         .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
-      }.buttonStyle(.plain)
+        .fixedSize()
+      }.buttonStyle(.plain).disabled(locked)
     }
     .padding(.horizontal, 10)
-    .padding(.top, 8)
+    .padding(.top, 14)   // ensemble label sits just under the status band
     .padding(.bottom, 4)
   }
 
@@ -150,6 +190,7 @@ struct DabView: View {
             row(svc, focused: i == cursor)
               .id(svc.id)
               .onTapGesture {
+                guard !locked else { return }
                 cursor = i
                 link.selectDabService(svc.id)
                 WKInterfaceDevice.current().play(.click)

@@ -104,12 +104,19 @@ final class SpikeLink: ObservableObject {
   @Published var dabScale: Double = 1.0
   @Published var dabActiveId: Int = -1
   @Published var dabEnsembleName: String = ""
+  /// ADS-B decoded aircraft (mirrored from the client).
+  @Published var aircraft: [Aircraft] = []
+  @Published var receiverLat: Double? = nil       // SDR site → ADS-B map centre + home marker
+  @Published var receiverLon: Double? = nil
 
-  /// Which top-level screen to show. DAB is a LIST, not a band — a DAB profile with a service list gets
-  /// its own full screen (no waterfall), exactly as the companion routes it. (ADS-B → .adsb later.)
-  enum Screen { case sdr, dab }
+  /// Which top-level screen to show. DAB and ADS-B are LISTS, not bands — those profiles get their own
+  /// full screen (no waterfall), exactly as the companion routes it.
+  enum Screen { case sdr, dab, adsb }
   var screen: Screen {
+    // Route on the ACTUAL demod — the source of truth. Using `!aircraft.isEmpty` too meant a reconnect
+    // that landed back on FM still showed the ADS-B screen (stale list) over an FM demod.
     if mode == "dab", !dabProgrammes.isEmpty { return .dab }
+    if mode == "adsb" { return .adsb }
     return .sdr
   }
   @Published var bandColor: Color? = nil
@@ -254,6 +261,9 @@ final class SpikeLink: ObservableObject {
     if dabScale != client.dabScale { dabScale = client.dabScale }
     if dabActiveId != client.dabActiveId { dabActiveId = client.dabActiveId }
     if dabEnsembleName != client.dabEnsembleName { dabEnsembleName = client.dabEnsembleName }
+    if aircraft != client.aircraft { aircraft = client.aircraft }
+    if receiverLat != client.receiverLat { receiverLat = client.receiverLat }
+    if receiverLon != client.receiverLon { receiverLon = client.receiverLon }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode {

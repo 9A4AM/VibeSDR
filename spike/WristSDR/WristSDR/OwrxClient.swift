@@ -16,6 +16,27 @@ struct DabProgramme: Identifiable, Equatable {
   let name: String
 }
 
+/// One decoded aircraft from an ADS-B `secondary_demod` ADSB-LIST. Position is what the plane sends;
+/// distance/bearing are computed client-side from the receiver location.
+struct Aircraft: Identifiable, Equatable {
+  let icao: String
+  var flight: String?      // callsign
+  var country: String?
+  var ccode: String?       // ISO country of registry
+  var altitude: Double?    // ft
+  var speed: Double?       // kt
+  var vspeed: Double?      // ft/min
+  var course: Double?      // deg
+  var squawk: String?
+  var rssi: Double?
+  var msgs: Int?
+  var lat: Double?
+  var lon: Double?
+  var distKm: Double?
+  var bearing: Double?
+  var id: String { icao }
+}
+
 /// A DIRECT OpenWebRX / OpenWebRX+ client on the watch — a Swift port of `src/services/OwrxAdapter.ts`.
 ///
 /// SINGLE multiplexed WebSocket (unlike Kiwi's two): JSON text control + binary FFT (type 1) + binary
@@ -37,6 +58,8 @@ final class OwrxClient: ObservableObject, SDRClient {
     // but these offsets drive the VFO display — a DAB block is ~1.536 MHz, so show ±768 kHz rather than
     // a zero-width VFO. The entry MUST exist or sendDemod falls back to AM and the decoder never engages.
     "dab": ("dab", -768_000, 768_000),
+    // ADS-B: raw-IF digimode. mod=adsb, passband nulled by sendDemod (raw 2.4 MHz IF). Offsets unused.
+    "adsb": ("adsb", 0, 0),
   ]
   private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
@@ -85,6 +108,15 @@ final class OwrxClient: ObservableObject, SDRClient {
   // ── DAB services within the tuned ensemble. OWRX plays NO audio until one is selected, so we adopt
   // the first when the list lands, and expose the list for the programme picker. ──
   @Published var dabProgrammes: [DabProgramme] = []
+  // ── ADS-B: aircraft list + the secondary-demod plumbing to engage it ──
+  @Published var aircraft: [Aircraft] = []
+  private var serverModes: [String: (type: String, underlying: [String], ifRate: Double)] = [:]  // from `modes`
+  private var secondaryDecoder: String? = nil     // e.g. "adsb" — a digimode running on the raw IF
+  private var pendingStartMod: String? = nil       // digimode start_mod waiting for the `modes` list
+  private var rxLat: Double? = nil                 // receiver position (for aircraft distance/bearing)
+  private var rxLon: Double? = nil
+  var receiverLat: Double? { rxLat }               // SDRClient — receiver site for the ADS-B map centre
+  var receiverLon: Double? { rxLon }
   var dabScale: Double { dabRateScale }   // SDRClient — current speed-fix factor for the menu highlight
   private var audioServiceId = -1
   private var dabDrySecs = 0        // seconds on a DAB profile with no ensemble yet (re-lock watchdog)
@@ -112,6 +144,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated(unsafe) private let hdAudioDec = OwrxAudioDecoder()    // 48k HD/WFM
   private var rateTimer: Timer?
   nonisolated(unsafe) private var frameCount = 0        // bumped off-main; rateTimer reads/resets
+  nonisolated(unsafe) private var fftSuppressed = false // true on ADS-B: no waterfall shown, skip the heavy IF-FFT decode
   nonisolated(unsafe) private var bytesThisSec = 0      // all inbound WS bytes this second → live KB/s
   nonisolated(unsafe) private var fftThisSec = 0        // FFT frames this second → live FFT fps
   private var kbPerSec = 0                               // read by the status pill + advisory
@@ -165,9 +198,23 @@ final class OwrxClient: ObservableObject, SDRClient {
           // but nothing reconnects → stuck). 15s is long enough to tolerate OWRX's normal multi-second
           // audio stutters (FFT frames count too, so it only fires when EVERYTHING stops). No WS ping —
           // that caused the server-visible connect/disconnect churn.
-          if self.zeroSecs >= 15 { self.retry(reason: "no data 15s") }
+          // ADS-B updates are bursty (aircraft come and go) — be far more lenient there so a quiet sky
+          // doesn't tear down a healthy decoder. Everything else keeps the tight 15s.
+          let stallLimit = (self.mode == "adsb") ? 45 : 15
+          if self.zeroSecs >= stallLimit { self.retry(reason: "no data \(stallLimit)s") }
         }
-        if self.everFrame, !self.retrying {
+        // ADS-B SELF-HEAL: if we're on adsb but the secondary decoder isn't engaged (auto-connect or a
+        // reconnect where the config beat the modes list), engage it now that modes are loaded. Stops as
+        // soon as secondaryDecoder is set, so it's not a loop. This is the fix for "connected on the wrong
+        // secondary mode" / needing a manual DEMOD pick.
+        if self.mode == "adsb", self.secondaryDecoder == nil, self.serverModes["adsb"]?.type == "digimode" {
+          self.applyStartMod("adsb")
+          self.sendDemod(); self.send(["type": "dspcontrol", "action": "start"])
+        }
+        if self.mode == "adsb" {
+          // ADS-B diagnostic (no pill on that screen): decoder engaged? modes loaded? aircraft-msgs seen?
+          self.status = "sec=\(self.secondaryDecoder ?? "nil") adsb=\(self.serverModes["adsb"]?.type ?? "MISSING") m=\(self.serverModes.count) sd=\(self.sdCount) cpu:\(Int(CpuMeter.processCpuPercent()))"
+        } else if self.everFrame, !self.retrying {
           self.status = "\(self.linkIface) \(self.kbPerSec)KB/s \(self.fftFps)fft cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
         // DAB re-lock safety net: a DAB profile that came up but produced NO ensemble after a few
@@ -201,8 +248,12 @@ final class OwrxClient: ObservableObject, SDRClient {
       let bytes = [UInt8](d)
       let type = bytes.first ?? 0
       self.bytesThisSec &+= d.count                        // live link load (all inbound bytes)
-      if type == 1 { self.fftThisSec &+= 1 }               // live FFT rate
+      // ADS-B shows NO waterfall and has NO audio — but OWRX still streams a 2.4 MHz-IF FFT (type 1) AND
+      // a secondary-FFT (type 3). Routing type-3 to the AUDIO decoder pegged the watch at ~100%. On ADS-B
+      // drop ALL binary; the aircraft arrive as text (secondary_demod).
+      if self.fftSuppressed { return }
       if type == 1 {
+        self.fftThisSec &+= 1
         // FFT: COALESCE to the latest frame only. Never build a backlog — if decode falls a little
         // behind over time the queue would grow unbounded (memory creep → the ~1-min freeze). The
         // waterfall only needs the newest frame; older ones are stale anyway.
@@ -212,8 +263,8 @@ final class OwrxClient: ObservableObject, SDRClient {
         self.fftScheduled = true
         self.fftLock.unlock()
         if !alreadyScheduled { self.decodeQueue.async { self.drainFft() } }
-      } else {
-        // Audio: must be continuous — process every frame on its OWN queue (never blocked by FFT).
+      } else if type == 2 || type == 4 {
+        // Audio (12k / 48k HD) ONLY — never feed a secondary-FFT (type 3) or other stream to the decoder.
         self.audioQueue.async { self.onBinary(bytes) }
       }
     }
@@ -269,6 +320,9 @@ final class OwrxClient: ObservableObject, SDRClient {
     retrying = true; retries += 1
     status = "reconnect \(retries): \(reason)"
     handshaked = false
+    // A reconnect lands on the server's DEFAULT profile — drop ADS-B state so the ADS-B screen doesn't
+    // linger over an FM demod (stale aircraft kept routing to .adsb).
+    aircraft = []; secondaryDecoder = nil; fftSuppressed = false
     sock.cancel()
     let wait = UInt64(min(retries, 5)) * 1_500_000_000
     Task { @MainActor in
@@ -310,8 +364,133 @@ final class OwrxClient: ObservableObject, SDRClient {
       let msg = String(describing: json["value"] ?? "OpenWebRX error"); Task { @MainActor in self.lastError = msg }
     case "metadata":
       if let v = json["value"] as? [String: Any] { onMetadata(v) }
+    case "modes":
+      onModes(json["value"] as? [Any] ?? [])
+    case "receiver_details":
+      if let v = json["value"] as? [String: Any] { onReceiverDetails(v) }
+    case "secondary_demod":
+      onSecondaryDemod(json["value"])
     default: break   // parsed off-main, ignored — never reaches the UI thread
     }
+  }
+
+  /// The server's mode table. We only need which modes are DIGIMODES (run as a secondary decoder on top
+  /// of an underlying carrier) and their raw-IF hints — so a start_mod like `adsb` engages as a secondary
+  /// decoder instead of a primary demod (which decodes nothing).
+  nonisolated private func onModes(_ list: [Any]) {
+    var out: [String: (type: String, underlying: [String], ifRate: Double)] = [:]
+    for el in list {
+      guard let m = el as? [String: Any], let id = m["modulation"] as? String else { continue }
+      let type = (m["type"] as? String) ?? "analog"
+      let under = (m["underlying"] as? [String]) ?? []
+      let ifr = (m["ifRate"] as? NSNumber)?.doubleValue ?? 0
+      out[id] = (type, under, ifr)
+    }
+    Task { @MainActor in
+      self.serverModes = out
+      // A digimode start_mod (e.g. adsb) had to WAIT for this list to know it's a secondary decoder.
+      // Re-engage + re-send the demod + re-assert start so the secondary decoder actually starts.
+      if let pend = self.pendingStartMod {
+        self.pendingStartMod = nil
+        self.applyStartMod(pend)
+        if self.secondaryDecoder != nil { self.sendDemod(); self.send(["type": "dspcontrol", "action": "start"]) }
+      }
+    }
+  }
+
+  /// Receiver location — the reference point for aircraft distance/bearing on the ADS-B screen.
+  nonisolated private func onReceiverDetails(_ v: [String: Any]) {
+    // OWRX puts it in `receiver_gps: {lat, lon}` (measured on the server), with `gps`/top-level as fallbacks.
+    var lat: Double?; var lon: Double?
+    if let g = (v["receiver_gps"] as? [String: Any]) ?? (v["gps"] as? [String: Any]) {
+      lat = (g["lat"] as? NSNumber)?.doubleValue
+      lon = (g["lon"] as? NSNumber)?.doubleValue
+    }
+    lat = lat ?? (v["lat"] as? NSNumber)?.doubleValue
+    lon = lon ?? (v["lon"] as? NSNumber)?.doubleValue
+    if let lat, let lon { Task { @MainActor in self.rxLat = lat; self.rxLon = lon } }
+  }
+
+  /// ADS-B aircraft table (`secondary_demod` → ADSB-LIST). It's a SNAPSHOT — replace the whole list.
+  nonisolated(unsafe) private var sdCount = 0   // secondary_demod messages seen (ADS-B diagnostic)
+  nonisolated private func onSecondaryDemod(_ value: Any?) {
+    // Count as DATA for the stall watchdog — ADS-B has no audio/FFT, so without this the "no data 15s"
+    // watchdog tears the stream down and reconnects to the default profile. Even an empty list counts.
+    frameCount &+= 1; sdCount &+= 1
+    if !sawFirstFrame { sawFirstFrame = true; Task { @MainActor in self.everFrame = true; if self.status != "live" { self.status = "live" } } }
+    guard let v = value as? [String: Any], let list = v["aircraft"] as? [[String: Any]] else { return }
+    var parsed: [Aircraft] = []
+    for a in list {
+      guard let icao = a["icao"] as? String, !icao.isEmpty else { continue }
+      parsed.append(Aircraft(
+        icao: icao,
+        flight: (a["flight"] as? String)?.trimmingCharacters(in: .whitespaces),
+        country: a["country"] as? String,
+        ccode: a["ccode"] as? String,
+        altitude: (a["altitude"] as? NSNumber)?.doubleValue,
+        speed: (a["speed"] as? NSNumber)?.doubleValue,
+        vspeed: (a["vspeed"] as? NSNumber)?.doubleValue,
+        course: (a["course"] as? NSNumber)?.doubleValue,
+        squawk: a["squawk"] as? String,
+        rssi: (a["rssi"] as? NSNumber)?.doubleValue,
+        msgs: (a["msgs"] as? NSNumber)?.intValue,
+        lat: (a["lat"] as? NSNumber)?.doubleValue,
+        lon: (a["lon"] as? NSNumber)?.doubleValue,
+        distKm: nil, bearing: nil))
+    }
+    Task { @MainActor in self.applyAircraft(parsed) }
+  }
+
+  @MainActor private func applyAircraft(_ list: [Aircraft]) {
+    // DEDUPE by icao — a snapshot can carry the same aircraft twice, and SwiftUI's ForEach CRASHES on a
+    // duplicate id ("ID occurs multiple times"). Keep the last seen for each icao.
+    var byId: [String: Aircraft] = [:]
+    for a in list { byId[a.icao] = a }
+    var out = Array(byId.values)
+    if let rlat = rxLat, let rlon = rxLon {
+      for i in out.indices where out[i].lat != nil && out[i].lon != nil {
+        out[i].distKm = Self.haversineKm(rlat, rlon, out[i].lat!, out[i].lon!)
+        out[i].bearing = Self.bearingDeg(rlat, rlon, out[i].lat!, out[i].lon!)
+      }
+    }
+    aircraft = out
+  }
+
+  /// Adopt a profile's start_mod. A DIGIMODE (adsb, ft8, packet…) must run as a SECONDARY decoder on the
+  /// raw IF or the server decodes nothing — and that needs the `modes` list, which lands AFTER config on
+  /// connect. So if modes aren't here yet, remember it and replay from onModes.
+  @MainActor private func applyStartMod(_ id: String) {
+    guard let sm = serverModes[id.lowercased()] else {
+      pendingStartMod = id
+      mode = Self.wireToSpike[id.lowercased()] ?? id.lowercased()
+      fftSuppressed = (mode == "adsb")   // MUST set here too — the deferred path (modes not loaded yet)
+      return                             // otherwise ADS-B's 2.4 MHz IF-FFT decodes at full tilt = ~100% CPU
+    }
+    pendingStartMod = nil
+    if sm.type == "digimode" {
+      secondaryDecoder = id.lowercased()
+      let real = sm.underlying.filter { $0 != "empty" }
+      let carrier = real.first ?? id.lowercased()          // adsb → 'adsb' (empty underlying = raw IF)
+      mode = Self.wireToSpike[carrier] ?? carrier
+    } else {
+      secondaryDecoder = nil
+      mode = Self.wireToSpike[id.lowercased()] ?? id.lowercased()
+    }
+    if let p = Self.modeMap[mode] { bwLow = p.lo; bwHigh = p.hi }
+    fftSuppressed = (mode == "adsb")   // ADS-B has no waterfall → skip the heavy IF-FFT decode
+    if mode != "adsb" { aircraft = [] }   // leaving ADS-B → drop the aircraft list (screen follows mode)
+    modeSnapshot = mode
+  }
+
+  private static func haversineKm(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+    let r = 6371.0, dLat = (lat2-lat1) * .pi/180, dLon = (lon2-lon1) * .pi/180
+    let a = sin(dLat/2)*sin(dLat/2) + cos(lat1 * .pi/180)*cos(lat2 * .pi/180)*sin(dLon/2)*sin(dLon/2)
+    return r * 2 * atan2(sqrt(a), sqrt(1-a))
+  }
+  private static func bearingDeg(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+    let dLon = (lon2-lon1) * .pi/180, y = sin(dLon)*cos(lat2 * .pi/180)
+    let x = cos(lat1 * .pi/180)*sin(lat2 * .pi/180) - sin(lat1 * .pi/180)*cos(lat2 * .pi/180)*cos(dLon)
+    return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
   }
 
   /// RDS (broadcast FM) station name from the `metadata` message. Keyed protocol:'WFM'; `ps` is the
@@ -423,9 +602,15 @@ final class OwrxClient: ObservableObject, SDRClient {
     // on an EXPLICIT profile switch (pendingProfileSwitch) — a switch that happens to land on a same-
     // centre profile must still adopt its demod, or the "auto demod on switch" is silently lost.
     let sameProfile = (centerFreq == prevCenter && prevCenter != 0)
-    let adopt = !sameProfile || pendingProfileSwitch
-    pendingProfileSwitch = false
-    if adopt {
+    let newCentre = !sameProfile
+    // A new profile is arriving if the centre changed OR an explicit switch is pending. Keep the
+    // "awaiting demod" state (pendingProfileSwitch) alive through it — OWRX dribbles SEVERAL config
+    // messages per switch and `start_mod` often isn't in the first one. Clearing on the first config
+    // (as before) meant a DAB profile whose start_mod landed a message later never adopted → stuck on
+    // the previous demod (NFM). So we only clear once start_mod is actually adopted, below.
+    let adopt = newCentre || pendingProfileSwitch
+    if adopt { pendingProfileSwitch = true }
+    if newCentre {
       if frequency == 0 || abs(frequency - centerFreq) > sampRate / 2, centerFreq != 0 {
         frequency = centerFreq
         if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
@@ -434,15 +619,26 @@ final class OwrxClient: ObservableObject, SDRClient {
       // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
       // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
       viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
-      // ADOPT THE PROFILE'S DEFAULT DEMODULATOR (start_mod) so a switch lands on the right demod.
-      if let sm = c["start_mod"] as? String, let spikeMode = Self.wireToSpike[sm.lowercased()] {
-        mode = spikeMode; modeSnapshot = spikeMode
-        if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
-      }
       stationName = ""   // new profile/station — drop any stale RDS name until fresh metadata lands
       dabProgrammes = []; audioServiceId = -1; dabEnsemble = ""   // new ensemble on a DAB profile switch
       dabServiceMap = [:]                                         // drop the old mux's accumulated services
       dabDrySecs = 0; dabRetries = 0                              // re-arm the DAB re-lock watchdog
+      aircraft = []; secondaryDecoder = nil                      // drop the old profile's ADS-B decoder/list
+    }
+    // ADOPT THE PROFILE'S DEFAULT DEMODULATOR (start_mod) whenever it appears while a switch is pending —
+    // this config OR a later one. Routed through applyStartMod so a DIGIMODE (adsb) engages as a secondary
+    // decoder, not a dead primary demod. Only clearing the pending flag once we've got it fixes DAB→NFM.
+    if let sm = c["start_mod"] as? String {
+      // ALWAYS adopt the profile's start_mod when a config carries it — like the phone. The old gated
+      // version skipped it whenever it wasn't an explicit switch (initial connect / reconnect to a DAB or
+      // ADS-B profile), so the demod didn't auto-select and you had to pick it by hand. A digimode that
+      // NEWLY engaged also needs the demod re-asserted so its raw-IF decoder chain builds.
+      let before = secondaryDecoder
+      applyStartMod(sm)
+      pendingProfileSwitch = false
+      if secondaryDecoder != nil, secondaryDecoder != before {
+        sendDemod(); send(["type": "dspcontrol", "action": "start"])
+      }
     }
     lastConfigCenter = centerFreq
     audioDec.reset(); hdAudioDec.reset()
@@ -609,14 +805,25 @@ final class OwrxClient: ObservableObject, SDRClient {
 
   // ── Control ──
   private func sendDemod() {
-    guard started, centerFreq != 0 else { return }
     modeSnapshot = mode; fftCompressionSnapshot = fftCompression
     let m = Self.modeMap[mode] ?? ("am", -4500, 4500)
+    // Raw-IF decoders (DAB/DRM/ADS-B and any digimode with an 'empty' underlying or an ifRate) must get
+    // NULL cuts — a numeric bandpass inserts a resampler that STARVES the fixed-rate decoder (no decode).
+    let decDef = secondaryDecoder.flatMap { serverModes[$0] }
+    let rawIf = mode == "dab" || mode == "drm" || mode == "adsb"
+      || (decDef.map { $0.underlying.contains("empty") || $0.ifRate > 0 } ?? false)
+    // ADS-B's profile config carries NO center_freq (it's the raw 1090 MHz IF), so don't gate on it and
+    // don't compute an offset — the decoder works on the whole IF. Other modes still need a valid centre.
+    guard started, centerFreq != 0 || rawIf else { return }
+    let offset = (centerFreq != 0 && !rawIf) ? Int((frequency - centerFreq).rounded()) : 0
+    // A secondary decoder (adsb, ft8, packet…) rides on top of the carrier via secondary_mod (else false).
     var params: [String: Any] = [
-      "offset_freq": Int((frequency - centerFreq).rounded()),
-      "mod": m.mod, "squelch_level": -150, "secondary_mod": false,
+      "offset_freq": offset,
+      "mod": m.mod, "squelch_level": -150,
+      "secondary_mod": (secondaryDecoder as Any?) ?? false,
     ]
-    if mode == "dab" || mode == "drm" { params["low_cut"] = NSNull(); params["high_cut"] = NSNull() }
+    if secondaryDecoder != nil { params["secondary_offset_freq"] = 1000 }
+    if rawIf { params["low_cut"] = NSNull(); params["high_cut"] = NSNull() }
     else { params["low_cut"] = Int(bwLow.rounded()); params["high_cut"] = Int(bwHigh.rounded()) }
     // DAB: without a service id the server outputs NO audio. Send the adopted/selected programme.
     if mode == "dab", audioServiceId >= 0 { params["audio_service_id"] = audioServiceId }
@@ -650,11 +857,22 @@ final class OwrxClient: ObservableObject, SDRClient {
   }
   func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
   func setMode(_ m: String) {
-    guard m != mode else { return }
-    mode = m; modeSnapshot = m
+    let target = m.lowercased()
     if m != "wfm" { stationName = "" }   // leaving WFM → the RDS name no longer applies
-    if let p = Self.modeMap[m] { bwLow = p.lo; bwHigh = p.hi }
     audioDec.reset(); hdAudioDec.reset()
+    // A DIGIMODE picked by hand (adsb, ft8, packet…) must engage as a SECONDARY decoder, not a primary
+    // demod — same as a profile's start_mod. Route it through applyStartMod so manual selection works too.
+    if let sm = serverModes[target], sm.type == "digimode" {
+      applyStartMod(target)
+      sendDemod(); send(["type": "dspcontrol", "action": "start"])   // re-assert so the decoder chain builds
+      return
+    }
+    guard m != mode else { return }
+    secondaryDecoder = nil               // leaving a digimode for a plain analog demod
+    fftSuppressed = false                // analog demod shows a waterfall again
+    aircraft = []                        // drop the ADS-B list when switching to an analog demod
+    mode = m; modeSnapshot = m
+    if let p = Self.modeMap[m] { bwLow = p.lo; bwHigh = p.hi }
     sendDemod()
   }
   func setBandwidth(_ low: Double, _ high: Double) { bwLow = low; bwHigh = high; sendDemod() }

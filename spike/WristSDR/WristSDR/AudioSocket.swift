@@ -60,6 +60,10 @@ final class AudioSocket {
     // autoReplyPing=false surfaces .ping to receive() so we PONG manually — belt-and-braces where the
     // native auto-reply seems not to fire (OWRX stalls the stream after a few seconds otherwise).
     ws.autoReplyPing = autoReplyPing
+    // Default max WS message is 64 KB. An OWRX ADS-B `secondary_demod` frame (a full aircraft table —
+    // 100+ planes) blows past that, and NWConnection silently DROPS the oversized message → no aircraft
+    // ever reach the client (sd=0) even though the demod is correct. Raise the ceiling.
+    ws.maximumMessageSize = 16 * 1024 * 1024
     if !headers.isEmpty { ws.setAdditionalHeaders(headers) }
     params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
 

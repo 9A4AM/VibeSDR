@@ -50,6 +50,11 @@ protocol SDRClient: AnyObject {
   var dabEnsembleName: String { get }
   func selectDabService(_ id: Int)
   func setDabScale(_ scale: Double)
+  /// ADS-B decoded aircraft (empty unless on a 1090 MHz ADS-B profile). OWRX-only; default inert.
+  var aircraft: [Aircraft] { get }
+  /// The receiver's own location (SDR site), for the ADS-B map centre + aircraft distances. nil = unknown.
+  var receiverLat: Double? { get }
+  var receiverLon: Double? { get }
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -65,6 +70,9 @@ extension SDRClient {
   var dabEnsembleName: String { "" }
   func selectDabService(_ id: Int) {}
   func setDabScale(_ scale: Double) {}
+  var aircraft: [Aircraft] { [] }
+  var receiverLat: Double? { nil }
+  var receiverLon: Double? { nil }
 }
 
 extension UberClient: SDRClient {

@@ -40,6 +40,11 @@ struct WristSDRApp: App {
               .environmentObject(link)
               .environmentObject(favs)
               .navigationBarHidden(true)
+          case .adsb:
+            AircraftView()
+              .environmentObject(link)
+              .environmentObject(favs)
+              .navigationBarHidden(true)
           }
         }
       }
