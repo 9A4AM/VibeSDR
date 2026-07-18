@@ -58,7 +58,8 @@ struct ChatGlyph: View {
   let activity: Int          // bumps on each inbound message — drives the breathe
   var tap: () -> Void
 
-  @State private var breathe = false
+  @State private var pulse = false      // the in/out scale oscillation
+  @State private var lit = false        // the orange highlight window (held for a few seconds)
 
   var body: some View {
     Button(action: tap) {
@@ -68,19 +69,24 @@ struct ChatGlyph: View {
           Text("\(clients)").font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
         }
       }
-      .foregroundStyle(breathe ? .cyan : .white.opacity(0.75))
+      .foregroundStyle(lit ? .orange : .white.opacity(0.75))
       .padding(.horizontal, 6).padding(.vertical, 3)
-      .background(Capsule().fill(.black.opacity(0.35)))
-      .scaleEffect(breathe ? 1.18 : 1.0)
+      .background(Capsule().fill(lit ? .orange.opacity(0.18) : .black.opacity(0.35)))
+      .scaleEffect(pulse ? 1.22 : 1.0)
       .contentShape(Capsule())
     }
     .buttonStyle(.plain)
-    // Pulse ON each new inbound message, then settle. onChange fires per message so a burst keeps it alive.
+    // BREATHE FOR A FEW SECONDS on each new inbound message — a single pulse was too easy to miss.
+    // Orange (the app accent) reads far more than the old cyan; red would say "error". onChange fires
+    // per message, so a burst keeps re-arming the window.
     .onChange(of: activity) { _, _ in
-      withAnimation(.easeOut(duration: 0.22)) { breathe = true }
       WKInterfaceDevice.current().play(.notification)
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-        withAnimation(.easeInOut(duration: 0.9)) { breathe = false }
+      lit = true
+      // ~4.5s of gentle in/out (8 half-cycles ≈ 0.55s each). Odd/even count doesn't matter — we hard-reset below.
+      withAnimation(.easeInOut(duration: 0.55).repeatCount(8, autoreverses: true)) { pulse = true }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 4.6) {
+        pulse = false
+        withAnimation(.easeInOut(duration: 0.6)) { lit = false }
       }
     }
   }
