@@ -359,6 +359,8 @@ final class SpikeLink: ObservableObject {
     mode = client?.mode ?? mode
   }
 
+  var isOwrx: Bool { client is OwrxClient }   // for the OWRX-specific tutorial line
+
   func setStep(_ hz: Double) { step = hz }
   func setDabScale(_ s: Double) { client?.setDabScale(s); dabScale = s }
   func selectDabService(_ id: Int) { client?.selectDabService(id) }

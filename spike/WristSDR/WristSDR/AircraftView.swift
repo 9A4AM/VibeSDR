@@ -12,6 +12,8 @@ struct AircraftView: View {
   @State private var showMap = false
   @State private var showMenu = false
   @State private var locked = false
+  @AppStorage("seenAdsbTutorial") private var seenAdsbTut = false
+  @State private var showAdsbTut = false
 
   private var planes: [Aircraft] {
     link.aircraft.sorted { a, b in
@@ -37,6 +39,10 @@ struct AircraftView: View {
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
     .navigationDestination(isPresented: $showMenu) { ControlMenu { _ in }.environmentObject(link) }
+    .onAppear { if !seenAdsbTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showAdsbTut = true } } }
+    .sheet(isPresented: $showAdsbTut) {
+      TutorialSheet(title: "ADS-B aircraft", tips: adsbTutorialTips()) { seenAdsbTut = true; showAdsbTut = false }
+    }
     // Chrome DOUBLE-STACKED in the clock's band, top-LEFT — keeps it narrow so the system clock + focus
     // icons keep the right corner (the FM-DX pattern). ignoresSafeArea puts it up in that reserved strip.
     .overlay(alignment: .topLeading) { chrome }

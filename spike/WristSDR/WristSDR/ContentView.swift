@@ -169,6 +169,8 @@ struct ContentView: View {
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
   @State private var bwDismissed = false   // heavy-server advisory dismissed for this occurrence
+  @AppStorage("seenSdrTutorial") private var seenSdrTut = false
+  @State private var showSdrTut = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
   @State private var suspendWork: DispatchWorkItem?
@@ -509,6 +511,13 @@ struct ContentView: View {
     .navigationDestination(isPresented: $showMenu) {
       ControlMenu { mode in crownMode = mode; crownUsedAt = Date() }
         .environmentObject(link)
+    }
+    // First-use waterfall tutorial (once) — includes the OWRX Bluetooth-link warning on OWRX servers.
+    .onAppear { if !seenSdrTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showSdrTut = true } } }
+    .sheet(isPresented: $showSdrTut) {
+      TutorialSheet(title: "Using VibeSDR", tips: sdrTutorialTips(isOwrx: link.isOwrx), dismissLabel: "Start listening") {
+        seenSdrTut = true; showSdrTut = false
+      }
     }
     .ignoresSafeArea()
     // Non-focusable in volume mode so SwiftUI RELINQUISHES the crown entirely — otherwise this

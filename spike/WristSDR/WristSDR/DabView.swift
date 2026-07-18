@@ -22,6 +22,8 @@ struct DabView: View {
   @State private var locked = false
   @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
   @State private var volTimeout: DispatchWorkItem?
+  @AppStorage("seenDabTutorial") private var seenDabTut = false
+  @State private var showDabTut = false
   @FocusState private var crownFocused: Bool
 
   /// Auto-exit volume mode after a few idle seconds (reset on each volume change). Matches the native
@@ -103,6 +105,10 @@ struct DabView: View {
     .onAppear {
       crownFocused = true
       if let i = link.dabProgrammes.firstIndex(where: { $0.id == link.dabActiveId }) { cursor = i }
+      if !seenDabTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showDabTut = true } }
+    }
+    .sheet(isPresented: $showDabTut) {
+      TutorialSheet(title: "DAB radio", tips: dabTutorialTips()) { seenDabTut = true; showDabTut = false }
     }
     .onChange(of: link.dabActiveId) { _, id in
       if let i = link.dabProgrammes.firstIndex(where: { $0.id == id }) { cursor = i }
