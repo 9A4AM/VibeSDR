@@ -106,6 +106,16 @@ final class AudioSocket {
     }
   }
 
+  /// Send a WebSocket PING. Browsers/RN send these periodically to keep the connection alive; a raw
+  /// NWConnection does not, so an OWRX stream with no outbound traffic gets reaped by NAT/idle timeout
+  /// after a few minutes. A periodic client ping keeps the mapping (and the server session) alive.
+  func sendPing() {
+    guard let c = conn else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .ping)
+    let ctx = NWConnection.ContentContext(identifier: "ping", metadata: [meta])
+    c.send(content: Data(), contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+  }
+
   /// Text control frame — KiwiSDR's `SET …` command plane (UberSDR uses JSON below).
   func send(text: String) {
     guard let c = conn, let d = text.data(using: .utf8) else { return }

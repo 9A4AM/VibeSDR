@@ -108,22 +108,34 @@ final class OwrxClient: ObservableObject, SDRClient {
     let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
-        if self.frameCount > 0 { self.retries = 0 }
-        // NO DATA WATCHDOG. The phone keeps OWRX alive by doing NOTHING — no keepalive, no reconnect
-        // on data gaps; it only reacts to a real socket CLOSE. Our old 'no data 3s' watchdog was
-        // tearing down healthy connections on a brief audio gap, which WAS the instability. We now
-        // only reconnect on a genuine socket failed/recv (handled in onState), exactly like the phone.
-        // DEBUG telemetry in the pill: profile count / clients / frames-per-sec, so we can see if
-        // profiles ever arrive and when the stream stalls.
+        if self.frameCount > 0 {
+          self.retries = 0; self.zeroSecs = 0
+        } else if self.everFrame, !self.retrying {
+          self.zeroSecs += 1
+          // GENTLE watchdog (15s, not 3s). The keepalive ping prevents the idle drop; this only
+          // catches a GENUINE silent stall (both audio AND FFT stopped — frameCount counts both), and
+          // tolerates OWRX's normal multi-second audio stutters that the old 3s watchdog false-fired on.
+          if self.zeroSecs >= 15 { self.retry(reason: "no data 15s") }
+        }
         if self.everFrame, !self.retrying {
           self.status = "P:\(self.profiles.count) f:\(Int(self.framesPerSec)) cpu:\(Int(CpuMeter.processCpuPercent()))"
         }
         self.frameCount = 0 }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
+
+    // KEEPALIVE PING — every 25s, on a background timer, to keep the connection alive outbound
+    // (browsers/RN do this; a raw NWConnection doesn't → a ~5-min idle drop). See AudioSocket.sendPing.
+    let ping = DispatchSource.makeTimerSource(queue: pingQueue)
+    ping.schedule(deadline: .now() + 25, repeating: 25)
+    ping.setEventHandler { [weak self] in self?.sock.sendPing() }
+    ping.resume(); pingSource = ping
+
     audio.start { _, _ in }
     openSocket()
   }
+  nonisolated(unsafe) private var pingSource: DispatchSourceTimer?
+  private let pingQueue = DispatchQueue(label: "owrx.ping")
 
   private func openSocket() {
     sock.onText = { [weak self] s in self?.onText(s) }   // parse OFF main (OWRX+ floods JSON)
@@ -457,6 +469,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   func goIdle() {
     goingIdle = true
     rateTimer?.invalidate(); rateTimer = nil
+    pingSource?.cancel(); pingSource = nil
     sock.cancel(); audio.stop()
     if status != "dropped" { status = "idle" }
   }
