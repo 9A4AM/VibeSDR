@@ -82,6 +82,9 @@ final class SpikeLink: ObservableObject {
   /// A plain-English refusal/timeout from the backend (Kiwi full / password / blocked / no
   /// connection). nil = fine. ContentView shows a card so nobody waits on a dead connection.
   @Published var connectError: String? = nil
+  /// The backend client's own status string (Kiwi: 'live' / 'registering' / 'reconnecting N: <reason>').
+  /// Surfaced small on screen so a mid-session drop's REASON is visible (debug).
+  @Published var backendStatus = ""
 
   // ── Band plan: NONE yet in the spike. Left blank; the label/edges simply don't draw. ──
   @Published var bandName = ""
@@ -196,6 +199,7 @@ final class SpikeLink: ObservableObject {
     guard let client else { return }
     client.drainSpectrum(now: now)
     if connectError != client.lastError { connectError = client.lastError }
+    if backendStatus != client.status { backendStatus = client.status }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode { mode = client.mode }

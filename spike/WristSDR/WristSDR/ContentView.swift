@@ -443,6 +443,17 @@ struct ContentView: View {
         )
       }
     }
+    // DEBUG: backend status (Kiwi drop reason) — small, top-centre, so we can read WHY it drops.
+    .overlay(alignment: .top) {
+      if !link.backendStatus.isEmpty && link.backendStatus != "live" {
+        Text(link.backendStatus)
+          .font(.system(size: 9)).foregroundStyle(.orange)
+          .lineLimit(2).multilineTextAlignment(.center)
+          .padding(.horizontal, 6).padding(.vertical, 2)
+          .background(.black.opacity(0.7), in: Capsule())
+          .padding(.top, 2)
+      }
+    }
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
     // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
     .overlay { if let err = link.connectError { refusalCard(err) } }
