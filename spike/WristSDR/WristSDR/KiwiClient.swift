@@ -42,6 +42,14 @@ protocol SDRClient: AnyObject {
   var inboundKbPerSec: Int { get }
   /// Live station name (RDS ps / DAB service) to show in place of the band label. "" = none.
   var stationName: String { get }
+  /// DAB services in the tuned ensemble (empty unless on a DAB profile), the current speed-fix factor,
+  /// and the controls to change them. OWRX-only; defaults make the other backends inert.
+  var dabProgrammes: [DabProgramme] { get }
+  var dabScale: Double { get }
+  var dabActiveId: Int { get }
+  var dabEnsembleName: String { get }
+  func selectDabService(_ id: Int)
+  func setDabScale(_ scale: Double)
 }
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
@@ -51,6 +59,12 @@ extension SDRClient {
   func selectProfile(_ id: String) {}
   var inboundKbPerSec: Int { 0 }
   var stationName: String { "" }
+  var dabProgrammes: [DabProgramme] { [] }
+  var dabScale: Double { 1.0 }
+  var dabActiveId: Int { -1 }
+  var dabEnsembleName: String { "" }
+  func selectDabService(_ id: Int) {}
+  func setDabScale(_ scale: Double) {}
 }
 
 extension UberClient: SDRClient {

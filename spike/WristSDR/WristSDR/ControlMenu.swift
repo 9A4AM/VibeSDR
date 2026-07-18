@@ -306,6 +306,7 @@ struct ControlMenu: View {
   private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
   @State private var showBw = false
+  @State private var showDab = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
@@ -411,6 +412,11 @@ struct ControlMenu: View {
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
+          // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
+          // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
+          if link.mode == "dab" {
+            tile(name: "DAB", value: link.stationName.isEmpty ? "\(link.dabProgrammes.count) svc" : link.stationName, h: h) { showDab = true }
+          }
           // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
           // running with the wrist down (costs power); the timed options drop it after N and
           // reconnect on the way back.
@@ -458,6 +464,9 @@ struct ControlMenu: View {
       PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
         link.setMode(m); showModes = false; dismiss()
       }
+    }
+    .sheet(isPresented: $showDab) {
+      DabSheet().environmentObject(link)
     }
     .sheet(isPresented: $showSteps) {
       PickerList(title: "Step",
@@ -548,7 +557,7 @@ struct ControlMenu: View {
   // Mirrors sdrTypes.ts. Kept in the order the phone lists them.
   // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
   // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
-  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl"]
+  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
@@ -658,6 +667,51 @@ struct PickerList: View {
       }
     }
     .navigationTitle(title)
+  }
+}
+
+/// DAB controls — programme picker (services in the tuned ensemble) + the speed-fix presets that work
+/// around the dablin/OWRX "chipmunk" (a station whose sample rate the server misreads). Only reachable
+/// on a DAB profile. Speed presets mirror the phone's set (Off / ×0.67 / ×0.50 / ×0.33 / ×0.25).
+struct DabSheet: View {
+  @EnvironmentObject var link: SpikeLink
+  @Environment(\.dismiss) private var dismiss
+  private let speeds: [(v: Double, l: String)] = [
+    (1, "Off"), (0.6667, "×0.67"), (0.5, "×0.50"), (0.3333, "×0.33"), (0.25, "×0.25"),
+  ]
+  var body: some View {
+    List {
+      Section("Speed fix") {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            ForEach(speeds, id: \.l) { o in
+              let active = abs(link.dabScale - o.v) < 0.001
+              Button { link.setDabScale(o.v) } label: {
+                Text(o.l).font(.system(size: 13, weight: .semibold))
+                  .padding(.horizontal, 10).padding(.vertical, 6)
+                  .background(active ? Color.orange : Color.white.opacity(0.12), in: Capsule())
+                  .foregroundColor(active ? .black : .white)
+              }.buttonStyle(.plain)
+            }
+          }
+        }
+      }
+      Section("Station") {
+        if link.dabProgrammes.isEmpty {
+          Text("Waiting for the ensemble…").font(.system(size: 12)).foregroundColor(.white.opacity(0.5))
+        }
+        ForEach(link.dabProgrammes) { p in
+          Button { link.selectDabService(p.id); dismiss() } label: {
+            HStack(spacing: 8) {
+              Text(p.name).font(.system(size: 14)).foregroundColor(p.name == link.stationName ? .green : .white).lineLimit(1)
+              Spacer()
+              if p.name == link.stationName { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)).foregroundColor(.green) }
+            }
+          }.buttonStyle(.plain)
+        }
+      }
+    }
+    .navigationTitle("DAB")
   }
 }
 

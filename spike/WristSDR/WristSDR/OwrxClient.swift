@@ -10,6 +10,12 @@ struct SDRProfile: Identifiable, Hashable {
   var active: Bool = false
 }
 
+/// A DAB service (programme) within the tuned ensemble — id is OWRX's service id, name the label.
+struct DabProgramme: Identifiable, Equatable {
+  let id: Int
+  let name: String
+}
+
 /// A DIRECT OpenWebRX / OpenWebRX+ client on the watch — a Swift port of `src/services/OwrxAdapter.ts`.
 ///
 /// SINGLE multiplexed WebSocket (unlike Kiwi's two): JSON text control + binary FFT (type 1) + binary
@@ -27,6 +33,10 @@ final class OwrxClient: ObservableObject, SDRClient {
     "fm":  ("nfm", -6250, 6250), "nfm": ("nfm", -6250, 6250),
     "cwu": ("cw", 200, 500),   "cwl": ("cw", -500, -200),
     "wfm": ("wfm", -80000, 80000),
+    // DAB: OWRX's digital DAB demod. The wire passband is server-managed (sendDemod nulls low/high_cut),
+    // but these offsets drive the VFO display — a DAB block is ~1.536 MHz, so show ±768 kHz rather than
+    // a zero-width VFO. The entry MUST exist or sendDemod falls back to AM and the decoder never engages.
+    "dab": ("dab", -768_000, 768_000),
   ]
   private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
@@ -72,6 +82,16 @@ final class OwrxClient: ObservableObject, SDRClient {
   // ── DAB speed fix (Stuart) — under-state the PCM rate so the resampler stretches DAB back to
   // correct speed/pitch. 1.0 = off. Only applied on the DAB mode. ──
   nonisolated(unsafe) var dabRateScale = 1.0
+  // ── DAB services within the tuned ensemble. OWRX plays NO audio until one is selected, so we adopt
+  // the first when the list lands, and expose the list for the programme picker. ──
+  @Published var dabProgrammes: [DabProgramme] = []
+  var dabScale: Double { dabRateScale }   // SDRClient — current speed-fix factor for the menu highlight
+  private var audioServiceId = -1
+  private var dabDrySecs = 0        // seconds on a DAB profile with no ensemble yet (re-lock watchdog)
+  private var dabRetries = 0
+  var dabActiveId: Int { audioServiceId }          // SDRClient — the playing service
+  var dabEnsembleName: String { dabEnsemble }      // SDRClient — multiplex label (or profile-name fallback)
+  private var dabEnsemble = ""
 
   // ── Sockets / audio / DSP ──
   // NWConnection (AudioSocket). A URLSessionWebSocketTask swap was tried and made the stall WORSE on
@@ -149,6 +169,20 @@ final class OwrxClient: ObservableObject, SDRClient {
         }
         if self.everFrame, !self.retrying {
           self.status = "\(self.linkIface) \(self.kbPerSec)KB/s \(self.fftFps)fft cpu:\(Int(CpuMeter.processCpuPercent()))"
+        }
+        // DAB re-lock safety net: a DAB profile that came up but produced NO ensemble after a few
+        // seconds usually means the re-asserted `dspcontrol start` raced the retune and the dablin
+        // chain wasn't (re)built. Re-send the demod + start a couple of times before giving up — this
+        // is what made switching between DAB profiles reliable instead of "works once".
+        if self.everFrame, self.mode == "dab", self.dabProgrammes.isEmpty, !self.retrying {
+          self.dabDrySecs += 1
+          if self.dabDrySecs >= 3, self.dabRetries < 3 {
+            self.dabRetries += 1; self.dabDrySecs = 0
+            self.sendDemod(); self.send(["type": "dspcontrol", "action": "start"])
+          }
+        } else {
+          self.dabDrySecs = 0
+          if !self.dabProgrammes.isEmpty { self.dabRetries = 0 }
         }
         self.frameCount = 0 }
     }
@@ -285,10 +319,93 @@ final class OwrxClient: ObservableObject, SDRClient {
   /// update must NOT blank a known ps — only a non-empty ps updates the name. DAB/digital-voice
   /// metadata is handled on the DAB/ADS-B screens, not here.
   nonisolated private func onMetadata(_ v: [String: Any]) {
+    if (v["mode"] as? String) == "DAB" { onDabMetadata(v); return }
+    // RDS (WFM). ps = programme-service name (8 chars). Incremental (ps/radiotext arrive separately),
+    // so only a NON-EMPTY ps updates the name — a radiotext-only frame must not blank a known station.
     let proto = v["protocol"] as? String
     guard proto == "WFM" || v["ps"] != nil || v["radiotext"] != nil else { return }
     if let ps = (v["ps"] as? String)?.trimmingCharacters(in: .whitespaces), !ps.isEmpty {
       Task { @MainActor in if self.stationName != ps { self.stationName = ps } }
+    }
+  }
+
+  /// DAB metadata: programmes (id→name) + ensemble label, resent ~1×/s. OWRX plays NO audio until a
+  /// service is selected, so adopt the first when the list lands and re-send the demod. Station name =
+  /// selected programme (else ensemble).
+  nonisolated private func onDabMetadata(_ v: [String: Any]) {
+    var progs: [DabProgramme] = []
+    if let p = v["programmes"] as? [String: Any] {
+      for (k, name) in p { if let id = Int(k) { progs.append(DabProgramme(id: id, name: String(describing: name))) } }
+      progs.sort { $0.id < $1.id }
+    }
+    // This OWRX+ build sends `ensemble_id` (a number), NOT `ensemble_label` — so there's often no label
+    // on the wire. Fall back to the active profile's name (which carries the multiplex name, e.g.
+    // "DAB 7A: NNDAB Northampton") in applyDabMeta when no label arrives.
+    let ensemble = (v["ensemble_label"] as? String)?.trimmingCharacters(in: .whitespaces)
+    Task { @MainActor in self.applyDabMeta(progs, ensemble) }
+  }
+
+  private var dabServiceMap: [Int: String] = [:]   // accumulated id→name (metadata is incremental)
+  // Per-station speed-fix recall (like the phone). Keyed "<ensemble>|<programme>" so a station you fixed
+  // once re-applies automatically when you come back — persisted across launches in UserDefaults.
+  private var dabSpeedMap: [String: Double] = (UserDefaults.standard.dictionary(forKey: "owrx_dab_speed_map") as? [String: Double]) ?? [:]
+  private var dabKey = ""
+  @MainActor private func applyDabMeta(_ progs: [DabProgramme], _ ensemble: String?) {
+    // ACCUMULATE — the server dribbles services out over several messages and some batches are partial
+    // (a big mux like SDL National showed only the latest 2 when we REPLACED). Merge into a map that only
+    // grows until the profile changes, so the full ensemble builds up and never shrinks.
+    for p in progs { dabServiceMap[p.id] = p.name }
+    let merged = dabServiceMap.map { DabProgramme(id: $0.key, name: $0.value) }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    if dabProgrammes != merged { dabProgrammes = merged }
+    if let e = ensemble, !e.isEmpty { dabEnsemble = e }
+    if dabEnsemble.isEmpty, let pn = profiles.first(where: { $0.active })?.name { dabEnsemble = pn }
+    // Adopt a service ONLY when nothing has been chosen yet (audioServiceId < 0). Never re-adopt after
+    // that: a flaky mux whose service list cycles (grows → resets → regrows, as SDL does) must NOT be
+    // allowed to silently switch the station or its name out from under the user. Once you're on a
+    // service, you stay on it until YOU pick another.
+    if audioServiceId < 0, let first = dabProgrammes.first {
+      audioServiceId = first.id
+      audioDec.reset(); hdAudioDec.reset()
+      sendDemod()
+    }
+    let sel = dabProgrammes.first(where: { $0.id == audioServiceId })?.name
+    let name = sel ?? dabEnsemble
+    if !name.isEmpty, stationName != name { stationName = name }
+    // Recall the saved speed fix when the tuned SERVICE changes (not every metadata tick, so a value the
+    // user just set isn't stomped). Key on ensemble+programme, matching the phone.
+    if let sel {
+      let key = dabEnsemble + "|" + sel
+      if key != dabKey {
+        dabKey = key
+        let saved = dabSpeedMap[key] ?? 1.0
+        if dabRateScale != saved { dabRateScale = saved }
+      }
+    }
+  }
+
+  /// Switch DAB service within the ensemble (from the programme picker). Re-sends the demod with the
+  /// new audio_service_id; OWRX swaps the decoded programme on the shared stream.
+  func selectDabService(_ id: Int) {
+    guard id != audioServiceId else { return }
+    audioServiceId = id
+    audioDec.reset(); hdAudioDec.reset()
+    sendDemod()
+    if let n = dabProgrammes.first(where: { $0.id == id })?.name {
+      stationName = n
+      let key = dabEnsemble + "|" + n     // recall this station's saved speed fix immediately
+      dabKey = key
+      dabRateScale = dabSpeedMap[key] ?? 1.0
+    }
+  }
+
+  /// DAB speed-correction factor (1 = off). Applied on the next audio frame (per-frame play rate) and
+  /// REMEMBERED for the current station (ensemble|programme) so it auto-re-applies on return.
+  func setDabScale(_ scale: Double) {
+    dabRateScale = scale > 0 ? scale : 1.0
+    if !dabKey.isEmpty {
+      dabSpeedMap[dabKey] = dabRateScale
+      UserDefaults.standard.set(dabSpeedMap, forKey: "owrx_dab_speed_map")
     }
   }
 
@@ -323,10 +440,18 @@ final class OwrxClient: ObservableObject, SDRClient {
         if let p = Self.modeMap[spikeMode] { bwLow = p.lo; bwHigh = p.hi }
       }
       stationName = ""   // new profile/station — drop any stale RDS name until fresh metadata lands
+      dabProgrammes = []; audioServiceId = -1; dabEnsemble = ""   // new ensemble on a DAB profile switch
+      dabServiceMap = [:]                                         // drop the old mux's accumulated services
+      dabDrySecs = 0; dabRetries = 0                              // re-arm the DAB re-lock watchdog
     }
     lastConfigCenter = centerFreq
     audioDec.reset(); hdAudioDec.reset()
     sendDemod()
+    // RE-ASSERT dspcontrol start AFTER the demod on a profile switch. The single start at connect fires
+    // before the profile/mod exist, so the DSP chain isn't (re)built around the new demod — FATAL for
+    // DAB (and ADS-B): the dablin/decoder chain must be assembled with the digital mod set, or no
+    // metadata/decode ever flows. Proven against the server: without this, 0 metadata; with it, 75.
+    if adopt { send(["type": "dspcontrol", "action": "start"]) }
   }
 
   private static let wireToSpike: [String: String] = [
@@ -493,6 +618,8 @@ final class OwrxClient: ObservableObject, SDRClient {
     ]
     if mode == "dab" || mode == "drm" { params["low_cut"] = NSNull(); params["high_cut"] = NSNull() }
     else { params["low_cut"] = Int(bwLow.rounded()); params["high_cut"] = Int(bwHigh.rounded()) }
+    // DAB: without a service id the server outputs NO audio. Send the adopted/selected programme.
+    if mode == "dab", audioServiceId >= 0 { params["audio_service_id"] = audioServiceId }
     send(["type": "dspcontrol", "params": params])
   }
 
@@ -505,6 +632,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     if half > 0 { f = min(max(f, centerFreq - half), centerFreq + half) }
     guard f != frequency else { return }
     frequency = f; viewCenter = f
+    stationName = ""   // left the old station — drop its RDS name until the new one's ps arrives
     sendDemod()
   }
   func tuneTo(_ hz: Double) {
@@ -512,6 +640,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     if half > 0 { f = min(max(f, centerFreq - half), centerFreq + half) }
     guard f != frequency else { return }
     frequency = f; viewCenter = f
+    stationName = ""   // retune clears the stale RDS name (a no-RDS station must not inherit it)
     sendDemod()
   }
   func zoom(delta: Int) {
@@ -523,6 +652,7 @@ final class OwrxClient: ObservableObject, SDRClient {
   func setMode(_ m: String) {
     guard m != mode else { return }
     mode = m; modeSnapshot = m
+    if m != "wfm" { stationName = "" }   // leaving WFM → the RDS name no longer applies
     if let p = Self.modeMap[m] { bwLow = p.lo; bwHigh = p.hi }
     audioDec.reset(); hdAudioDec.reset()
     sendDemod()

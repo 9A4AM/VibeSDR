@@ -99,6 +99,19 @@ final class SpikeLink: ObservableObject {
   @Published var bandName = ""
   /// Live station name (RDS ps on FM) — shown in place of the band label when present.
   @Published var stationName = ""
+  /// DAB services in the tuned ensemble + the current speed-fix factor (mirrored from the client).
+  @Published var dabProgrammes: [DabProgramme] = []
+  @Published var dabScale: Double = 1.0
+  @Published var dabActiveId: Int = -1
+  @Published var dabEnsembleName: String = ""
+
+  /// Which top-level screen to show. DAB is a LIST, not a band — a DAB profile with a service list gets
+  /// its own full screen (no waterfall), exactly as the companion routes it. (ADS-B → .adsb later.)
+  enum Screen { case sdr, dab }
+  var screen: Screen {
+    if mode == "dab", !dabProgrammes.isEmpty { return .dab }
+    return .sdr
+  }
   @Published var bandColor: Color? = nil
   @Published var bandLo = 0.0
   @Published var bandHi = 0.0
@@ -237,6 +250,10 @@ final class SpikeLink: ObservableObject {
     if clients != client.clients { clients = client.clients }
     if profiles != client.profiles { profiles = client.profiles }
     if stationName != client.stationName { stationName = client.stationName }
+    if dabProgrammes != client.dabProgrammes { dabProgrammes = client.dabProgrammes }
+    if dabScale != client.dabScale { dabScale = client.dabScale }
+    if dabActiveId != client.dabActiveId { dabActiveId = client.dabActiveId }
+    if dabEnsembleName != client.dabEnsembleName { dabEnsembleName = client.dabEnsembleName }
 
     if frequency != client.frequency { frequency = client.frequency; updateBand() }
     if mode != client.mode {
@@ -333,6 +350,8 @@ final class SpikeLink: ObservableObject {
   }
 
   func setStep(_ hz: Double) { step = hz }
+  func setDabScale(_ s: Double) { client?.setDabScale(s); dabScale = s }
+  func selectDabService(_ id: Int) { client?.selectDabService(id) }
 
   /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi
   /// (which drive the VFO's dashed sideband lines).

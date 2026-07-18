@@ -29,9 +29,18 @@ struct WristSDRApp: App {
           }
           .environmentObject(favs)
         } else {
-          ContentView()
-            .environmentObject(link)
-            .navigationBarHidden(true)
+          // Route by screen, like the companion: DAB is a service LIST, not a waterfall band.
+          switch link.screen {
+          case .sdr:
+            ContentView()
+              .environmentObject(link)
+              .navigationBarHidden(true)
+          case .dab:
+            DabView()
+              .environmentObject(link)
+              .environmentObject(favs)
+              .navigationBarHidden(true)
+          }
         }
       }
     }
