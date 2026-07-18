@@ -790,12 +790,17 @@ struct ContentView: View {
     // waterfall and needs a darker ground under it than white ever did. (It read fine back
     // when two scrims were accidentally stacked — 0.55 over 0.62 is an effective 0.83 —
     // which is the clue that told us the number, not the shape, was what was carrying it.)
-    let cw = size.width * 0.47
-    let ch: CGFloat = 30
+    // A PILL AROUND THE CLOCK ONLY. The battery moved to the bottom-left, so the old half-width
+    // (0.47) scrim was mostly darkening empty space — the "massive shading" WFM signals exposed.
+    // Now it just hugs the clock digits (18→58.8pt from the right edge). The watchOS status glyphs
+    // (car mode, location, recording) live top-LEFT and are colourful enough to read on the
+    // waterfall unaided — and we can't know when one is shown, so we don't darken there.
+    let cw: CGFloat = 62
+    let ch: CGFloat = 26
     ctx.fill(
-      Path(roundedRect: CGRect(x: size.width - cw - 4, y: 11, width: cw, height: ch),
-           cornerRadius: 9),
-      with: .color(.black.opacity(0.75))
+      Path(roundedRect: CGRect(x: size.width - cw - 2, y: 12, width: cw, height: ch),
+           cornerRadius: ch / 2),
+      with: .color(.black.opacity(0.72))
     )
 
     // Hairline under the band, so the trace's baseline and the waterfall's top

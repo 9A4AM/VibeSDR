@@ -37,7 +37,7 @@ final class AudioSocket {
 
   /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
   /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
-  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false) {
+  func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false, autoReplyPing: Bool = true) {
     gen &+= 1
     let g = gen
     cancel()
@@ -50,7 +50,9 @@ final class AudioSocket {
       ip.version = .v4
     }
     let ws = NWProtocolWebSocket.Options()
-    ws.autoReplyPing = true                       // answer the server's pings natively
+    // autoReplyPing=false surfaces .ping to receive() so we PONG manually — belt-and-braces where the
+    // native auto-reply seems not to fire (OWRX stalls the stream after a few seconds otherwise).
+    ws.autoReplyPing = autoReplyPing
     if !headers.isEmpty { ws.setAdditionalHeaders(headers) }
     params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
 

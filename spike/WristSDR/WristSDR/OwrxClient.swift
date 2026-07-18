@@ -147,7 +147,7 @@ final class OwrxClient: ObservableObject, SDRClient {
           self.handshaked = false
           self.status = "retrying (ws)…"
           self.sock.cancel()
-          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
+          self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
           return
         }
         if !self.everFrame, self.status != "live" { self.status = st }
@@ -161,7 +161,7 @@ final class OwrxClient: ObservableObject, SDRClient {
         }
       }
     }
-    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
+    sock.open(url: wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
   }
 
   // Reconnect on a mid-session drop (flaky server / receive-loop stop), with backoff.
@@ -178,7 +178,7 @@ final class OwrxClient: ObservableObject, SDRClient {
       try? await Task.sleep(nanoseconds: wait)
       self.retrying = false
       guard !self.goingIdle else { return }
-      self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true)
+      self.sock.open(url: self.wsURL, headers: [("User-Agent", Self.ua)], forceIPv4: true, autoReplyPing: false)
     }
   }
 
@@ -318,6 +318,9 @@ final class OwrxClient: ObservableObject, SDRClient {
       }
     }
     guard row.count > 8 else { return }
+    frameCount &+= 1        // FFT counts as data too — the watchdog must not reconnect while the
+                            // waterfall is flowing just because audio momentarily gapped.
+    if !sawFirstFrame { sawFirstFrame = true; Task { @MainActor in self.everFrame = true; if self.status != "live" { self.status = "live" } } }
     lastRow = row
     Task { @MainActor in self.pushSlice(row) }
   }
