@@ -52,6 +52,7 @@ struct SDRServer: Identifiable, Codable, Hashable {
   var users: Int = 0
   var maxUsers: Int = 0
   var full: Bool = false
+  var pin: String = ""             // VibeServer PIN (saved per host when the user enters one)
 }
 
 // ── Directory metadata ───────────────────────────────────────────────────────────

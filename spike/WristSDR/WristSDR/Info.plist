@@ -55,5 +55,14 @@
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your approximate location sorts the SDR server list by distance, nearest first. It stays on your watch.</string>
+	<!-- Local-network + Bonjour: discover VibeServers (your own phone serving its dongle) advertised on the
+	     LAN as _vibesdr._tcp. watchOS silently blocks NWBrowser for undeclared service types, and refuses
+	     LAN access without the usage string. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Finds VibeSDR servers running on your local network so you can connect without typing an address.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_vibesdr._tcp</string>
+	</array>
 </dict>
 </plist>

@@ -54,20 +54,73 @@ struct InstancePickerView: View {
   @State private var errored: Set<String> = []
   @State private var meta: [String: (dist: Double?, snr: Double?)] = [:]   // url -> live dist/snr
   @State private var showCustom = false
+  @StateObject private var mdns = VibeMdns()
+  @State private var pinFor: VibeAd? = nil
+  @State private var pinEntry = ""
 
   var body: some View {
     List {
       favouritesSection
+      discoveredSection
       directoriesSection
       customSection
     }
     .listStyle(.carousel)
     .navigationTitle("VibeSDR")
     .task { await preloadForFavourites() }
-    .onAppear { loc.request() }
+    .onAppear { loc.request(); mdns.start() }
+    .onDisappear { mdns.stop() }
     .sheet(isPresented: $showCustom) { CustomServerSheet { name, url, type in
       favs.addCustom(name: name, url: url, type: type)
     } }
+    .sheet(item: $pinFor) { ad in vibePinSheet(ad) }
+  }
+
+  // ── Discovered VibeServers (mDNS `_vibesdr._tcp` on the LAN) ─────────────────────
+  @ViewBuilder private var discoveredSection: some View {
+    if !mdns.found.isEmpty {
+      Section("ON YOUR NETWORK") {
+        ForEach(mdns.found) { ad in
+          Button {
+            if ad.pinRequired { pinEntry = ""; pinFor = ad }
+            else { connectVibe(ad, pin: "") }
+          } label: {
+            HStack(spacing: 8) {
+              typeBadge(.vibeserver)
+              VStack(alignment: .leading, spacing: 1) {
+                Text(ad.name).font(.system(size: 15)).foregroundColor(Self.cream).lineLimit(1)
+                Text(ad.host).font(.system(size: 9.5)).foregroundColor(Self.dim).lineLimit(1)
+              }
+              Spacer()
+              if ad.pinRequired {
+                Image(systemName: "lock.fill").font(.system(size: 11)).foregroundColor(Self.amber)
+              }
+            }
+          }.buttonStyle(.plain)
+        }
+      }
+    }
+  }
+
+  private func vibePinSheet(_ ad: VibeAd) -> some View {
+    List {
+      Section("PIN — \(ad.name)") {
+        TextField("PIN", text: $pinEntry)
+          .font(.system(size: 18, design: .rounded)).multilineTextAlignment(.center)
+        Button {
+          let p = pinEntry.trimmingCharacters(in: .whitespaces)
+          pinFor = nil
+          connectVibe(ad, pin: p)
+        } label: {
+          Text("Connect").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+        }.tint(Self.amber)
+      }
+    }
+  }
+
+  private func connectVibe(_ ad: VibeAd, pin: String) {
+    favs.registerVisit("ws://\(ad.host)")
+    onConnect(SDRServer(name: ad.name, url: "ws://\(ad.host)", host: ad.host, serverType: .vibeserver, pin: pin))
   }
 
   // ── Favourites ────────────────────────────────────────────────────────────────

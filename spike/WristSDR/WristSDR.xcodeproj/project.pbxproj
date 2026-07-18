@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F7 /* OwrxClient.swift */; };
 		A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB20E378E2831CA4F85135F9 /* AircraftView.swift */; };
+		AA0000000000000000000104 /* VibeMdns.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000204 /* VibeMdns.swift */; };
 		AA0000000000000000000103 /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* FmdxView.swift */; };
 		AA0000000000000000000102 /* FmDxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* FmDxClient.swift */; };
 		AA0000000000000000000101 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* FmdxMp3Decoder.swift */; };
@@ -47,6 +48,7 @@
 /* Begin PBXFileReference section */
 		BB20E378E2831CA4F85135F7 /* OwrxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxClient.swift; sourceTree = "<group>"; };
 		BB20E378E2831CA4F85135F9 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000204 /* VibeMdns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeMdns.swift; sourceTree = "<group>"; };
 		AA0000000000000000000203 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000202 /* FmDxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmDxClient.swift; sourceTree = "<group>"; };
 		AA0000000000000000000201 /* FmdxMp3Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxMp3Decoder.swift; sourceTree = "<group>"; };
@@ -102,6 +104,7 @@
 			children = (
 				BB20E378E2831CA4F85135F7 /* OwrxClient.swift */,
 				BB20E378E2831CA4F85135F9 /* AircraftView.swift */,
+				AA0000000000000000000204 /* VibeMdns.swift */,
 				AA0000000000000000000203 /* FmdxView.swift */,
 				AA0000000000000000000202 /* FmDxClient.swift */,
 				AA0000000000000000000201 /* FmdxMp3Decoder.swift */,
@@ -240,6 +243,7 @@
 			files = (
 				A1936C9D44AFF44DEFAAD0D4 /* OwrxClient.swift in Sources */,
 				A1936C9D44AFF44DEFAAD0F9 /* AircraftView.swift in Sources */,
+				AA0000000000000000000104 /* VibeMdns.swift in Sources */,
 				AA0000000000000000000103 /* FmdxView.swift in Sources */,
 				AA0000000000000000000102 /* FmDxClient.swift in Sources */,
 				AA0000000000000000000101 /* FmdxMp3Decoder.swift in Sources */,
