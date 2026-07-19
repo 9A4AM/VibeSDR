@@ -104,6 +104,21 @@ struct AircraftView: View {
     .padding(.horizontal, 6).padding(.top, 40).padding(.bottom, 4)   // clears the status band (top ignored)
   }
 
+  /// Altitude the way you would HEAR it: flight levels above the transition altitude, feet below.
+  /// Ported 1:1 from the phone's `AircraftPanel.altText` so the wrist and the phone never disagree
+  /// about the same aircraft.
+  ///
+  /// It also fixes a wrist-specific problem: the raw figure ("11,375ft") wrapped MID-NUMBER on a
+  /// 41mm as "11,37" / "5ft", which reads as two different numbers. Rounding to the nearest 100
+  /// drops the noise digits that caused it, and FL is shorter still.
+  static func altText(_ ft: Double) -> String {
+    if ft >= 18_000 {
+      return "FL" + String(format: "%03d", Int((ft / 100).rounded()))
+    }
+    let r = Int((ft / 100).rounded()) * 100
+    return (r.formatted(.number.grouping(.automatic))) + " ft"
+  }
+
   private var empty: some View {
     VStack(spacing: 6) {
       Spacer()
@@ -130,10 +145,8 @@ struct AircraftView: View {
         Text(p.flight?.isEmpty == false ? p.flight! : p.icao)
           .font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(.white).lineLimit(1)
         HStack(spacing: 6) {
-          // lineLimit(1): a thousands-separated altitude wraps MID-NUMBER on a 41mm ("11,37" /
-          // "5ft"), which reads as two different figures. Never break a number across lines.
           if let a = p.altitude {
-            Text("\(Int(a))ft").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6))
+            Text(Self.altText(a)).font(.system(size: 10)).foregroundStyle(.white.opacity(0.6))
               .lineLimit(1).fixedSize(horizontal: true, vertical: false)
           }
           if let s = p.speed { Text("\(Int(s))kt").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)) }
