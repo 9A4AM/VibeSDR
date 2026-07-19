@@ -31,7 +31,7 @@ The spike was built backend-agnostic and already abstracts exactly the thing tha
 it is a client that supplies rows from WCSession instead of computing them from bins.
 
 **The work is therefore: implement `PhoneClient: SDRClient` (WCSession-backed) and delete the
-companion's duplicate UI.** Not merge it — delete it, because:
+companion's duplicate UI.** Not merge it — delete ALL of it, because the spike wins every file:
 
 | file | spike | companion | verdict |
 |---|---|---|---|
@@ -40,7 +40,7 @@ companion's duplicate UI.** Not merge it — delete it, because:
 | DabView | **12K** | 7K | spike wins |
 | AircraftView | **9.7K** | 7K | spike wins |
 | NumpadView | 10815 | 10815 | byte-identical |
-| **FmdxView** | 17K | **33K** | ★ **companion is AHEAD — reconcile, don't discard** |
+| **FmdxView** | 17K | 33K | ★ spike wins — see §2. Bigger ≠ better: the spike is space-optimised, and the companion's extra bulk is a logo pipeline being DROPPED. |
 
 Everything else in the spike (`UberClient`, `KiwiClient`, `OwrxClient`, `AudioSocket`, `WatchAudio`,
 `OpusDecoder`, `SignalProcessor`, `SpikeLink`, `LinkManager`, `Chat`, `SDRDirectory`,
@@ -67,13 +67,19 @@ Measured:
 So the reconciliation is narrow: **the spike's FmdxView is the base — keep its chat, its
 learned-station dial and its optimised layout. Take ONLY the logo pipeline from the companion.**
 
-★ **But that pipeline only works when a phone is attached.** A merged app would show real station
-logos in Phone Control and frosted fallbacks in Standalone — a visible difference between modes,
-which cuts against "screens and options match for all services". Decide deliberately:
-  1. accept the difference (logos are a bonus of having a phone), or
-  2. give Standalone its own logo fetch (it already does its own directory + learned stations, so this
-     is not out of character), or
-  3. drop logos from the merged app entirely for consistency (almost certainly wrong — they are good).
+### ★ RESOLVED — drop the logo, take nothing
+
+**Decision (Stuart, 2026-07-19): remove the logo from the FM-DX screen in companion mode. *"The logo
+is barely visible."*** Behind a frosted background on a 40mm screen it is decoration nobody can
+actually see.
+
+That was the ONLY thing the companion's FmdxView had over the spike's — so **there is no
+reconciliation left. `FmdxView` needs no merge at all: the spike's version wins outright and the
+companion's is deleted with the rest of its UI.**
+
+It also removes the mode-difference problem for free: with no logo pipeline, Phone Control and
+Standalone render FM-DX identically, so *"screens and options match for all services"* is satisfied
+without doing any work for it.
 
 ---
 
