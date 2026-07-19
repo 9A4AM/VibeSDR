@@ -15,6 +15,9 @@ protocol SDRClient: AnyObject {
   var rowsPushed: Int { get }
   var framesPerSec: Double { get }
   var status: String { get }
+  /// How far Link Management has had to throttle the waterfall (1 = full rate). Drives the link
+  /// glyph. A backend with no rate lever (OWRX) keeps the default 1 via the extension below.
+  var adaptiveRung: Int { get }
   /// A plain-English refusal/timeout reason to show the user (nil = fine). Kiwi sets this on
   /// badp/too_busy/handshake-block/connect-timeout so nobody waits forever for a dead connection.
   var lastError: String? { get }
@@ -67,6 +70,9 @@ protocol SDRClient: AnyObject {
 
 // Default-empty so UberSDR/Kiwi don't have to implement the profile surface; OWRX overrides.
 extension SDRClient {
+  /// OpenWebRX has no waterfall-rate lever at all (fps/fft_fps/fft_size are ignored), so it never
+  /// throttles and is never blamed for one.
+  var adaptiveRung: Int { 1 }
   var profiles: [SDRProfile] { [] }
   var clients: Int { 0 }
   func selectProfile(_ id: String) {}
@@ -199,7 +205,10 @@ final class KiwiClient: ObservableObject, SDRClient {
       Task { @MainActor in guard let self else { return }
         self.framesPerSec = Double(self.frameCount)
         if self.frameCount > 0, self.retries > 0 { self.retries = 0 }   // stable again → reset backoff
-        self.frameCount = 0 }
+        self.frameCount = 0
+        self.linkMgr.tick(fps: self.framesPerSec,
+                          live: !self.goingIdle && self.rowsPushed > 0,
+                          settled: ProcessInfo.processInfo.systemUptime - self.lastWfChangeAt > 3) }
     }
     RunLoop.main.add(t, forMode: .common); rateTimer = t
 
@@ -538,7 +547,22 @@ final class KiwiClient: ObservableObject, SDRClient {
       }
     }
   }
-  private func sendZoomNow() { wfSend("SET zoom=\(zoomLevel()) cf=\(String(format: "%.3f", viewCenter / 1000))") }
+  private func sendZoomNow() {
+    lastWfChangeAt = ProcessInfo.processInfo.systemUptime   // frames pause over a re-subscribe
+    wfSend("SET zoom=\(zoomLevel()) cf=\(String(format: "%.3f", viewCenter / 1000))")
+  }
+  private var lastWfChangeAt: Double = 0
+
+  /// Adaptive waterfall rate. Kiwi's ladder is the widest of any backend: `wf_speed` 4/3/2 =
+  /// 23/13/5 fps (upstream constants WF_SPEED_FAST/MED/SLOW in rx_waterfall.h). We ask every Kiwi
+  /// for 23 fps today, so there is a lot to give back.
+  ///
+  /// Rung 4 (`wf_speed=1`, 1 fps) is DELIBERATELY NOT IN THE LADDER — Stuart: "no amount of
+  /// interpolation will rescue that". 5 fps is the floor for both adaptation and Low Data.
+  lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung in
+    self?.wfSend("SET wf_speed=\(5 - rung)")               // rung 1→4, 2→3, 3→2
+  }
+  var adaptiveRung: Int { linkMgr.adaptiveRung }
 
   private func sendRxParams() {
     sendDemod()

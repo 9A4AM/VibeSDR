@@ -626,7 +626,14 @@ struct HardwareSheet: View {
   @FocusState private var crownFocused: Bool
   /// Auto link management (adaptive FFT/FPS/span on a weak link). Some users want MAX quality always,
   /// stutters and all — this lets them turn the ABR off. Read by the adaptive loop (built separately).
-  @AppStorage("vibeAutoLink") private var autoLink = true
+  @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
+  private var linkModeBlurb: String {
+    switch LinkManager.Mode(rawValue: linkMode) ?? .adaptive {
+    case .full:     return "Always asks for the full frame rate — may stutter on a poor link."
+    case .adaptive: return "Adjusts the frame rate requested from the server to suit the connection. Results in slower waterfall draws."
+    case .lowData:  return "Holds the lowest frame rate to save data. Waterfall draws slowly; audio is unaffected."
+    }
+  }
 
   /// A grid cell: small title, big value, glass when off / lit (green on-state, cyan armed) when active.
   private func cell(title: String, value: String, lit: Bool, litColor: Color = .green, dim: Bool = false) -> some View {
@@ -720,22 +727,29 @@ struct HardwareSheet: View {
           }
         }.padding(.top, 3)
 
-        // AUTO LINK MANAGEMENT — the adaptive-quality (ABR) switch. Off = hold max quality, drops and all.
-        Button { autoLink.toggle() } label: {
-          HStack {
-            VStack(alignment: .leading, spacing: 1) {
-              Text("LINK MANAGEMENT").font(.system(size: 13, weight: .semibold))
-              Text(autoLink ? "Adapts the requested frame rate to the link — slower waterfall, fewer breakups"
-                            : "Always asks for full rate — may stutter on a poor link")
-                .font(.system(size: 9)).foregroundColor(autoLink ? .black.opacity(0.6) : .white.opacity(0.5))
+        // LINK MANAGEMENT — three states, not a switch. "Slow because I chose to" and "slow
+        // because the link is bad" are different situations and must not share a control.
+        VStack(spacing: 3) {
+          Text("LINK MANAGEMENT").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+          HStack(spacing: 6) {
+            ForEach([(LinkManager.Mode.full, "Full"),
+                     (LinkManager.Mode.adaptive, "Auto"),
+                     (LinkManager.Mode.lowData, "Low data")], id: \.0.rawValue) { m, label in
+              let active = linkMode == m.rawValue
+              Button { linkMode = m.rawValue } label: {
+                Text(label)
+                  .font(.system(size: 11, weight: .semibold))
+                  .frame(maxWidth: .infinity).padding(.vertical, 6)
+                  .foregroundColor(active ? .black : .white)
+                  .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(active ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
+              }.buttonStyle(.plain)
             }
-            Spacer()
-            Text(autoLink ? "ON" : "OFF").font(.system(size: 12, weight: .bold))
           }
-          .padding(.horizontal, 12).padding(.vertical, 9)
-          .foregroundColor(autoLink ? .black : .white)
-          .background(RoundedRectangle(cornerRadius: 10).fill(autoLink ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
-        }.buttonStyle(.plain).padding(.top, 3)
+          Text(linkModeBlurb)
+            .font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
+            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }.padding(.top, 3)
 
         if gainArmed, !radio.gainAuto {
           Text("Turn the crown to set gain").font(.system(size: 10)).foregroundColor(.cyan)

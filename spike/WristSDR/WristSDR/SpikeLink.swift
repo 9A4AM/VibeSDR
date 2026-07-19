@@ -356,7 +356,7 @@ final class SpikeLink: ObservableObject {
     // being bad, not good, and the indicator has to say so or it is lying by omission.
     // ADAPTIVE rung, not the wire rate: a rate the USER pinned (Low Data mode, for a metered
     // plan) is a preference, not a symptom, and must never show a permanent red link.
-    let rung = (client as? UberClient)?.adaptiveRung ?? 1
+    let rung = client.adaptiveRung
     if throttleRung != rung { throttleRung = rung }
 
     // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).

@@ -1252,58 +1252,23 @@ final class UberClient: ObservableObject {
   // stutter. Ladder stops at 3: below ~3fps the interpolator is inventing most of what you see.
   /// Read live from defaults each tick rather than held as state, so the toggle can live anywhere in
   /// the menu tree (as `@AppStorage("vibeAutoLink")`) without plumbing UberClient into the root menu.
-  private var linkManagement: Bool { UserDefaults.standard.object(forKey: "vibeAutoLink") as? Bool ?? true }
-  /// The rung the CONTROLLER chose, which is not the same thing as the rate on the wire.
-  ///
-  /// `rateDivisor` says what we asked the server for; this says how much of that was forced on us
-  /// by a poor link. A user who deliberately picks a low rate (Low Data mode, for a metered plan)
-  /// is not on a bad connection, and must not be shown a permanent red link glyph for exercising a
-  /// choice. Only adaptive throttling is a symptom; a user-pinned rate is a preference.
-  @Published var adaptiveRung = 1
-  /// Set when the controller (not the user) last moved the rung — surfaced in the menu so a
-  /// slow waterfall is never a mystery.
-  @Published var linkManagementActive = false
-  private var starvedSecs = 0
-  private var healthySecs = 0
-  private static let ladderMax = 3        // 1 → 2 → 3, no further
+  /// Adaptive waterfall rate. UberSDR ladder: divisor 1/2/3 = 10/5/3.3 fps (measured).
+  /// Low Data may pin rung 2 (5 fps) but never rung 3 — 3.3 fps is jerky and reserved for a
+  /// genuinely poor link. VibeServer has richer levers and is driven separately.
+  lazy var linkMgr = LinkManager(ladder: [10, 5, 10.0 / 3.0], lowDataRung: 2) { [weak self] rung in
+    self?.rateDivisor = rung          // didSet sends set_rate
+  }
+  /// How far the controller has had to back off (1 = not throttled). Mirrors to SpikeLink for
+  /// the link glyph — see LinkManager.adaptiveRung for why this is not `rateDivisor`.
+  var adaptiveRung: Int { linkMgr.adaptiveRung }
 
   private func stepLinkManagement() {
-    // UberSDR only. VibeServer has richer levers (fftRate/bins) and we own both ends there.
+    // UberSDR only: VibeServer has fftRate/bins and we own both ends there.
     guard !isVibe, !goingIdle else { return }
-    // Switched off mid-session — hand the full rate straight back and stop adapting.
-    guard linkManagement else {
-      if rateDivisor != 1 { rateDivisor = 1 }
-      adaptiveRung = 1
-      linkManagementActive = false
-      starvedSecs = 0; healthySecs = 0
-      return
-    }
-    guard status == "live", everHadFrames else { return }
-    // A zoom/tune re-subscribes and legitimately pauses frames — don't read that as a bad link.
-    guard ProcessInfo.processInfo.systemUptime - lastViewSentAt > 3 else { starvedSecs = 0; return }
-
-    let expected = 10.0 / Double(rateDivisor)
-    let ratio = framesPerSec / expected
-
-    if ratio < 0.6 {
-      starvedSecs += 1; healthySecs = 0
-      if starvedSecs >= 3, rateDivisor < Self.ladderMax {
-        rateDivisor += 1                 // didSet sends set_rate
-        adaptiveRung = rateDivisor       // forced on us — the glyph should say so
-        linkManagementActive = true
-        starvedSecs = 0
-      }
-    } else if ratio >= 0.85 {
-      healthySecs += 1; starvedSecs = 0
-      if healthySecs >= 20, rateDivisor > 1 {
-        rateDivisor -= 1
-        adaptiveRung = rateDivisor
-        linkManagementActive = rateDivisor > 1
-        healthySecs = 0
-      }
-    } else {
-      starvedSecs = 0; healthySecs = 0   // in between — hold this rung
-    }
+    linkMgr.tick(fps: framesPerSec,
+                 live: status == "live" && everHadFrames,
+                 // A zoom/tune re-subscribes and legitimately pauses frames.
+                 settled: ProcessInfo.processInfo.systemUptime - lastViewSentAt > 3)
   }
 
   private func sendRate() {
