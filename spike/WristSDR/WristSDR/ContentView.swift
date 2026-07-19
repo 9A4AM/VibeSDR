@@ -172,6 +172,7 @@ struct ContentView: View {
   @AppStorage("seenSdrTutorial") private var seenSdrTut = false
   @State private var showSdrTut = false
   @State private var showChat = false
+  @State private var showHardware = false
   /// Pending wrist-down suspend. A quick glance away shouldn't force a spectrum reconnect on
   /// the way back, so dropping the socket is DELAYED and cancelled if the wrist comes back up.
   @State private var suspendWork: DispatchWorkItem?
@@ -333,6 +334,27 @@ struct ContentView: View {
             ChatGlyph(clients: link.clients, activity: link.chatActivity) {
               if !locked { showChat = true }
             }
+            .padding(.leading, 6).padding(.top, 19)
+            Spacer()
+          }
+          Spacer()
+        }
+        .ignoresSafeArea()
+      }
+
+      // RTL-SDR hardware button — top-left (opposite the clock), VibeServer only. The client drives the
+      // physical dongle (gain/bias-T/AGC/PPM/sample-rate); its own button keeps the hold-menu uncluttered
+      // for the remote backends that have no hardware. (This corner is free on VibeServer — no chat glyph.)
+      if link.hasHardwareControls {
+        VStack {
+          HStack {
+            Button { if !locked { showHardware = true } } label: {
+              Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.cyan)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Capsule().fill(.black.opacity(0.35)))
+                .contentShape(Capsule())
+            }.buttonStyle(.plain)
             .padding(.leading, 6).padding(.top, 19)
             Spacer()
           }
@@ -536,6 +558,9 @@ struct ContentView: View {
       TutorialSheet(title: "Using VibeSDR", tips: sdrTutorialTips(isOwrx: link.isOwrx), dismissLabel: "Start listening") {
         seenSdrTut = true; showSdrTut = false
       }
+    }
+    .sheet(isPresented: $showHardware) {
+      if let radio = link.vibe { NavigationStack { HardwareSheet(radio: radio) } }
     }
     .sheet(isPresented: $showChat) {
       NavigationStack { ChatSheet().environmentObject(link) }

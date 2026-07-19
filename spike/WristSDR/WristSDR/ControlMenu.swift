@@ -422,6 +422,9 @@ struct ControlMenu: View {
           // reconnect on the way back.
           tile(name: "WRIST DOWN", value: wristLabel, h: h) { showWrist = true }
 
+          // (RTL-SDR hardware controls live on their OWN button top-left of the waterfall screen — see
+          // ContentView — so this grid stays uncluttered for the remote backends that have no dongle.)
+
           // SERVERS — back to the instance picker to switch server (or manage favourites).
           tile(icon: "antenna.radiowaves.left.and.right", label: "Servers", h: h) {
             dismiss(); link.backToPicker()
@@ -608,6 +611,166 @@ struct ControlMenu: View {
       return k == k.rounded() ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
     }
     return String(format: "%.0fHz", hz)
+  }
+}
+
+/// VibeServer HARDWARE controls — the client drives the physical RTL-SDR over the WS. Observes the
+/// UberClient directly (the values live there, not mirrored through SpikeLink). Gain steps + offered
+/// sample rates come from the server's `hwinfo`; the sample-rate picker hides when the host pinned the rate.
+struct HardwareSheet: View {
+  @ObservedObject var radio: UberClient
+  @State private var gainArmed = false
+  @State private var gainCrown = 0.0
+  @State private var lastGainDetent = 0
+  @State private var showSpan = false
+  @FocusState private var crownFocused: Bool
+  /// Auto link management (adaptive FFT/FPS/span on a weak link). Some users want MAX quality always,
+  /// stutters and all — this lets them turn the ABR off. Read by the adaptive loop (built separately).
+  @AppStorage("vibeAutoLink") private var autoLink = true
+
+  /// A grid cell: small title, big value, glass when off / lit (green on-state, cyan armed) when active.
+  private func cell(title: String, value: String, lit: Bool, litColor: Color = .green, dim: Bool = false) -> some View {
+    VStack(spacing: 2) {
+      Text(title).font(.system(size: 9, weight: .bold)).foregroundColor(lit ? .black.opacity(0.65) : .white.opacity(0.55))
+      Text(value).font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+    }
+    .frame(maxWidth: .infinity).frame(height: cellH)
+    .foregroundColor(lit ? .black : (dim ? .white.opacity(0.3) : .white))
+    .background(RoundedRectangle(cornerRadius: 10).fill(lit ? AnyShapeStyle(litColor) : AnyShapeStyle(.white.opacity(0.14))))
+    .overlay(RoundedRectangle(cornerRadius: 10).stroke(lit && litColor == .cyan ? Color.cyan : .clear, lineWidth: 1.5))
+  }
+
+  /// PPM correction — inline − / value / + (a tuner-clock trim, not a toggle).
+  private var ppmCell: some View {
+    VStack(spacing: 2) {
+      Text("PPM").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.55))
+      HStack(spacing: 12) {
+        Button { radio.setPpm(max(-200, radio.ppm - 1)) } label: { Image(systemName: "minus") }.buttonStyle(.plain)
+        Text("\(radio.ppm)").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().frame(minWidth: 26)
+        Button { radio.setPpm(min(200, radio.ppm + 1)) } label: { Image(systemName: "plus") }.buttonStyle(.plain)
+      }.font(.system(size: 13, weight: .semibold))
+    }
+    .frame(maxWidth: .infinity).frame(height: cellH).foregroundColor(.white)
+    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.14)))
+  }
+
+  /// An on/off control drawn as an ILLUMINATED button — glass when off, lit green when on (clearer on a
+  /// wrist than a switch). Tapping toggles.
+  private func onOff(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      HStack {
+        Text(label).font(.system(size: 15, weight: .semibold))
+        Spacer()
+        Text(on ? "ON" : "OFF").font(.system(size: 12, weight: .bold))
+          .foregroundColor(on ? .black.opacity(0.7) : .white.opacity(0.5))
+      }
+      .padding(.horizontal, 12).padding(.vertical, 9)
+      .foregroundColor(on ? .black : .white)
+      .background(RoundedRectangle(cornerRadius: 10)
+        .fill(on ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
+      .contentShape(Rectangle())
+    }.buttonStyle(.plain).listRowInsets(EdgeInsets())
+  }
+
+  private let cellH: CGFloat = 56
+
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 7) {
+        // Row 1 — GAIN (crown-armed) · AUTO
+        HStack(spacing: 7) {
+          Button {
+            if !radio.gainAuto { gainArmed.toggle(); crownFocused = gainArmed }
+          } label: {
+            cell(title: "GAIN", value: radio.gainAuto ? "Auto" : String(format: "%.1f dB", radio.gainValue / 10),
+                 lit: gainArmed && !radio.gainAuto, litColor: .cyan, dim: radio.gainAuto)
+          }.buttonStyle(.plain).disabled(radio.gainAuto)
+          Button {
+            let a = !radio.gainAuto; radio.setGainAuto(a)
+            if a { gainArmed = false; crownFocused = false }
+          } label: { cell(title: "AUTO GAIN", value: radio.gainAuto ? "ON" : "OFF", lit: radio.gainAuto) }
+            .buttonStyle(.plain)
+        }
+        // Row 2 — BIAS-T · DIGITAL AGC
+        HStack(spacing: 7) {
+          Button { radio.setBiasT(!radio.biasT) } label: { cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT) }.buttonStyle(.plain)
+          Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
+        }
+        // Row 3 — SPAN (picker) · PPM (inline ±)
+        HStack(spacing: 7) {
+          Button { if radio.lockedRate == 0 { showSpan = true } } label: {
+            cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
+                 lit: false, dim: radio.lockedRate != 0)
+          }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
+          ppmCell
+        }
+        // FM de-emphasis — full width
+        VStack(spacing: 3) {
+          Text("FM DE-EMPHASIS").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+          HStack(spacing: 6) {
+            ForEach([(0, "Off"), (50, "50µs"), (75, "75µs")], id: \.0) { tau, label in
+              let active = radio.deemph == tau
+              Button { radio.setDeemph(tau) } label: {
+                Text(label).font(.system(size: 13, weight: .semibold))
+                  .frame(maxWidth: .infinity).padding(.vertical, 7)
+                  .background(active ? Color.orange : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                  .foregroundColor(active ? .black : .white)
+              }.buttonStyle(.plain)
+            }
+          }
+        }.padding(.top, 3)
+
+        // AUTO LINK MANAGEMENT — the adaptive-quality (ABR) switch. Off = hold max quality, drops and all.
+        Button { autoLink.toggle() } label: {
+          HStack {
+            VStack(alignment: .leading, spacing: 1) {
+              Text("AUTO LINK").font(.system(size: 13, weight: .semibold))
+              Text(autoLink ? "Adapts quality to the link" : "Max quality — may stutter")
+                .font(.system(size: 9)).foregroundColor(autoLink ? .black.opacity(0.6) : .white.opacity(0.5))
+            }
+            Spacer()
+            Text(autoLink ? "ON" : "OFF").font(.system(size: 12, weight: .bold))
+          }
+          .padding(.horizontal, 12).padding(.vertical, 9)
+          .foregroundColor(autoLink ? .black : .white)
+          .background(RoundedRectangle(cornerRadius: 10).fill(autoLink ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
+        }.buttonStyle(.plain).padding(.top, 3)
+
+        if gainArmed, !radio.gainAuto {
+          Text("Turn the crown to set gain").font(.system(size: 10)).foregroundColor(.cyan)
+        }
+      }
+      .padding(.horizontal, 6).padding(.bottom, 10)
+    }
+    .navigationTitle("Radio")
+    .sheet(isPresented: $showSpan) {
+      List {
+        ForEach(radio.offeredRates, id: \.self) { r in
+          Button { radio.setCaptureRate(r); showSpan = false } label: {
+            HStack {
+              Text(String(format: "%.2f MHz", Double(r) / 1_000_000)).font(.system(size: 15))
+              Spacer()
+              if radio.sampleRate == r { Image(systemName: "checkmark").foregroundStyle(.green) }
+            }
+          }.buttonStyle(.plain)
+        }
+      }.navigationTitle("Span")
+    }
+    .focusable(gainArmed && !radio.gainAuto)
+    .focused($crownFocused)
+    .digitalCrownRotation($gainCrown, from: 0, through: 1000, by: 1, sensitivity: .low, isContinuous: true)
+    .onChange(of: gainCrown) { _, new in
+      guard gainArmed, !radio.gainAuto, !radio.offeredGains.isEmpty else { return }
+      let detent = Int(new.rounded())
+      var delta = detent - lastGainDetent
+      if delta > 500 { delta -= 1000 }; if delta < -500 { delta += 1000 }
+      lastGainDetent = detent
+      guard delta != 0 else { return }
+      let gains = radio.offeredGains
+      let cur = gains.firstIndex(where: { abs(radio.gainValue - Double($0)) < 0.5 }) ?? gains.count / 2
+      let ni = min(gains.count - 1, max(0, cur + delta))
+      radio.setGainValue(Double(gains[ni]))
+    }
   }
 }
 

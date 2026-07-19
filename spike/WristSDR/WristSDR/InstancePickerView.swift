@@ -78,34 +78,31 @@ struct InstancePickerView: View {
   }
 
   // ── Discovered VibeServers (mDNS `_vibesdr._tcp` on the LAN) ─────────────────────
-  // Always visible so the SCAN button is reachable even before anything's found — cold auto-discovery is
-  // flaky on watchOS (the resolve stalls until real network activity), so the user can force a rescan.
+  // Only shown once something's actually resolved. Cold auto-discovery is flaky on watchOS (the resolve
+  // stalls until a real streaming connection wakes the stack), so in practice this fills in after your
+  // first server connection of the session; the saved FAVOURITE is the reliable path.
   @ViewBuilder private var discoveredSection: some View {
-    Section {
-      ForEach(mdns.found) { ad in
-        Button {
-          if ad.pinRequired { pinEntry = favs.savedPin(host: ad.host); pinFor = ad }
-          else { connectVibe(ad, pin: "") }
-        } label: {
-          HStack(spacing: 8) {
-            typeBadge(.vibeserver)
-            VStack(alignment: .leading, spacing: 1) {
-              Text(ad.name).font(.system(size: 15)).foregroundColor(Self.cream).lineLimit(1)
-              Text(ad.host).font(.system(size: 9.5)).foregroundColor(Self.dim).lineLimit(1)
+    if !mdns.found.isEmpty {
+      Section("ON YOUR NETWORK") {
+        ForEach(mdns.found) { ad in
+          Button {
+            if ad.pinRequired { pinEntry = favs.savedPin(host: ad.host); pinFor = ad }
+            else { connectVibe(ad, pin: "") }
+          } label: {
+            HStack(spacing: 8) {
+              typeBadge(.vibeserver)
+              VStack(alignment: .leading, spacing: 1) {
+                Text(ad.name).font(.system(size: 15)).foregroundColor(Self.cream).lineLimit(1)
+                Text(ad.host).font(.system(size: 9.5)).foregroundColor(Self.dim).lineLimit(1)
+              }
+              Spacer()
+              if ad.pinRequired {
+                Image(systemName: "lock.fill").font(.system(size: 11)).foregroundColor(Self.amber)
+              }
             }
-            Spacer()
-            if ad.pinRequired {
-              Image(systemName: "lock.fill").font(.system(size: 11)).foregroundColor(Self.amber)
-            }
-          }
-        }.buttonStyle(.plain)
+          }.buttonStyle(.plain)
+        }
       }
-      Button { WKInterfaceDevice.current().play(.click); mdns.refresh() } label: {
-        Label(mdns.found.isEmpty ? "Scan for local servers" : "Scan again", systemImage: "arrow.clockwise")
-          .font(.system(size: 13, weight: .semibold)).foregroundColor(Self.amber)
-      }.buttonStyle(.plain)
-    } header: {
-      Text("ON YOUR NETWORK").font(.system(size: 13, weight: .bold)).foregroundColor(Self.amber)
     }
   }
 

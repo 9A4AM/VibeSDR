@@ -67,6 +67,7 @@ final class UberClient: ObservableObject {
   @Published var agc = false
   @Published var ppm = 0
   @Published var sampleRate = 0                // current capture rate (= spectrum span)
+  @Published var deemph = 50                   // FM de-emphasis µs (50 EU / 75 Americas / 0 off)
   var hasHardwareControls: Bool { isVibe }
 
   private func onHwInfo(_ j: [String: Any]) {
@@ -84,6 +85,7 @@ final class UberClient: ObservableObject {
   func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]) }
   func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]) }
   func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]) }
+  func setDeemph(_ tau: Int) { guard isVibe else { return }; deemph = tau; specSock.send(json: ["type": "deemph", "tau": tau]) }
   /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
   /// Force mono — the ABR last resort (only meaningful on WFM).
