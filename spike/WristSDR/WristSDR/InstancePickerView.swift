@@ -67,7 +67,17 @@ struct InstancePickerView: View {
       customSection
     }
     .listStyle(.carousel)
-    .navigationTitle("VibeSDR")
+    // "Jr" as a smaller accent mark rather than plain appended text: it reads as a sub-brand
+    // instead of a longer name, and costs almost no width on a 40mm where "VibeSDR" already
+    // fills most of the row.
+    .navigationTitle {
+      HStack(alignment: .firstTextBaseline, spacing: 2) {
+        Text("VibeSDR")
+        Text("Jr")
+          .font(.system(size: 12, weight: .bold, design: .rounded))
+          .foregroundStyle(.orange)
+      }
+    }
     .task { await preloadForFavourites() }
     .onAppear { loc.request(); mdns.start() }
     .onDisappear { mdns.stop() }
