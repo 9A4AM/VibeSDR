@@ -7,13 +7,57 @@
 
 ---
 
-## 0. The shape (Stuart's spec)
+## 0. THE SPEC (Stuart, 2026-07-19 — authoritative)
 
-One app. A **mode toggle on first open — Standalone / Phone Control**. From there:
+**VibeSDR comes with VibeSDR Jr.** On the watch it is called **VibeSDR Jr**, including in the app list.
 
-- **Screens and options MATCH across all services.** One menu, one set of controls, whichever mode.
-- **Keep the working chat boxes.**
-- **Connection and waterfall rendering stay completely separate underneath.**
+### Launch behaviour
+
+| situation | what happens |
+|---|---|
+| **Phone app running** | Jr icon at the top of the watch face and in the widget stack (as now). Opening Jr goes **straight into Companion mode** — no chooser. |
+| **Phone app not running, Series 9+** | A **two-button chooser** (below). |
+| **Phone app not running, pre-S9** | **Never sees the chooser or anything standalone — companion only.** |
+
+### The chooser (S9+, phone not running)
+
+Two large buttons:
+
+1. **Companion mode** — glyph: `watch ⇄ iPhone ⇄ server`. Subtitle: *"all audio handled by the
+   iPhone."* ★ Bonus: a **speaker icon merged next to the iPhone**.
+2. **Standalone** — glyph: `watch ⇄ server`. Subtitle: *"no iPhone required."* ★ Bonus: **speaker
+   next to the watch**.
+
+The speaker placement is the whole idea in one picture: it shows WHERE THE SOUND COMES OUT, which is
+the difference a user actually feels.
+
+After choosing, you land on the **servers screen**.
+
+### Per-mode behaviour
+
+**Companion**
+- The server screen changes the **PHONE's** connection.
+- It lists **RTL-TCP and every backend the phone supports** — including ones standalone cannot do.
+- The phone app **cold-boots**; if it has a default server it jumps straight to it and the watch
+  follows, exactly as today.
+- **Audio is the phone's**, throughout.
+- **Chat is wired through the iPhone** (see §2c).
+
+**Standalone**
+- Everything behaves as the spike does today.
+
+### The mode toggle
+- A button at the **top of BOTH server screens**, switchable **at any time**.
+- ★ **Only exists when an iPhone is detected.** No iPhone → no button at all.
+- Reason it must be reachable mid-session: **running two SDRs at once** — the phone on one server and
+  the watch standalone on another.
+
+### What comes from where
+- **ALL screens are lifted from the spike.** They are fully customised and correct, and they
+  **supersede the companion's**.
+- **The warning/status system is lifted from the spike** too — same reason.
+- **Favourites AND their use counts sync** between phone and watch (§2d).
+- Server connections and waterfall handling behave exactly as they do now in each mode.
 
 ---
 
