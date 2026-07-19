@@ -69,6 +69,11 @@ export type VibeServerStatus = {
   sampleRate: number;
   port: number;
   ip: string;
+  /** Percent of ONE core used by the whole app (so >100 is possible and meaningful on a
+   *  multi-core phone) — the same convention the DSP benchmarks use, so a reading here is
+   *  directly comparable with the Pi figures. 0 = not measured. */
+  cpu: number;
+  cores: number;
 };
 
 export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {

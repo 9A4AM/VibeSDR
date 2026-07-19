@@ -421,6 +421,44 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    // ── Process CPU, for the server screen ────────────────────────────────────
+    //
+    // A phone acting as a receiver is a device you leave running on a shelf for hours, so
+    // "what is this costing me" is a fair question to be able to answer on the screen rather
+    // than by guessing from how warm it feels. Read from /proc/self/stat, which needs no
+    // permission and no NDK call.
+    //
+    // Reported as a percentage of ONE core (so >100% is possible and meaningful on a
+    // multi-core phone) — the same convention the DSP benchmarks use, which keeps it
+    // comparable with the Pi figures.
+    // SELF-TIMED AND CACHED, so any number of callers is safe. A naive per-call delta breaks
+    // the moment a second poller appears: the two interleave and each measures the other's
+    // gap. This recomputes at most every 500ms and hands everyone the same current reading.
+    private var lastCpuTicks = 0L
+    private var lastCpuAt = 0L
+    private var cpuValue = 0.0
+    private val clkTck: Long by lazy {
+        try { android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK) } catch (_: Throwable) { 100L }
+    }
+    @Synchronized
+    private fun processCpuPercent(): Double = try {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastCpuAt > 0L && now - lastCpuAt < 500L) cpuValue      // too soon — reuse
+        else {
+            val stat = java.io.File("/proc/self/stat").readText()
+            // Fields 1-2 are pid and (comm); comm can itself contain spaces and brackets, so
+            // split AFTER the last ')' or a process named "foo bar" shifts every index.
+            val f = stat.substring(stat.lastIndexOf(')') + 2).split(" ")
+            val ticks = f[11].toLong() + f[12].toLong()             // utime + stime (fields 14, 15)
+            if (lastCpuAt > 0L) {
+                cpuValue = (((ticks - lastCpuTicks).toDouble() / clkTck) / ((now - lastCpuAt) / 1000.0) * 100.0)
+                    .coerceIn(0.0, 100.0 * Runtime.getRuntime().availableProcessors())
+            }
+            lastCpuTicks = ticks; lastCpuAt = now
+            cpuValue                                                // first call has no delta yet: 0
+        }
+    } catch (_: Throwable) { 0.0 }                                  // never break a status for a stat read
+
     fun getVibeServerStatus(promise: Promise) {
         try {
             val o = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
@@ -440,6 +478,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
+            m.putDouble("cpu", processCpuPercent())
+            m.putInt("cores", Runtime.getRuntime().availableProcessors())
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("status_failed", e.message)
@@ -538,6 +578,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             // rather than start a second one on the same dongle).
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
+            m.putDouble("cpu", processCpuPercent())
+            m.putInt("cores", Runtime.getRuntime().availableProcessors())
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("status_failed", e.message)

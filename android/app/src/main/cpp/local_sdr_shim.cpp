@@ -2114,6 +2114,14 @@ struct LocalSdrShim::Impl {
         // dropped. 0 = client-controlled (the default).
         { double lr = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
           j += ",\"lockedRate\":" + std::to_string((long long)(lr > 0 ? lr : 0)); }
+        // THE FRAME-RATE CEILING, for the same reason lockedRate is advertised: a client that
+        // asks for more than the owner allows is SILENTLY CLAMPED (setFftRate, and the start
+        // path), and silence is the worst possible answer for an ADAPTIVE client. A rate
+        // controller that can't see the ceiling reads "I asked for 20 and got 10" as a failing
+        // link and keeps stepping down chasing a limit it can never reach.
+        // 0 here = the server's default (20 fps), i.e. no owner-imposed cap.
+        { double mr = g_serveOnLan.load() ? g_vsMaxFftRate.load() : 0.0;
+          j += ",\"maxFftRate\":" + std::to_string((long long)(mr > 0 ? mr : 0)); }
         j += "}";
         sendText(sock, j);
     }

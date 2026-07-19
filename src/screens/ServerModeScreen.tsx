@@ -351,6 +351,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Row C={C} F={F} k="FRAME RATE"
               v={status?.fftRate ? `${Math.round(status.fftRate)} fps` : '—'}
               vc={client ? C.amber : C.goldDim} />
+            {/* CPU — a phone serving on a shelf for hours invites "what is this costing me",
+                and the honest answer beats guessing from how warm it feels. Percent of ONE
+                core, so it stays comparable with the DSP benchmark figures; the core count is
+                shown alongside so 120% reads as "1.2 of 8" rather than as an error. */}
+            <Row C={C} F={F} k="CPU"
+              v={status?.cpu ? `${status.cpu.toFixed(0)}% of 1 core${status?.cores ? ` (of ${status.cores})` : ''}` : '—'}
+              vc={client ? C.amber : C.goldDim} />
           </View>
 
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
