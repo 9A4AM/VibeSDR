@@ -443,6 +443,28 @@ struct ContentView: View {
           .padding(.bottom, 2)
           .transition(.opacity)
         }
+        // CONNECTION STATUS — same bottom pill stack as everything else. It used to live in an
+        // .overlay(alignment: .top), which runs straight through the SYSTEM CLOCK: watchOS owns
+        // that strip and there is no dodging it. Down here it sits above the band label with the
+        // other pills, and cannot foul anything the OS draws.
+        if let st = connectionStatus {
+          HStack(spacing: 4) {
+            if st.working {
+              ProgressView().progressViewStyle(.circular).scaleEffect(0.35).frame(width: 9, height: 9)
+            }
+            Text(st.text)
+              .font(.system(size: 10, weight: .semibold))
+              .lineLimit(2).multilineTextAlignment(.center)
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 8).padding(.vertical, 3)
+          .background((st.working ? Color.black.opacity(0.65) : Color.orange.opacity(0.9)),
+                      in: RoundedRectangle(cornerRadius: 9))
+          .padding(.horizontal, 6)
+          .padding(.bottom, 2)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(st.text)
+        }
         if let h = hint { hintPill(h).padding(.bottom, 2) }
         // Crown-mode pill — shows what the crown is doing when it's NOT plain tune (set by the
         // Double-Tap cycle or the menu). Sits just above the band label.
@@ -537,26 +559,6 @@ struct ContentView: View {
             coachSeen = true
           }
         )
-      }
-    }
-    // WHAT THE CONNECTION IS DOING, top-centre — see `connectionStatus`. User-facing, not debug:
-    // a multi-step negotiation with nothing on screen reads as "broken" long before it is.
-    .overlay(alignment: .top) {
-      if let st = connectionStatus {
-        HStack(spacing: 4) {
-          if st.working {
-            ProgressView().progressViewStyle(.circular).scaleEffect(0.4).frame(width: 10, height: 10)
-          }
-          Text(st.text)
-            .font(.system(size: 9))
-            .foregroundStyle(st.working ? .white : .orange)
-            .lineLimit(2).multilineTextAlignment(.center)
-        }
-        .padding(.horizontal, 6).padding(.vertical, 2)
-        .background(.black.opacity(0.7), in: Capsule())
-        .padding(.top, 2)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(st.text)
       }
     }
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
@@ -1291,6 +1293,8 @@ struct ContentView: View {
   /// Driven by the row and state clocks, so it needs no timer of its own.
   private func syncHint() {
     let now = Date()
+    // Same reason as stalledMessage: a deliberate power-save suspend is not a rough link.
+    if link.isBackground { hint = nil; shownSince = nil; return }
     guard let c = rawHint else {
       // Healthy again — but a pill that flashed up for 200ms is worse than none, so
       // hold it for its minimum read time before retiring it.
@@ -1360,7 +1364,7 @@ struct ContentView: View {
     case "reconnecting":          return ("Connection dropped — reconnecting…", true)
     case "retrying (ws)…":        return ("Reconnecting…", true)
     case "switching profile…":    return ("Switching profile…", true)
-    case "background · audio only": return ("In the background — audio only", true)
+    case "background · audio only": return ("Paused to save power · audio playing", true)
     case "no wifi — using phone": return ("No Wi‑Fi — going through your iPhone", true)
     case "refused":               return ("The server refused the connection", false)
     case "can't reach server":    return ("Can't reach that server", false)
@@ -1401,6 +1405,12 @@ struct ContentView: View {
   }
 
   private var stalledMessage: (icon: String, text: String)? {
+    // ★ WE DID THAT ON PURPOSE. Wrist-down power saving drops the spectrum socket by design, so
+    // rows stop — and every stall path then reports a FAULT: a "link rough" pill, then a
+    // full-screen "Lost the server". Alarming the user about the app's own deliberate action is
+    // worse than saying nothing. Audio is still playing; the calm `connectionStatus` pill
+    // ("Paused to save power") carries it instead. (Found on-wrist 2026-07-19.)
+    if link.isBackground { return nil }
     // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
     // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
     // of throwing up the black "spectrum stopped" box. (The companion's hard overlay is for a
@@ -1531,9 +1541,13 @@ struct ContentView: View {
   private var placeholder: some View {
     // Prefer the LIVE step over "Waiting for signal": while a connection is still being negotiated,
     // naming what's happening is the difference between "it's working on it" and "it's broken".
+    // ★ LIVE PROGRESS BEATS THE STALL MESSAGE. While we are actively reconnecting, "Lost the
+    // server" is both less accurate and less reassuring than naming the step we are on — and it
+    // is what the user stares at, so it must not be the pessimistic reading. `stalledMessage`
+    // still wins when nothing is in flight (no server chosen, phone not running, genuinely dead).
     let working = connectionStatus.flatMap { $0.working ? $0.text : nil }
-    let msg = stalledMessage
-      ?? working.map { ("dot.radiowaves.left.and.right", $0) }
+    let msg = working.map { ("dot.radiowaves.left.and.right", $0) }
+      ?? stalledMessage
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
                          : ("iphone.slash", "Open VibeSDR on iPhone"))
     // Sits clear of the floating padlock (bottom-left, 78pt up). The message is CENTRED and

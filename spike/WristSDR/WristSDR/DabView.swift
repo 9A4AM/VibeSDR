@@ -155,9 +155,13 @@ struct DabView: View {
           .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         Spacer(minLength: 0)
       }
-      // Buttons row — Lock · Volume · Menu (TAPPABLE area).
-      HStack(spacing: 24) {
+      // Buttons row — Lock · Volume · Menu · Chat (TAPPABLE area).
+      // SPACERS, not a fixed gap. The old `spacing: 24` fitted THREE buttons on a 49mm; adding a
+      // fourth needs ~200pt and a 41mm has ~162, so the row overflowed and dragged the whole screen
+      // off its left edge (lock button gone entirely). Even distribution adapts to any width.
+      HStack(spacing: 0) {
         LockButton(locked: $locked, size: 20)
+        Spacer(minLength: 6)
         // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
         Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
           Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
@@ -165,6 +169,7 @@ struct DabView: View {
             .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
             .padding(6).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
+        Spacer(minLength: 6)
         Button { if !locked { showMenu = true } } label: {
           Image(systemName: "line.3.horizontal").font(.system(size: 20, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .white)
