@@ -67,17 +67,10 @@ struct InstancePickerView: View {
       customSection
     }
     .listStyle(.carousel)
-    // "Jr" as a smaller accent mark rather than plain appended text: it reads as a sub-brand
-    // instead of a longer name, and costs almost no width on a 40mm where "VibeSDR" already
-    // fills most of the row.
-    .navigationTitle {
-      HStack(alignment: .firstTextBaseline, spacing: 2) {
-        Text("VibeSDR")
-        Text("Jr")
-          .font(.system(size: 12, weight: .bold, design: .rounded))
-          .foregroundStyle(.orange)
-      }
-    }
+    // PLAIN STRING, deliberately. The ViewBuilder form of navigationTitle lets you style the
+    // text — but it also demotes it out of the LARGE left-aligned wordmark into the small
+    // inline slot beside the clock. A coloured "Jr" is not worth losing the wordmark for.
+    .navigationTitle("VibeSDR Jr")
     .task { await preloadForFavourites() }
     .onAppear { loc.request(); mdns.start() }
     .onDisappear { mdns.stop() }
