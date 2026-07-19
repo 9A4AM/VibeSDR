@@ -68,6 +68,9 @@ final class SpikeLink: ObservableObject {
   /// Derived from OUR OWN socket health: 3 while spectrum frames are flowing, 1 when they
   /// have stalled. There is no far (server↔phone) hop to score independently.
   @Published var serverLink = 3
+  /// Waterfall rate rung Link Management has settled on: 1 = full, 2 = half, 3 = the emergency
+  /// floor. Feeds the link glyph so a compensated-but-poor link never reads as green.
+  @Published var throttleRung = 1
   /// No phone → no boot handshake. Always "ready" so the placeholder shows "Waiting for
   /// signal" on a cold start rather than a phone-setup message.
   @Published var phoneStatus = "ready"
@@ -344,6 +347,17 @@ final class SpikeLink: ObservableObject {
     // Our own socket-health score, standing in for the phone's link meter.
     let sl = client.framesPerSec > 0 ? 3 : (everGotRow ? 1 : 3)
     if serverLink != sl { serverLink = sl }
+
+    // THROTTLE RUNG — how far Link Management has had to back off (1 = full rate).
+    //
+    // The glyph must not go green just because we successfully compensated. Once the ladder
+    // steps down, frames arrive punctually again and every gap-based signal reads HEALTHY —
+    // while the user is looking at a jerkier waterfall than they asked for. That is the link
+    // being bad, not good, and the indicator has to say so or it is lying by omission.
+    // ADAPTIVE rung, not the wire rate: a rate the USER pinned (Low Data mode, for a metered
+    // plan) is a preference, not a symptom, and must never show a permanent red link.
+    let rung = (client as? UberClient)?.adaptiveRung ?? 1
+    if throttleRung != rung { throttleRung = rung }
 
     // Heavy-server advisory. Only meaningful on the iPhone relay (own wifi/cellular has the headroom).
     // Most servers stream ~18-40 KB/s and never trip this; only a deliberately-cranked FFT (like an

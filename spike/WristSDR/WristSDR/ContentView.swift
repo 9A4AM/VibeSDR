@@ -51,7 +51,15 @@ enum LinkHint: Equatable {
 
 /// Server-link health for the status glyph. Piggybacks on the hint machinery (below) so the
 /// pill and the glyph can never disagree — one set of thresholds, one debounce.
-enum LinkQuality { case good, degraded, poor, down }
+enum LinkQuality {
+  case good, degraded, poor, down
+  /// Ordering for "take the worse of two signals" — see linkQuality.
+  var severity: Int {
+    switch self {
+    case .good: return 0; case .degraded: return 1; case .poor: return 2; case .down: return 3
+    }
+  }
+}
 
 /// The phone app's "instance" icon — three connected dots in a triangle — reproduced 1:1 as a
 /// Shape so the watch's link-quality glyph is pixel-identical to the phone's (no SF Symbol
@@ -349,7 +357,9 @@ struct ContentView: View {
         VStack {
           HStack {
             Button { if !locked { showHardware = true } } label: {
-              Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+              // Vertical antenna + radio waves — reads as "the radio", and stays right if we support other
+              // SDRs beyond RTL later (not an RTL-specific glyph).
+              Image(systemName: "antenna.radiowaves.left.and.right")
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(.cyan)
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .background(Capsule().fill(.black.opacity(0.35)))
@@ -1099,9 +1109,20 @@ struct ContentView: View {
   private var linkQuality: LinkQuality {
     if link.transport == .none { return .down }
     if stalledMessage != nil { return .down }            // no server connection at all
-    guard hint != nil else { return .good }               // healthy, rows fresh
-    let gap = link.lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
-    return gap > hintRowGap ? .poor : .degraded           // stopped vs jerky-but-flowing
+    let gapQ: LinkQuality
+    if hint == nil {
+      gapQ = .good                                        // healthy, rows fresh
+    } else {
+      let gap = link.lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
+      gapQ = gap > hintRowGap ? .poor : .degraded         // stopped vs jerky-but-flowing
+    }
+    // Take the WORSE of "are rows arriving on time" and "how much did we have to throttle to
+    // keep them arriving on time". Without this, Link Management doing its job would turn the
+    // glyph green on a link bad enough to need the emergency rung.
+    let throttleQ: LinkQuality = link.throttleRung >= 3 ? .poor
+                               : link.throttleRung == 2 ? .degraded
+                               : .good
+    return [gapQ, throttleQ].max(by: { $0.severity < $1.severity }) ?? gapQ
   }
 
   private func qualityTint(_ q: LinkQuality) -> Color {
@@ -1179,9 +1200,10 @@ struct ContentView: View {
       switch h {
       // "Reconnecting to server" — the circular-arrows glyph IS the universal
       // reconnecting sign, so it needs no marked link.
-      case .reconnecting:   return ["arrow.triangle.2.circlepath", "server.rack"]
+      // ("@instance" = the triangle-node server mark, not an SF Symbol — see the ForEach below.)
+      case .reconnecting:   return ["arrow.triangle.2.circlepath", "@instance"]
       // "Server link rough — spectrum erratic"
-      case .serverHop:      return ["server.rack", "wifi.exclamationmark", "iphone"]
+      case .serverHop:      return ["@instance", "wifi.exclamationmark", "iphone"]
       // "Watch link weak — spectrum erratic"
       case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
       // "Link rough" — nothing more is honestly known.
@@ -1190,12 +1212,23 @@ struct ContentView: View {
     }()
     HStack(spacing: 3) {
       ForEach(Array(glyphs.enumerated()), id: \.offset) { _, g in
-        Image(systemName: g)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
-          // The marked link pulses gently so it reads as a LIVE problem rather
-          // than a static badge. Opacity only — nothing per-frame or laid out.
-          .opacity(g == "wifi.exclamationmark" ? pulse : 1)
+        Group {
+          // The server is the triangle-node mark everywhere else in the app (status glyph,
+          // phone app instance icon) — no SF Symbol matches it, so draw the Shape instead of
+          // reaching for `server.rack` and having two different pictures of the same thing.
+          if g == "@instance" {
+            InstanceNodes()
+              .stroke(.white, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+              .frame(width: 12, height: 12)
+          } else {
+            Image(systemName: g)
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(.white)
+          }
+        }
+        // The marked link pulses gently so it reads as a LIVE problem rather
+        // than a static badge. Opacity only — nothing per-frame or laid out.
+        .opacity(g == "wifi.exclamationmark" ? pulse : 1)
       }
     }
     .padding(.horizontal, 7)
@@ -1296,7 +1329,7 @@ struct ContentView: View {
         return ("hourglass", "Starting VibeSDR…")
       case "pick":
         // No default instance — but there ARE favourites. The wrist can choose.
-        return ("server.rack", "Choose a server\nLong-press → Servers")
+        return ("@instance", "Choose a server\nLong-press → Servers")
       case "setup":
         // Nothing to connect to. Say so plainly rather than showing a dead screen.
         // ♥ is FAVOURITE. ★ is DEFAULT. Getting that backwards in the one message a
@@ -1390,9 +1423,17 @@ struct ContentView: View {
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
                          : ("iphone.slash", "Open VibeSDR on iPhone"))
     return VStack(spacing: 6) {
-      Image(systemName: msg.0)
-        .font(.title3)
-        .foregroundStyle(.secondary)
+      // "@instance" = the triangle-node server mark (see hintPill) — the server is that
+      // shape everywhere in the app, so it must not be a rack here.
+      if msg.0 == "@instance" {
+        InstanceNodes()
+          .stroke(.secondary, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+          .frame(width: 20, height: 20)
+      } else {
+        Image(systemName: msg.0)
+          .font(.title3)
+          .foregroundStyle(.secondary)
+      }
       Text(msg.1)
         .font(.caption2)
         .foregroundStyle(.secondary)

@@ -724,8 +724,9 @@ struct HardwareSheet: View {
         Button { autoLink.toggle() } label: {
           HStack {
             VStack(alignment: .leading, spacing: 1) {
-              Text("AUTO LINK").font(.system(size: 13, weight: .semibold))
-              Text(autoLink ? "Adapts quality to the link" : "Max quality — may stutter")
+              Text("LINK MANAGEMENT").font(.system(size: 13, weight: .semibold))
+              Text(autoLink ? "Adapts the requested frame rate to the link — slower waterfall, fewer breakups"
+                            : "Always asks for full rate — may stutter on a poor link")
                 .font(.system(size: 9)).foregroundColor(autoLink ? .black.opacity(0.6) : .white.opacity(0.5))
             }
             Spacer()
