@@ -116,6 +116,12 @@ RECOMMENDED      3 listeners
   before it starts — an owner on a metered connection must not discover the cost afterwards.
 - **Don't invent a bottleneck.** If the host is comfortable and the link is fine, say so. A tool that
   always finds a problem trains people to ignore it.
+- ★ **Say what the benchmark CANNOT see.** It measures the host and the link; it cannot see the
+  antenna system. **Bias-T is the big one** — an LNA or active antenna draws 80–120 mA through the
+  coax from the same USB port the phone is powering (v4 supplies up to ~180 mA), which is 25–40% on
+  top of the dongle's own ~300 mA and takes measured runtime from ~9h to ~6½–7h. The app KNOWS the
+  Bias-T state, so a battery/runtime figure must factor it in rather than quietly assuming the
+  favourable case. Same for a powered hub, or a dongle sharing the port.
 
 ---
 
