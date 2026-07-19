@@ -41,9 +41,33 @@ direction and would flatter a typical domestic connection.
   at all, and telling that owner their upload is poor is noise. Ask, or infer from whether the server
   is LAN-bound.
 
-### C. The verdict
-Output is a **sentence, not a table**: *"This phone can serve about 4 listeners at 10 fps. Your
-upload is the limit beyond that."* Raw numbers underneath for the curious.
+### C. The verdict — measured numbers, then a hard ceiling, then a recommendation
+
+The report reads in that order, because each part earns the next:
+
+```
+CPU per listener, at 2.4 MS/s
+  SSB / AM      8%  of one core
+  WFM stereo   28%  of one core
+Upload          9.4 Mbit/s sustained
+
+HARD CEILING     6 listeners   (limited by CPU, on WFM)
+RECOMMENDED      4 listeners   — leaves headroom for transient load
+```
+
+- ★ **The ceiling is `min(CPU-limited, upload-limited)`, and the report must SAY WHICH.** "6 users"
+  is not actionable; "6, limited by CPU" tells an owner that a faster connection buys them nothing
+  and a better phone does.
+- ★ **Quote the WFM figure as the headline ceiling.** An owner cannot control what mode their guests
+  pick, so a ceiling computed on SSB is a promise the server cannot keep the moment somebody tunes a
+  broadcast station. Show the SSB number too — the difference is ~3.5× and it is genuinely useful —
+  but recommend on the worst case.
+- **Recommended ≈ 70% of the hard ceiling**, and say why in one line: transient load (a GC pause, the
+  OS deciding to index something, another app waking) is what turns "exactly at capacity" into
+  dropped samples for everyone at once. Never present the ceiling as the target.
+- **Round down, never up.** A ceiling of 6.8 is 6.
+- If the honest answer is 1, **say 1**. A phone that can serve one listener well is a useful thing,
+  and inflating it produces a bad experience for two people instead of a good one for one.
 
 ---
 
