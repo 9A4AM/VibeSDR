@@ -189,6 +189,46 @@ exists to remove.
 
 ---
 
+## 2e. ★ THE PRODUCT SHAPE — and the build consequence
+
+Stuart (2026-07-19): *"you buy VibeSDR and get VibeSDR Jr with it. VibeSDR Jr is a remote control and
+remote waterfall for the main app and has wider compatibility than the full standalone VibeSDR Jr
+which needs an S9 or newer."*
+
+| mode | what it is | who does the DSP | hardware |
+|---|---|---|---|
+| **Phone Control** | remote control + remote waterfall for the main app | the PHONE (watch renders finished rows) | **wider — older watches** |
+| **Standalone** | its own receiver: own sockets, own DSP, own Opus | the WATCH | **Series 9+** |
+
+The split falls out of the architecture rather than being a marketing tier, which is what makes it
+honest: Phone Control only renders rows, Standalone runs the whole DSP chain.
+
+### ★★ But the build currently forbids it
+
+`tools/build_opus_watchos.sh` states the position outright:
+
+> *"TWO SLICES, because watchOS is two architectures: **arm64_32** — Series 4–8 (ILP32) … **arm64** —
+> Series 9 onwards. JR TARGETS SERIES 9+, so this builds **arm64 ONLY**."*
+
+So today **the binary cannot install on a Series 4–8 at all** — not merely "Standalone is
+unavailable", the whole app is absent. To deliver "Phone Control has wider compatibility":
+
+1. **Rebuild libopus with the arm64_32 slice** (the script calls it "the awkward one to cross-compile"
+   — that was the reason for dropping it, and it now has to come back), OR exclude Opus from the
+   arm64_32 build entirely, since Phone Control never decodes Opus on the watch — the phone does.
+   ★ The second option is probably right and cheaper: the dependency exists only for Standalone.
+2. **Gate the mode toggle on DEVICE CAPABILITY, not preference.** On a Series 4–8 the toggle must not
+   offer Standalone; it should say plainly *why* ("standalone reception needs Series 9 or newer"),
+   never silently fail or hide with no reason.
+3. Re-check the smallest supported SCREEN. The script notes that dropping Series 4–8 "means the
+   smallest screen to design for is 42mm rather than 41mm" — supporting them again widens the
+   layout target, and today's 41mm simulator work becomes the floor rather than the edge case.
+
+★ Do not treat this as a packaging detail. It is the difference between the product story being true
+and being unshippable.
+
+---
+
 ## 3. What must NOT regress
 
 - **Chat** — explicitly called out. Working on both today; must survive.
