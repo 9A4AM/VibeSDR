@@ -44,9 +44,34 @@ Each radio carries a descriptor. This is the single abstraction the rest of the 
   "freqMax": 30000000,               // Hz
   "gainPolicy": "auto",              // or fixed value / AGC policy
   "ppm": 0,                          // calibration
-  "public": true                     // false = admin-reserved "dark" dongle (§4, §7)
+  "public": true,                    // false = admin-reserved "dark" dongle (§4, §7)
+  "locked": ["biasT","gain","ppm",   // owner-locked controls — see below
+             "agc","directSampling","sampleRate"]
 }
 ```
+
+### ★ Owner-locked controls — a PRODUCT feature, not a demo one
+
+A guest on someone else's radio must not be able to change the hardware. This is not primarily a UX
+concern:
+
+- **Bias-T has PHYSICAL consequences.** Switching it OFF kills DC to an active antenna or LNA and
+  degrades reception for the owner and everyone after them. Switching it ON pushes DC into a feed
+  that may not be expecting it. A stranger should never hold that switch.
+- **Gain / AGC / PPM / direct sampling / sample rate** are the owner's calibration of their own
+  station. A guest changing them is vandalism-by-accident.
+
+The **client already knows how to do this** — `lockedRate` is advertised precisely so the picker is
+**hidden** rather than *"offering a control whose every use is silently dropped"*, and `maxFftRate`
+was added the same way (2026-07-19). `locked[]` generalises that: the server names what it will not
+accept, and the client hides or greys accordingly.
+
+**Hide vs grey:** hide what is meaningless to a guest (sample rate, centre); grey **with a reason**
+where they would otherwise wonder where it went (*"fixed by the owner"*). All-dead reads as broken;
+all-missing reads as feature-poor — the reason text avoids both.
+
+★ This is also why the public demo server needs **no forked client**
+(`BRIEF-public-demo-server.md` §2b): it is simply an owner who has locked everything.
 
 - `public: false` → the radio is **never advertised**, never appears in any picker, never counts toward public capacity. It is the admin's private dongle (§7).
 - `freqMin/freqMax` are owner-chosen constraints and may be narrower than the tuner's physical range (e.g. an airband-only dongle).
