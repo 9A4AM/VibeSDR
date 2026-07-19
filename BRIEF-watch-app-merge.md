@@ -203,6 +203,20 @@ which needs an S9 or newer."*
 The split falls out of the architecture rather than being a marketing tier, which is what makes it
 honest: Phone Control only renders rows, Standalone runs the whole DSP chain.
 
+### Why ONE app and not a separate Jr listing — settled
+
+Stuart (2026-07-19): *"we couldn't do a separate listing as we couldn't detect an already installed
+version to prevent duplicates."*
+
+A standalone Jr listing would need to know whether the buyer already owns VibeSDR, and **watchOS/iOS
+gives no reliable way to detect another app's presence** — so you would get duplicate installs,
+duplicate purchases and a support burden, or an entitlement-sharing scheme far heavier than the
+feature warrants. Bundling is also the natural distribution: a watch app ships INSIDE its iOS host,
+which is already how the V9 companion reaches users.
+
+**So: buy VibeSDR, get Jr.** One purchase, one install, two modes. Do not re-open this — it is a
+store-mechanics constraint, not a preference.
+
 ### ★★ But the build currently forbids it
 
 `tools/build_opus_watchos.sh` states the position outright:
