@@ -46,11 +46,34 @@ After choosing, you land on the **servers screen**.
 **Standalone**
 - Everything behaves as the spike does today.
 
+### ★ "Phone app detected" means OPEN AND IN USE
+
+Not merely installed, and not "wakeable". **If the phone app is closed, the chooser comes up.**
+
+⚠ Implementation care: `WCSession.isReachable` is not this signal — the watch can WAKE the iOS app in
+the background, so treating reachability as "open" would make the chooser almost never appear. Use
+**freshness of the phone's own state messages** (`lastStateAt`, already in `SpikeLink`) — i.e. the
+phone is actively sending, which is what "in use" means. Never wake the phone in order to decide
+whether it was awake.
+
+### Choosing Standalone while the phone app is open
+
+**No automatic action — never yank a running session.** Instead, a **one-time on-screen message**:
+
+> *"VibeSDR iPhone app is open. Open the menu to control this instead. This will end your current
+> watch session."*
+
+…and a **new menu entry appears: "Switch to companion mode"**. The user decides, and the consequence
+is stated before they act rather than discovered after.
+
 ### The mode toggle
 - A button at the **top of BOTH server screens**, switchable **at any time**.
 - ★ **Only exists when an iPhone is detected.** No iPhone → no button at all.
 - Reason it must be reachable mid-session: **running two SDRs at once** — the phone on one server and
   the watch standalone on another.
+- ★ **Leaving Companion mode WARNS** that the phone app will keep running. That is the two-SDRs
+  feature working as intended, but it is a surprise if unstated — the phone carries on holding its
+  server (and, on a shared receiver, a slot).
 
 ### What comes from where — the spike wins, without exception
 
@@ -67,7 +90,8 @@ is the answer by default, and any exception has to be argued explicitly.
 
 This also settles the earlier file-by-file comparison (§1, §2): those tables are now just evidence,
 not a decision to make.
-- **Favourites AND their use counts sync** between phone and watch (§2d).
+- **Favourites AND their use counts sync** between phone and watch (§2d). ★ **Counts SUM**: 3 visits
+  on the phone + 2 on the watch = **5**.
 - Server connections and waterfall handling behave exactly as they do now in each mode.
 
 ---
@@ -227,6 +251,11 @@ while apart, i.e. a genuine two-way merge:
   deleted-at marker kept for a while), not just absence.
 - **Order is user intent** once drag-reorder lands, so it must sync too, and it conflicts differently
   from membership.
+- ★★ **USE COUNTS SUM — and that makes them a trap.** 3 phone + 2 watch = 5. So each device must keep
+  its OWN counter and the displayed figure is the sum; **never write the summed total back into
+  either side's counter**, or the next sync squares it (5 becomes 5+5, then 20…). Exchange the two
+  numbers, add them for display, keep them separate on disk. Unlike membership, a count cannot be
+  reconciled by last-write-wins.
 - **Don't sync the whole picker.** `lsv_last_tune:*` and `lsv_display_prefs:*` are per-device by
   design (the watch's brightness is not the phone's, see [[small_screen_splash_overlap]]).
 
