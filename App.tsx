@@ -392,34 +392,38 @@ export default function App() {
         {!splashDone && (
           <Animated.View style={{
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: '#0A0A12', alignItems: 'center', justifyContent: 'center',
-            zIndex: 9999, opacity: splashOpacity,
+            backgroundColor: '#0A0A12', zIndex: 9999, opacity: splashOpacity,
           }}>
-            <SplashSpectrum />
-            <Text style={{ color: '#FFB833', fontSize: 22, fontFamily: 'Courier', fontWeight: 'bold' }}>
-              VibeSDR
-            </Text>
-            <Text style={{ color: 'rgba(255,184,51,0.6)', fontSize: 11, fontFamily: 'Courier', marginTop: 12, textAlign: 'center' }}>
-              {splashLabel}
-            </Text>
-            {firstOpen ? (
-              <TouchableOpacity
-                onPress={handleContinue}
-                activeOpacity={0.85}
-                style={{
-                  marginTop: 26, paddingVertical: 10, paddingHorizontal: 30,
-                  borderRadius: 8, borderWidth: 1, borderColor: '#FFB833',
-                  backgroundColor: 'rgba(255,184,51,0.12)',
-                }}>
-                <Text style={{ color: '#FFB833', fontSize: 13, fontFamily: 'Courier', fontWeight: 'bold', letterSpacing: 1 }}>
-                  CONTINUE
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <ActivityIndicator color="#FFB833" style={{ marginTop: 28 }} />
-            )}
+            {/* Centred block takes the space the notice doesn't need, so on short
+                screens (e.g. 320x569dp FWVGA) it shrinks instead of overlapping. */}
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <SplashSpectrum />
+              <Text style={{ color: '#FFB833', fontSize: 22, fontFamily: 'Courier', fontWeight: 'bold' }}>
+                VibeSDR
+              </Text>
+              <Text style={{ color: 'rgba(255,184,51,0.6)', fontSize: 11, fontFamily: 'Courier', marginTop: 12, textAlign: 'center' }}>
+                {splashLabel}
+              </Text>
+              {firstOpen ? (
+                <TouchableOpacity
+                  onPress={handleContinue}
+                  activeOpacity={0.85}
+                  style={{
+                    marginTop: 26, paddingVertical: 10, paddingHorizontal: 30,
+                    borderRadius: 8, borderWidth: 1, borderColor: '#FFB833',
+                    backgroundColor: 'rgba(255,184,51,0.12)',
+                  }}>
+                  <Text style={{ color: '#FFB833', fontSize: 13, fontFamily: 'Courier', fontWeight: 'bold', letterSpacing: 1 }}>
+                    CONTINUE
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <ActivityIndicator color="#FFB833" style={{ marginTop: 28 }} />
+              )}
+            </View>
 
-            <View style={{ position: 'absolute', bottom: 40, left: 28, right: 28 }}>
+            {/* pointerEvents none: this block must never swallow taps meant for CONTINUE. */}
+            <View pointerEvents="none" style={{ paddingBottom: 64, paddingTop: 8, paddingHorizontal: 28 }}>
               <Text style={{ color: 'rgba(255,184,51,0.9)', fontSize: 11, fontFamily: 'Courier', fontWeight: 'bold', textAlign: 'center', marginBottom: 10, letterSpacing: 1 }}>
                 POWER-SAVING BEHAVIOUR
               </Text>
