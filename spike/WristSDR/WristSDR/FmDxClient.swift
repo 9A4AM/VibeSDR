@@ -163,6 +163,7 @@ final class FmDxClient: SDRClient {
       let sorted = ants.sorted { $0.id < $1.id }
       Task { @MainActor in
         if !name.isEmpty { self.rxName = name; self.info.rx = name }
+        self.antennaList = sorted
         self.info.antennas = sorted
       }
     }.resume()
@@ -223,9 +224,17 @@ final class FmDxClient: SDRClient {
     Task { @MainActor in self.adopt(i) }
   }
 
+  /// The antenna list, held OUTSIDE the per-frame struct — same reason as `rxName`.
+  @MainActor private var antennaList: [FmdxAntenna] = []
+
   @MainActor private func adopt(_ i: FmdxInfo) {
     var i = i
     i.rx = rxName         // tunerName arrives via /static_data (kept across frames); preserve it
+    // ★ AND THE ANTENNAS, for exactly the same reason. Every state frame builds a FRESH FmdxInfo
+    // (`var i = FmdxInfo()`), so a field that arrives once over HTTP is wiped by the next frame —
+    // which arrives constantly. The antenna switch appeared for a fraction of a second and then
+    // vanished, looking exactly like a server that advertises no antennas.
+    i.antennas = antennaList
     if info != i { info = i }
     if frequency != i.freq { frequency = i.freq }
     lastKhz = Int((i.freq / 1000).rounded())
