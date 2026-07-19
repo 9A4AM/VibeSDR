@@ -559,8 +559,9 @@ final class KiwiClient: ObservableObject, SDRClient {
   ///
   /// Rung 4 (`wf_speed=1`, 1 fps) is DELIBERATELY NOT IN THE LADDER — Stuart: "no amount of
   /// interpolation will rescue that". 5 fps is the floor for both adaptation and Low Data.
-  lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung in
-    self?.wfSend("SET wf_speed=\(5 - rung)")               // rung 1→4, 2→3, 3→2
+  lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung, fps in
+    self?.wfSend("SET wf_speed=\(5 - rung)")     // rung 1→4, 2→3, 3→2
+    self?.waterfall.setExpectedRowRate(fps)
   }
   var adaptiveRung: Int { linkMgr.adaptiveRung }
 

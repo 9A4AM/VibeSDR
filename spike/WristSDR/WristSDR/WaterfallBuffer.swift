@@ -115,6 +115,24 @@ final class WaterfallBuffer {
   private var interval: CFTimeInterval = 0.1
   private var arrivals = 0
 
+  /// TELL THE BUFFER WHAT WE JUST ASKED FOR, instead of making it rediscover it.
+  ///
+  /// `interval` is normally *learned* from arrivals, which is right when the rate is out of our
+  /// hands. But when Link Management changes the rung we KNOW the new rate exactly — and letting
+  /// the estimator crawl there is visibly bad: the EMA settles to alpha 0.1, so 10fps → 5fps takes
+  /// ~20 rows ≈ 4 SECONDS. Throughout, the drain runs at the old faster pace, empties the queue,
+  /// hits the dry path in tickScroll (rate = 0, re-prefill) and stalls — repeatedly. That is the
+  /// judder you see for a few seconds after switching to Low Data.
+  ///
+  /// Seeding costs nothing and removes the whole transient. `arrivals` is reset so the fast
+  /// alpha (0.5) applies around the new value, letting it converge on the TRUE rate — which may
+  /// differ from the nominal one if the server clamps us.
+  func setExpectedRowRate(_ fps: Double) {
+    guard fps > 0 else { return }
+    interval = 1.0 / fps
+    arrivals = 0
+  }
+
   /// How many rows to bank before drawing — i.e. how much LATENCY we deliberately
   /// accept to insure against a late row.
   ///

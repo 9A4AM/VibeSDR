@@ -1255,8 +1255,9 @@ final class UberClient: ObservableObject {
   /// Adaptive waterfall rate. UberSDR ladder: divisor 1/2/3 = 10/5/3.3 fps (measured).
   /// Low Data may pin rung 2 (5 fps) but never rung 3 — 3.3 fps is jerky and reserved for a
   /// genuinely poor link. VibeServer has richer levers and is driven separately.
-  lazy var linkMgr = LinkManager(ladder: [10, 5, 10.0 / 3.0], lowDataRung: 2) { [weak self] rung in
-    self?.rateDivisor = rung          // didSet sends set_rate
+  lazy var linkMgr = LinkManager(ladder: [10, 5, 10.0 / 3.0], lowDataRung: 2) { [weak self] rung, fps in
+    self?.rateDivisor = rung                     // didSet sends set_rate
+    self?.waterfall.setExpectedRowRate(fps)      // don't make the interpolator rediscover it
   }
   /// How far the controller has had to back off (1 = not throttled). Mirrors to SpikeLink for
   /// the link glyph — see LinkManager.adaptiveRung for why this is not `rateDivisor`.

@@ -1359,6 +1359,26 @@ struct ContentView: View {
     case "no HTTP response":      return ("No answer from the server", false)
     default: break
     }
+    // SOCKET-LEVEL FAILURES. AudioSocket reports raw state ("kiwi-snd ws waiting: POSIXErrorCode
+    // (rawValue: 53): Software caused connection abort") — a stack trace in a status line. The
+    // errno IS the useful part, so translate it rather than dropping it.
+    if s.contains("ws waiting") || s.contains("POSIXErrorCode") {
+      let posix: [Int: String] = [
+        51: "The network is unreachable",
+        53: "The server dropped the connection",   // ECONNABORTED
+        54: "The server closed the connection",    // ECONNRESET
+        60: "The server stopped responding",       // ETIMEDOUT
+        61: "The server refused the connection",   // ECONNREFUSED
+        64: "The server is down",
+        65: "Can't reach the server",
+      ]
+      if let m = s.range(of: #"rawValue: (\d+)"#, options: .regularExpression),
+         let code = Int(s[m].replacingOccurrences(of: "rawValue: ", with: "")),
+         let msg = posix[code] {
+        return ("\(msg) — retrying…", true)
+      }
+      return ("Reconnecting to the server…", true)
+    }
     if s.hasPrefix("retrying (fresh session)") { return ("Retrying with a fresh session…", true) }
     if s.hasPrefix("reconnect ")               { return ("Reconnecting…", true) }
     if s.hasPrefix("connection failed:")       { return ("Couldn't connect", false) }
@@ -1461,6 +1481,13 @@ struct ContentView: View {
     // normal, and until it has been quiet for a good while the warning pill (which
     // leaves the waterfall on screen) is the better answer.
     guard Date().timeIntervalSince(t) > 10 else { return nil }
+    // NAME THE RIGHT HOP. "Watch link lost" / "iPhone not responding" is COMPANION vocabulary —
+    // it describes the watch↔phone leg, which in the standalone spike DOES NOT EXIST: we hold our
+    // own sockets straight to the server (see SpikeLink.client). Blaming the watch for a server
+    // that dropped us sends the user to fix the one thing that was working.
+    if link.client != nil {
+      return ("exclamationmark.triangle", "Lost the server\nSpectrum stopped")
+    }
     return stateFresh
       ? ("exclamationmark.triangle", "Watch link lost\nSpectrum stopped")
       : ("iphone.slash", "iPhone not responding")

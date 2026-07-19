@@ -36,8 +36,11 @@ final class LinkManager {
   /// 3.3fps rung is jerky and reserved for a genuinely poor connection, never a user preference.
   /// Stuart: "low data rate minimum is 5fps as the interpolation can hide that."
   private let lowDataRung: Int
-  /// Hands the backend a 1-based rung to apply; the backend maps it to its own wire value.
-  private let apply: (Int) -> Void
+  /// Hands the backend a 1-based rung AND the fps that rung is expected to deliver. The backend
+  /// maps the rung to its own wire value, and seeds the waterfall's cadence with the fps so the
+  /// interpolator doesn't have to rediscover a rate we already know (see
+  /// WaterfallBuffer.setExpectedRowRate).
+  private let apply: (Int, Double) -> Void
 
   /// The rate actually requested (1 = full). Includes a user-pinned Low Data floor.
   private(set) var rung = 1
@@ -47,6 +50,16 @@ final class LinkManager {
 
   private var starvedSecs = 0
   private var healthySecs = 0
+  /// Recent per-second frame counts, for the RECOVERY test only.
+  ///
+  /// ★ `framesPerSec` is an INTEGER COUNT in a 1s window, and that quantisation is brutal at low
+  /// rungs: at 5fps one late frame gives 4/5 = 0.80, which lands in the hold band and resets the
+  /// healthy counter. A single late frame per second therefore blocks recovery FOREVER — the ladder
+  /// holds a lower rung on a link that is actually fine (observed on-wrist, UberSDR, 2026-07-19).
+  /// Averaging over several seconds turns ±1 frame from ±20% into ±4%. Starvation still uses the
+  /// instantaneous value, so stepping DOWN stays fast.
+  private var recent: [Double] = []
+  private static let recoveryWindow = 5
 
   /// Degrade fast, recover slow — asymmetric on purpose. A wrong step DOWN costs a little time
   /// resolution nobody notices; a wrong step UP costs a visible stutter.
@@ -55,7 +68,7 @@ final class LinkManager {
   private static let starveRatio  = 0.6
   private static let healthyRatio = 0.85
 
-  init(ladder: [Double], lowDataRung: Int, apply: @escaping (Int) -> Void) {
+  init(ladder: [Double], lowDataRung: Int, apply: @escaping (Int, Double) -> Void) {
     self.ladder = ladder
     self.lowDataRung = min(max(1, lowDataRung), ladder.count)
     self.apply = apply
@@ -84,13 +97,18 @@ final class LinkManager {
     let expected = ladder[rung - 1]
     let ratio = expected > 0 ? fps / expected : 1
 
+    recent.append(fps)
+    if recent.count > Self.recoveryWindow { recent.removeFirst(recent.count - Self.recoveryWindow) }
+    let avg = recent.isEmpty ? fps : recent.reduce(0, +) / Double(recent.count)
+    let avgRatio = expected > 0 ? avg / expected : 1
+
     if ratio < Self.starveRatio {
       starvedSecs += 1; healthySecs = 0
       if starvedSecs >= Self.degradeAfter, rung < ladder.count {
         set(rung + 1, adaptive: true)
         starvedSecs = 0
       }
-    } else if ratio >= Self.healthyRatio {
+    } else if avgRatio >= Self.healthyRatio {
       healthySecs += 1; starvedSecs = 0
       if healthySecs >= Self.recoverAfter, rung > 1 {
         set(rung - 1, adaptive: true)
@@ -102,7 +120,7 @@ final class LinkManager {
   }
 
   /// Re-assert the current rung — call after a reconnect, where the server starts at its default.
-  func reassert() { if rung != 1 { apply(rung) } }
+  func reassert() { if rung != 1 { apply(rung, ladder[rung - 1]) } }
 
   private func set(_ r: Int, adaptive: Bool) {
     let clamped = min(max(1, r), ladder.count)
@@ -110,6 +128,7 @@ final class LinkManager {
     guard clamped != rung else { return }
     rung = clamped
     starvedSecs = 0; healthySecs = 0
-    apply(clamped)
+    recent.removeAll()          // the old rung's counts say nothing about the new one
+    apply(clamped, ladder[clamped - 1])
   }
 }
