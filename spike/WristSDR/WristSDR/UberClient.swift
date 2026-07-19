@@ -51,6 +51,44 @@ final class UberClient: ObservableObject {
     if let m = s["m"] as? String { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
     vibeRestored = true
   }
+  /// Per-host RTL-SDR memory (VibeServer only) — gain/bias-T/AGC/ppm/rate/de-emphasis, so the dongle comes
+  /// back the way you left it instead of wanting a re-dial on every connect.
+  private var vibeHwKey: String { "vibe.hw.\(host)" }
+  private var vibeHwRestoring = false    // suppress save-on-set while we replay the saved values
+  private func saveVibeHw() {
+    guard isVibe, !vibeHwRestoring else { return }
+    UserDefaults.standard.set(["auto": gainAuto, "gain": gainValue, "biasT": biasT,
+                               "agc": agc, "ppm": ppm, "rate": sampleRate, "deemph": deemph],
+                              forKey: vibeHwKey)
+  }
+  /// Replay the saved settings. Driven by `hwinfo` rather than by connect because the gain steps and capture
+  /// rates are SERVER-declared — asserting a value this dongle can't do would just be refused, and the host
+  /// may have pinned the rate. Re-runs on every `hwinfo`, so a reconnect (the weak point over Bluetooth) puts
+  /// the radio back rather than leaving it on the server's defaults.
+  private func restoreVibeHw() {
+    guard isVibe, let s = UserDefaults.standard.dictionary(forKey: vibeHwKey) else { return }
+    vibeHwRestoring = true
+    defer { vibeHwRestoring = false }
+
+    if let v = s["agc"]    as? Bool, v != agc    { setAgc(v) }
+    if let v = s["biasT"]  as? Bool, v != biasT  { setBiasT(v) }
+    if let v = s["ppm"]    as? Int,  v != ppm    { setPpm(v) }
+    if let v = s["deemph"] as? Int,  v != deemph { setDeemph(v) }
+
+    // Capture rate only if the host hasn't pinned it and the server actually offers it.
+    if lockedRate == 0, let r = s["rate"] as? Int, r > 0, offeredRates.contains(r), r != sampleRate {
+      setCaptureRate(r)
+    }
+    // Gain LAST: an RTL dongle commonly resets tuner gain when the sample rate changes. Both ride the same
+    // spectrum WS, so the server applies them in this order.
+    if let auto = s["auto"] as? Bool, auto {
+      if !gainAuto { setGainAuto(true) }
+    } else if let g = s["gain"] as? Double,
+              let step = offeredGains.min(by: { abs(Double($0) - g) < abs(Double($1) - g) }) {
+      setGainValue(Double(step))   // snap to a step this tuner actually has
+    }
+  }
+
   private let adpcmL = ImaAdpcmDecoder(flavor: .kiwi)   // VibeServer audio: mid / left channel
   private let adpcmR = ImaAdpcmDecoder(flavor: .kiwi)   // side / right channel
   /// Server-advertised capabilities from the `hwinfo` message (offered capture rates + the owner's FFT/FPS
@@ -75,17 +113,18 @@ final class UberClient: ObservableObject {
     if let r = j["rates"] as? [Int] { offeredRates = r }
     lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
     maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
+    restoreVibeHw()          // the server has now declared what it offers — put the radio back
   }
 
   /// All hardware controls ride the SPECTRUM WS as JSON (matches UberSDRClient._sendCtl / the shim).
   /// Guarded to VibeServer — a public UberSDR server would reject them.
-  func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]) }
-  func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]) }
-  func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]) }
-  func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]) }
-  func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]) }
-  func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]) }
-  func setDeemph(_ tau: Int) { guard isVibe else { return }; deemph = tau; specSock.send(json: ["type": "deemph", "tau": tau]) }
+  func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
+  func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
+  func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
+  func setAgc(_ on: Bool) { guard isVibe else { return }; agc = on; specSock.send(json: ["type": "agc", "on": on]); saveVibeHw() }
+  func setPpm(_ v: Int) { guard isVibe else { return }; ppm = v; specSock.send(json: ["type": "ppm", "value": v]); saveVibeHw() }
+  func setCaptureRate(_ hz: Int) { guard isVibe else { return }; sampleRate = hz; specSock.send(json: ["type": "sampleRate", "value": hz]); saveVibeHw() }
+  func setDeemph(_ tau: Int) { guard isVibe else { return }; deemph = tau; specSock.send(json: ["type": "deemph", "tau": tau]); saveVibeHw() }
   /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
   /// Force mono — the ABR last resort (only meaningful on WFM).
@@ -249,6 +288,7 @@ final class UberClient: ObservableObject {
         self.audioPerSec  = Double(self.audioCount)
         self.frameCount = 0
         self.audioCount = 0
+        self.stepLinkManagement()
       }
     }
     RunLoop.main.add(t, forMode: .common)
@@ -1194,6 +1234,76 @@ final class UberClient: ObservableObject {
   /// the whole reason it is a toggle and not a constant.
   @Published var rateDivisor = 1 {
     didSet { sendRate() }
+  }
+
+  // ── LINK MANAGEMENT (UberSDR only) ───────────────────────────────────────────
+  //
+  // Ask the server for FEWER waterfall frames when the link can't carry them, and step back up
+  // when it recovers. Measured against a real server: divisor 1/2/3 = 10/5/3.3 fps and
+  // 12.4/6.1/4.2 KB/s — the byte rate scales linearly, so a rung is a true ~⅓ cut each time.
+  //
+  // Why this is safe to do behind the user's back: the waterfall already interpolates onto a
+  // 20fps render clock, so a lower frame rate costs TIME RESOLUTION, not scroll smoothness. A
+  // stuttering link, by contrast, is visible and ugly. Trading the former for the latter is the
+  // whole point — but it IS a trade, hence the toggle.
+  //
+  // ASYMMETRIC ON PURPOSE. Degrade after 3s of starvation, recover only after 20s of health. A
+  // wrong step down costs a little time resolution nobody sees; a wrong step up costs a visible
+  // stutter. Ladder stops at 3: below ~3fps the interpolator is inventing most of what you see.
+  /// Read live from defaults each tick rather than held as state, so the toggle can live anywhere in
+  /// the menu tree (as `@AppStorage("vibeAutoLink")`) without plumbing UberClient into the root menu.
+  private var linkManagement: Bool { UserDefaults.standard.object(forKey: "vibeAutoLink") as? Bool ?? true }
+  /// The rung the CONTROLLER chose, which is not the same thing as the rate on the wire.
+  ///
+  /// `rateDivisor` says what we asked the server for; this says how much of that was forced on us
+  /// by a poor link. A user who deliberately picks a low rate (Low Data mode, for a metered plan)
+  /// is not on a bad connection, and must not be shown a permanent red link glyph for exercising a
+  /// choice. Only adaptive throttling is a symptom; a user-pinned rate is a preference.
+  @Published var adaptiveRung = 1
+  /// Set when the controller (not the user) last moved the rung — surfaced in the menu so a
+  /// slow waterfall is never a mystery.
+  @Published var linkManagementActive = false
+  private var starvedSecs = 0
+  private var healthySecs = 0
+  private static let ladderMax = 3        // 1 → 2 → 3, no further
+
+  private func stepLinkManagement() {
+    // UberSDR only. VibeServer has richer levers (fftRate/bins) and we own both ends there.
+    guard !isVibe, !goingIdle else { return }
+    // Switched off mid-session — hand the full rate straight back and stop adapting.
+    guard linkManagement else {
+      if rateDivisor != 1 { rateDivisor = 1 }
+      adaptiveRung = 1
+      linkManagementActive = false
+      starvedSecs = 0; healthySecs = 0
+      return
+    }
+    guard status == "live", everHadFrames else { return }
+    // A zoom/tune re-subscribes and legitimately pauses frames — don't read that as a bad link.
+    guard ProcessInfo.processInfo.systemUptime - lastViewSentAt > 3 else { starvedSecs = 0; return }
+
+    let expected = 10.0 / Double(rateDivisor)
+    let ratio = framesPerSec / expected
+
+    if ratio < 0.6 {
+      starvedSecs += 1; healthySecs = 0
+      if starvedSecs >= 3, rateDivisor < Self.ladderMax {
+        rateDivisor += 1                 // didSet sends set_rate
+        adaptiveRung = rateDivisor       // forced on us — the glyph should say so
+        linkManagementActive = true
+        starvedSecs = 0
+      }
+    } else if ratio >= 0.85 {
+      healthySecs += 1; starvedSecs = 0
+      if healthySecs >= 20, rateDivisor > 1 {
+        rateDivisor -= 1
+        adaptiveRung = rateDivisor
+        linkManagementActive = rateDivisor > 1
+        healthySecs = 0
+      }
+    } else {
+      starvedSecs = 0; healthySecs = 0   // in between — hold this rung
+    }
   }
 
   private func sendRate() {
