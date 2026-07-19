@@ -336,7 +336,20 @@ final class OwrxClient: ObservableObject, SDRClient {
     // linger over an FM demod (stale aircraft kept routing to .adsb).
     aircraft = []; secondaryDecoder = nil; fftSuppressed = false
     sock.cancel()
-    let wait = UInt64(min(retries, 5)) * 1_500_000_000
+    // ★ FIRST RETRY IS IMMEDIATE, then back off. Backoff exists to stop us hammering a server that
+    // is genuinely down — it has no business delaying the first attempt after a HEALTHY session,
+    // and here it cost 1.5s minimum because `retries` is incremented above.
+    //
+    // That delay is not merely slow, it is DESTRUCTIVE on OWRX: the profile is server state, and a
+    // window with zero clients lets the server fall back to its default profile. Worse, someone
+    // else can arrive in that window and pick their own — at which point reconnecting and grabbing
+    // it back would hijack the radio from them. Every second of gap makes that likelier, so the
+    // gap is the thing to attack.
+    //
+    // `everFrame` is the guard: only a connection that WORKED gets the instant retry. A server that
+    // never gave us a frame (down, full, refusing) still gets the full backoff.
+    let steps = everFrame ? max(0, retries - 1) : retries
+    let wait = UInt64(min(steps, 5)) * 1_500_000_000
     Task { @MainActor in
       try? await Task.sleep(nanoseconds: wait)
       self.retrying = false

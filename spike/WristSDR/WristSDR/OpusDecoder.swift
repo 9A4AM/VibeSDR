@@ -12,6 +12,31 @@ import Foundation
 ///   [13:17] float32 LE baseband power
 ///   [17:21] float32 LE noise density
 ///   [21:]   Opus payload
+#if targetEnvironment(simulator)
+/// SIMULATOR STUB — layout testing only.
+///
+/// `opus/libopus.a` is a watchOS DEVICE slice (arm64) with no simulator slice, and the opus source
+/// is not committed, so a simulator build cannot link the real decoder. Rather than carry a second
+/// prebuilt library just to check layouts, stand in a decoder that returns nothing.
+///
+/// ONLY OPUS IS LOST — which is less than it sounds. FM-DX ships MP3 (`FmdxMp3Decoder`) and Kiwi
+/// ships IMA-ADPCM (`ImaAdpcm`), both pure Swift, so those backends have working AUDIO in the
+/// simulator. It is UberSDR and VibeServer (Opus) that go quiet. Confirmed 2026-07-19: FM-DX audio
+/// plays in the simulator with this stub in place.
+///
+/// That makes the simulator a near-complete test environment, and worth having for the one thing an
+/// Ultra on the wrist cannot show: how the UI lays out on the SMALLEST supported watch. Small screens
+/// are this project's proven blind spot — see the v9.0.2 CONTINUE bug, and the two layout bugs plus
+/// the coach-crown bug this simulator found within an hour of existing.
+///
+/// If real audio in the simulator is ever wanted, build a watchsimulator slice with
+/// `tools/build_opus_watchos.sh` (adapted for the simulator SDK) and delete this.
+final class OpusDecoder {
+  private(set) var sampleRate: Int32 = 0
+  private(set) var channels: Int32 = 0
+  func decode(_ packet: Data) -> (pcm: [Int16], rate: Int32, channels: Int32)? { nil }
+}
+#else
 final class OpusDecoder {
   private var dec: OpaquePointer?
   private(set) var sampleRate: Int32 = 0
@@ -66,3 +91,4 @@ final class OpusDecoder {
     return (Array(pcm[0..<total]), sampleRate, channels)
   }
 }
+#endif

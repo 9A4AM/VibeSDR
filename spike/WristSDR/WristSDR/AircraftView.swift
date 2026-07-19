@@ -11,6 +11,7 @@ struct AircraftView: View {
   @EnvironmentObject var link: SpikeLink
   @State private var showMap = false
   @State private var showMenu = false
+  @State private var showChat = false
   @State private var locked = false
   @AppStorage("seenAdsbTutorial") private var seenAdsbTut = false
   @State private var showAdsbTut = false
@@ -39,6 +40,7 @@ struct AircraftView: View {
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
     .navigationDestination(isPresented: $showMenu) { ControlMenu { _ in }.environmentObject(link) }
+    .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     .onAppear { if !seenAdsbTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showAdsbTut = true } } }
     .sheet(isPresented: $showAdsbTut) {
       TutorialSheet(title: "ADS-B aircraft", tips: adsbTutorialTips()) { seenAdsbTut = true; showAdsbTut = false }
@@ -70,19 +72,33 @@ struct AircraftView: View {
         Text("aircraft").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
         Spacer(minLength: 0)
       }
-      HStack(spacing: 24) {   // Lock · Map · Menu
+      // Lock · Map · Menu · Chat. SPACERS, not a fixed gap: a hardcoded 24pt was fine for three
+      // buttons on a 49mm and does not fit four on a 41mm. Even distribution adapts to any width.
+      HStack(spacing: 0) {
         LockButton(locked: $locked, size: 20)
+        Spacer(minLength: 6)
         Button { if !locked { showMap.toggle() } } label: {
           Image(systemName: showMap ? "list.bullet" : "map.fill").font(.system(size: 20, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .cyan)
             .padding(6).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
+        Spacer(minLength: 6)
         Button { if !locked { showMenu = true } } label: {
           Image(systemName: "line.3.horizontal").font(.system(size: 20, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .white)
             .padding(6).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
-        Spacer(minLength: 0)
+        // Chat was missing from ADS-B and DAB entirely — the same OWRX server, the same room of
+        // listeners, and no way to talk to them from these screens. The glyph carries the listener
+        // COUNT as well, so one control answers "who else is here" and "say something".
+        if link.supportsChat {
+          Spacer(minLength: 6)
+          ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+            if !locked { showChat = true }
+          }
+        } else {
+          Spacer(minLength: 0)
+        }
       }
     }
     .padding(.horizontal, 10).padding(.top, 40).padding(.bottom, 4)   // clears the status band (top ignored)

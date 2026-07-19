@@ -332,6 +332,11 @@ final class UberClient: ObservableObject {
   /// only needs "on the watch's own cellular".
   nonisolated private static func transportFor(_ p: NWPath) -> Transport {
     guard p.status == .satisfied else { return .none }
+    // ORDER MATTERS, and this order is FIELD-VERIFIED (2026-07-19): the glyph correctly showed
+    // the iPhone on a relayed OWRX session, so a relayed path here reports .other WITHOUT .wifi.
+    // (My notes from the companion say "check .other before .wifi" — that was a different code
+    // path; do not reorder this one without re-testing on a real relayed connection, or a watch on
+    // its OWN wifi could start reporting as relayed.)
     if p.usesInterfaceType(.wifi)     { return .wifi }
     if p.usesInterfaceType(.cellular) { return .cellular }
     if p.usesInterfaceType(.other)    { return .iphone }

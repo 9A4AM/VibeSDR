@@ -148,6 +148,9 @@ struct ContentView: View {
 
   /// First-run coach. Persisted, so it is shown ONCE — ever, not once per session.
   @AppStorage("coachSeenSDR") private var coachSeen = false
+  /// True while the first-run coach is on screen. Gates crown focus (see .focusable below) so the
+  /// crown scrolls the coach rather than tuning behind it.
+  private var coachUp: Bool { link.everGotRow && !coachSeen }
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
@@ -513,7 +516,7 @@ struct ContentView: View {
       // THE COACH, once. Gated on everGotRow so it lands on a WORKING waterfall — a
       // tutorial over a black boot screen teaches you the app is broken. It also sits
       // ABOVE the crown overlay in the stack, so nothing can draw over it.
-      if link.everGotRow && !coachSeen {
+      if coachUp {
         CoachOverlay(
           title: "VibeSDR",
           items: [
@@ -589,7 +592,14 @@ struct ContentView: View {
     // view keeps crown focus (even with crownFocused=false) and the hosted WKInterfaceVolumeControl
     // can never receive it (the volume UI shows but the crown does nothing). Out of volume mode it
     // owns the crown for tune/zoom/brightness/contrast as before.
-    .focusable(crownMode != .volume)
+    // …and RELINQUISH IT FOR THE COACH TOO, for exactly the same reason. The overlay renders
+    // INSIDE this view, so while it is up the crown still belonged to tuning: turning it moved
+    // the VFO instead of scrolling the coach, and the detent haptics made it feel like it was
+    // doing something. Invisible on a 49mm Ultra where the coach fits — but on a 41mm the
+    // content is taller than the screen and the crown is the obvious way to reach "Got it".
+    // (Found on a 41mm simulator, 2026-07-19. Same shape as the v9.0.2 CONTINUE bug: a control
+    // you cannot reach on a small screen, on hardware nobody here owns.)
+    .focusable(crownMode != .volume && !coachUp)
     .focused($crownFocused)
     .digitalCrownRotation(
       $crown,
@@ -1526,6 +1536,10 @@ struct ContentView: View {
       ?? working.map { ("dot.radiowaves.left.and.right", $0) }
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
                          : ("iphone.slash", "Open VibeSDR on iPhone"))
+    // Sits clear of the floating padlock (bottom-left, 78pt up). The message is CENTRED and
+    // wraps to more lines on a narrow screen, so on a 41mm it grew down into the lock. Lifting
+    // the message is right rather than moving the lock: the lock is the one control that still
+    // works while locked, so its position is load-bearing. (41mm simulator, 2026-07-19.)
     return VStack(spacing: 6) {
       // "@instance" = the triangle-node server mark (see hintPill) — the server is that
       // shape everywhere in the app, so it must not be a rack here.
@@ -1544,6 +1558,7 @@ struct ContentView: View {
         .multilineTextAlignment(.center)
     }
     .padding(.horizontal, 12)
+    .padding(.bottom, 44)
   }
 
   // ── Frequency ticker ───────────────────────────────────────────────────────

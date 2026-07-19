@@ -163,7 +163,13 @@ struct FmdxView: View {
 
   private var controlRow: some View {
     HStack(spacing: 10) { armButton; volumeButton; Spacer() }
-      .padding(.leading, 6).padding(.top, 6).frame(height: 30)
+      .padding(.leading, 6).padding(.top, 6)
+      // 30 was the BUTTON height — but the ✓/✗ badges hang ~5pt BELOW their button
+      // (offset y:4 from bottomTrailing), so pinning the row to 30 let them spill into the
+      // station name underneath. Invisible at 49mm where there is slack; visible fouling at
+      // 41mm. Reserve the overhang instead of clipping the badge, which is the bit that
+      // tells you whether the crown is armed. (Found on a 41mm simulator, 2026-07-19.)
+      .frame(height: 36)
   }
 
   private var volumeButton: some View {
