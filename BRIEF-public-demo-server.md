@@ -100,7 +100,17 @@ rather than assume. If it is a problem, the fallback is a cheap VPS relay, still
 
 ---
 
-## 6. The live site background — "ON AIR"
+## 6. PARKED — the live site background — "ON AIR"
+
+> **DROPPED 2026-07-19, not rejected.** Stuart: *"I didn't realise that it would smash my upload so
+> forget that option, just stick with the 20 users shared SDR."*
+>
+> The Durable Object fan-out below *does* solve the upload problem — the Pi would send one stream
+> regardless of audience. But it costs a paid Workers plan plus real complexity, for a decorative
+> feature, on top of a demo server that has to exist and be reliable first. Right call to defer.
+>
+> Kept in full because the idea is good, the analysis is done, and it becomes cheap to revisit once
+> §§1–5 are running. **Do not start this before the demo server is live and stable.**
 
 Render the demo receiver's waterfall as the **live background of vibesdr.net**, with an **ON AIR**
 indicator. No competitor does this, and it demonstrates the product in the most literal way available.
@@ -161,5 +171,5 @@ cannot be manufactured at home. Log rung transitions per session and use them to
 3. Sessions + queue + countdown.
 4. Cloudflare Tunnel; public URL; health check + "offline" state on the site.
 5. Site link ("Feel VibeDSP for yourself").
-6. Durable Object fan-out + live background + ON AIR. **Last** — it is the highest-risk, highest-cost
-   piece and everything before it is useful without it.
+6. ~~Live background + ON AIR~~ — **parked, see §6.** Everything above is useful without it, and the
+   demo itself is the differentiator.
