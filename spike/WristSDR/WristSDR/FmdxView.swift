@@ -19,6 +19,7 @@ struct FmdxView: View {
   @State private var tick = 0
 
   @State private var showChat = false
+  @State private var showSettings = false
   @State private var armed = false
   @State private var volumeMode = false
   @AppStorage("seenFmdxTutorial") private var seenTut = false
@@ -106,6 +107,9 @@ struct FmdxView: View {
       if let d = disarmAt, Date() >= d { armed = false; disarmAt = nil }
     }
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
+    .sheet(isPresented: $showSettings) {
+      NavigationStack { FmdxSettingsSheet().environmentObject(link) }
+    }
     .onAppear {
       crownFocused = true
       if !seenTut { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showTut = true } }
@@ -146,11 +150,10 @@ struct FmdxView: View {
     HStack(spacing: 8) {
       // Person+count glyph, breathing on inbound chat — same component + position as the waterfall screen.
       ChatGlyph(clients: st.users, activity: link.chatActivity) { showChat = true }
-      // SERVERS / back. FM-DX has no demod, step, profile or bandwidth to change, and volume is already on
-      // this screen — so the control menu has nothing to offer here. This button just goes back to pick a
-      // different receiver.
-      Button { link.backToPicker() } label: {
-        Image(systemName: "rectangle.stack").font(.system(size: 13, weight: .semibold))
+      // SETTINGS. Was a bare "back to servers" button — but an FM-DX server DOES have things worth
+      // changing (antenna, cEQ, iMS), so it opens a menu with Servers at the bottom.
+      Button { showSettings = true } label: {
+        Image(systemName: "slider.horizontal.3").font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.white).padding(4).contentShape(Rectangle())
       }.buttonStyle(.plain)
       Spacer()

@@ -39,6 +39,20 @@ struct FmdxInfo: Equatable {
   var dist: Double = 0        // km from the receiver
   var rx: String = ""         // the receiver's own name (origin of `dist`)
   var flag: String = ""       // country flag emoji
+  // ── Server-side controls (FM-DX Webserver). Mirrors the phone's FmdxAdapter. ──
+  var eq = false              // cEQ filter
+  var ims = false             // iMS (multipath suppression)
+  var antenna = 0             // currently selected antenna (0-based, matches the `Z` command)
+  /// Antennas this server advertises. EMPTY = no switch (single antenna, or the owner disabled it),
+  /// in which case the control must not be shown at all — the same rule as OWRX's lockedRate.
+  var antennas: [FmdxAntenna] = []
+}
+
+/// One selectable antenna on an FM-DX server. Keys arrive as `antN` (1-based) but the `Z` command
+/// and the `ant` state field are 0-based, so `id` is N-1.
+struct FmdxAntenna: Identifiable, Equatable {
+  let id: Int
+  let name: String
 }
 
 /// FM-DX Webserver client. Unlike the SDR backends there is NO spectrum — the server does all demod +
@@ -132,9 +146,25 @@ final class FmDxClient: SDRClient {
     guard let url = URL(string: "\(secure ? "https" : "http")://\(base)/static_data") else { return }
     URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
       guard let self, let data,
-            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let name = j["tunerName"] as? String, !name.isEmpty else { return }
-      Task { @MainActor in self.rxName = name; self.info.rx = name }
+            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+      let name = (j["tunerName"] as? String) ?? ""
+      // ANTENNAS. `ant` is { enabled, ant1: { enabled, name }, … }. Expose the switch ONLY when
+      // ant.enabled, and only the individual antennas marked enabled — a server with one antenna
+      // must show no control at all (same rule as OWRX's lockedRate: never offer a control whose
+      // every use is a no-op). Keys are 1-based; the `Z` command and the `ant` state are 0-based.
+      var ants: [FmdxAntenna] = []
+      if let ant = j["ant"] as? [String: Any], (ant["enabled"] as? Bool) == true {
+        for (k, v) in ant where k != "enabled" {
+          guard let d = v as? [String: Any], (d["enabled"] as? Bool) == true else { continue }
+          let n = Int(k.filter(\.isNumber)) ?? (ants.count + 1)
+          ants.append(FmdxAntenna(id: n - 1, name: (d["name"] as? String) ?? k))
+        }
+      }
+      let sorted = ants.sorted { $0.id < $1.id }
+      Task { @MainActor in
+        if !name.isEmpty { self.rxName = name; self.info.rx = name }
+        self.info.antennas = sorted
+      }
     }.resume()
   }
 
@@ -164,6 +194,10 @@ final class FmDxClient: SDRClient {
 
     var i = FmdxInfo()
     i.freq = (mhz * 1_000_000).rounded()
+    // cEQ / iMS / antenna — server sends 0|1 (or numeric) for the filters and an index for `ant`.
+    i.eq  = ((j["eq"]  as? NSNumber)?.intValue ?? Int((j["eq"]  as? String) ?? "") ?? 0) == 1
+    i.ims = ((j["ims"] as? NSNumber)?.intValue ?? Int((j["ims"] as? String) ?? "") ?? 0) == 1
+    i.antenna = (j["ant"] as? NSNumber)?.intValue ?? Int((j["ant"] as? String) ?? "") ?? 0
     i.users = (j["users"] as? NSNumber)?.intValue ?? Int((j["users"] as? String) ?? "") ?? 0
     i.stereo = truthy(j["st"])
     i.rds = truthy(j["rds"])
@@ -276,7 +310,26 @@ final class FmDxClient: SDRClient {
     lastKhz = khz
     textSock.send(text: "T\(khz)")
   }
-  func tune(delta: Int, step: Double) {
+
+  // ── Server-side controls. Wire format taken from the phone's FmdxAdapter so the two agree. ──
+
+  /// cEQ and iMS ride ONE command — `G<eq><ims>` — so both bits must be sent together or the
+  /// unmentioned one is cleared. Always send the current value of the other.
+  func setEq(_ on: Bool) {
+    var i = info; i.eq = on; info = i
+    textSock.send(text: "G\(on ? 1 : 0)\(i.ims ? 1 : 0)")
+  }
+  func setIms(_ on: Bool) {
+    var i = info; i.ims = on; info = i
+    textSock.send(text: "G\(i.eq ? 1 : 0)\(on ? 1 : 0)")
+  }
+  /// Antenna select — `Z<n>`, 0-based. Only meaningful when the server advertised more than one.
+  func setAntenna(_ id: Int) {
+    var i = info; i.antenna = id; info = i
+    textSock.send(text: "Z\(id)")
+  }
+
+func tune(delta: Int, step: Double) {
     // FM broadcast is a fixed 100 kHz raster — IGNORE the shared UI's step (which is set for SDR bands).
     let target = (frequency > 0 ? frequency : Double(lastKhz) * 1000) + Double(delta) * 100_000
     tuneTo(max(87_500_000, min(108_000_000, target)))

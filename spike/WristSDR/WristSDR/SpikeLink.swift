@@ -121,6 +121,9 @@ final class SpikeLink: ObservableObject {
   /// FM-DX tuner state (mirrored from the client). nil = not on an FM-DX server.
   @Published var fmdx: FmdxInfo? = nil
   var isFmDx: Bool { client is FmDxClient }
+  /// The FM-DX client, when we're on one — the server-settings menu drives it directly (antenna,
+  /// cEQ, iMS) rather than widening SDRClient for controls only one backend has.
+  var fmdxClient: FmDxClient? { client as? FmDxClient }
 
   /// The VibeServer radio, if we're on one — the client that OWNS the dongle and accepts hardware controls
   /// (gain / bias-T / AGC / PPM / sample rate). The hold-menu's "Radio" sub-sheet observes it directly, so
