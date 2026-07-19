@@ -18,6 +18,7 @@ struct DabView: View {
   @State private var lastDetent = 0
   @State private var showProfiles = false
   @State private var showMenu = false
+  @State private var showChat = false
   @State private var showSpeed = false
   @State private var locked = false
   @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
@@ -94,6 +95,7 @@ struct DabView: View {
     .navigationDestination(isPresented: $showMenu) {
       ControlMenu { _ in }.environmentObject(link)
     }
+    .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     // Passive status icons in the clock's band, top-left (clock keeps the right corner).
     .overlay(alignment: .topLeading) { chrome }
     .sheet(isPresented: $showSpeed) {
@@ -168,6 +170,14 @@ struct DabView: View {
             .foregroundStyle(locked ? .white.opacity(0.3) : .white)
             .padding(6).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
+        // Chat was missing from DAB and ADS-B entirely — same OWRX server, same room of listeners,
+        // no way to talk to them from these screens. The glyph carries the listener COUNT too.
+        if link.supportsChat {
+          Spacer(minLength: 6)
+          ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+            if !locked { showChat = true }
+          }
+        }
         Spacer(minLength: 0)
       }
       // Speed fix — ONE compact button (the inline presets were too small to hit). Opens a sheet with
