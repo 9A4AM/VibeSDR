@@ -35,6 +35,22 @@ final class UberClient: ObservableObject {
   var vibePin = ""
   private var authSuffix = ""
   private var scheme: String { secure ? "wss" : "ws" }
+  private var vibeAdopted = false      // adopted the server's tune on the first config yet?
+  private var vibeRestored = false     // did we restore + assert a SAVED tune for this host?
+
+  /// Per-host tune memory (VibeServer only) — so it reopens where you left it, not the 648 kHz/AM default.
+  private var vibeStateKey: String { "vibe.tune.\(host)" }
+  private func saveVibeState() {
+    guard isVibe, frequency > 0 else { return }
+    UserDefaults.standard.set(["f": frequency, "m": mode], forKey: vibeStateKey)
+  }
+  private func restoreVibeState() {
+    guard isVibe, let s = UserDefaults.standard.dictionary(forKey: vibeStateKey),
+          let f = s["f"] as? Double, f > 0 else { return }
+    frequency = f
+    if let m = s["m"] as? String { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
+    vibeRestored = true
+  }
   private let adpcmL = ImaAdpcmDecoder(flavor: .kiwi)   // VibeServer audio: mid / left channel
   private let adpcmR = ImaAdpcmDecoder(flavor: .kiwi)   // side / right channel
   /// Server-advertised capabilities from the `hwinfo` message (offered capture rates + the owner's FFT/FPS
@@ -287,6 +303,7 @@ final class UberClient: ObservableObject {
     // sockets with the auth suffix. No UberSDR /connection preflight — the shim answers that unconditionally
     // and doesn't need it. The nonce is a reusable 1-hour session credential shared by both WS.
     if isVibe {
+      restoreVibeState()          // reopen where we left it (per host); else adopt the server's tune on config
       status = "authenticating"
       if !(await resolveVibeAuth()) { return }   // status carries the reason (PIN wrong / locked / offline)
       openVibeSockets()
@@ -763,6 +780,27 @@ final class UberClient: ObservableObject {
     // The server has confirmed the scale for the current subscription — rows may paint now.
     specConfigSeq = specSubscribeSeq
 
+    // ADOPT THE VIBESERVER'S CURRENT TUNE. Unlike real UberSDR (where the client drives the radio),
+    // VibeServer holds its OWN state — it's already tuned (e.g. 96.6 FM, set on the phone) and streaming
+    // that audio. So on the FIRST config we must MATCH the server, not force our 648 kHz/AM default onto
+    // it (which left the spectrum viewing off-band as a bouncing line while the audio played 96.6 FM).
+    // If we have a saved tune for this host we've already restored + asserted it in openVibeSockets, so
+    // skip. (Mode isn't in the shim config — it's restored from per-host memory when we have it.)
+    if isVibe, !vibeAdopted {
+      vibeAdopted = true
+      if !vibeRestored, centerHz > 0 {
+        frequency = centerHz
+        viewCenterHz = centerHz
+        // The shim doesn't send the current MODE, so infer it: a centre in the FM broadcast band is
+        // almost certainly WFM (the common VibeServer case), so the UI matches the audio without the
+        // user having to pick FM. Other bands keep the default until they choose.
+        if centerHz >= 87_000_000, centerHz <= 108_500_000 {
+          mode = "wfm"
+          if let d = Self.modeBW["wfm"] { bwLow = d.low; bwHigh = d.high }
+        }
+      }
+    }
+
     // VFO-LOCKED CENTRE. drawVFO puts the needle at the display centre, so the view must stay
     // centred on the tuned frequency. A config whose centre has drifted from it — the wide
     // default a FRESH session starts at (spectrum shows mid-band with the needle stuck centre
@@ -935,6 +973,15 @@ final class UberClient: ObservableObject {
     audio.start { [weak self] ok, info in
       Task { @MainActor in self?.audioLive = ok; self?.audioRoute = ok ? info : "FAILED: \(info)" }
     }
+    // If we restored a saved tune, ASSERT it so the server matches our remembered freq+mode. (Without a
+    // saved tune we adopt the server's current state on the first config instead — see onSpectrumJSON.)
+    if vibeRestored {
+      Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 500_000_000)   // let the audio socket come up first
+        guard !self.goingIdle else { return }
+        self.sendTune()
+      }
+    }
     status = "live"
   }
 
@@ -1077,6 +1124,7 @@ final class UberClient: ObservableObject {
     let f = max(freqMin, min(freqMax, (base + Double(delta)) * step))
     guard f != frequency else { return }
     frequency = f
+    saveVibeState()
     sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
     sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
@@ -1102,6 +1150,13 @@ final class UberClient: ObservableObject {
     // A mode change resets the passband to that mode's server default (the fresh socket below
     // applies the same default server-side; we just mirror it for the VFO lines / UI).
     if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
+    saveVibeState()
+    if isVibe {
+      // VibeServer: /ws/audio carries NO query, so the mode rides a tune JSON — reopening the socket
+      // (the UberSDR trick) wouldn't change the server's demod. The shim rebuilds its ADPCM stream itself.
+      sendTune()
+      return
+    }
     // REOPEN THE AUDIO SOCKET — do NOT just send a `tune`. The server builds its Opus
     // encoder ONCE, when the socket opens, at the sample rate that suits the mode (SSB is
     // narrower than AM/FM). A mid-session tune changes the DEMOD but not the encoder, so the
@@ -1119,6 +1174,7 @@ final class UberClient: ObservableObject {
     let f = max(freqMin, min(freqMax, hz))
     guard f != frequency else { return }
     frequency = f
+    saveVibeState()
     sendTune()
     sendViewCoalesced(f, viewBinBw > 0 ? viewBinBw : binBandwidth)
   }
