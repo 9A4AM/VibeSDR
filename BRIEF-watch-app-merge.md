@@ -119,6 +119,32 @@ develop different ideas of what yellow means.
 
 ---
 
+## 2c. ★ Chat must ROUTE THROUGH THE PHONE in Phone Control
+
+**The watch must not open its own chat connection when a phone is driving.** `PhoneClient` implements
+the existing chat surface (`supportsChat` / `chatLog` / `chatActivity` / `sendChat` — already
+`SDRClient` requirements) by **proxying over WCSession**. One server connection, one participant.
+
+Three reasons, and the third needs new protocol:
+
+1. **Identity.** A second connection is a second user on the server. Switch device mid-conversation
+   and you appear as two people. (`ChatIdentity` already shares one saved name across every backend —
+   `Chat.swift:8`, keyed `vibe.kiwi.ident` — so the NAME matches, but a separate connection is still a
+   separate participant.)
+2. **History.** One log, visible on both devices. Proxying gives this for free; the watch should
+   request the backlog on attach rather than starting empty.
+3. **★ READ STATE — and this does not exist today.** `chatActivity` is a *bump counter*, not a read
+   marker (`SpikeLink.swift:101`). So nothing stops the phone showing a pile of unread messages you
+   already read on the wrist, or both devices notifying for the same line. **Needs a shared read
+   watermark that syncs BOTH ways**: reading on the watch clears the phone's unread, and vice versa.
+   Watermark (last-read message id/timestamp), not a count — counts drift and cannot be reconciled.
+
+**Standalone is different and that is correct.** There the watch genuinely is its own client with its
+own connection, so it *is* a separate participant — unavoidable. `ChatIdentity` at least keeps the
+name consistent. Do not try to unify the two modes here; they are honestly different situations.
+
+---
+
 ## 3. What must NOT regress
 
 - **Chat** — explicitly called out. Working on both today; must survive.
