@@ -502,6 +502,11 @@ final class OwrxClient: ObservableObject, SDRClient {
         out[i].bearing = Self.bearingDeg(rlat, rlon, out[i].lat!, out[i].lon!)
       }
     }
+    // NOT a staleness filter — measured against Stuart's own OWRX (2026-07-19, 58 snapshots):
+    // OWRX reports ~203 aircraft of which ~170 carry a POSITION, and a dedicated FlightAware
+    // receiver on the same sky reported 170. So the discrepancy is not stale contacts being kept,
+    // it is aircraft heard WITHOUT a position fix. A dump1090-style 60s TTL on message activity
+    // would have cut the list to ~106 — further from FlightAware, not closer.
     aircraft = out
   }
 
