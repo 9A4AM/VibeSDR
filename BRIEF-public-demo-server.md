@@ -66,6 +66,38 @@ rather than silently corrupting everyone's audio.
 
 ---
 
+## 2b. ★ No hardware controls — and this should be a CONFIGURATION, not a fork
+
+**The demo is a static setup: a fixed 2.4 MHz slice, the UI and the demodulators, and no hardware
+control at all.** Gain, bias-T, PPM, AGC, direct sampling, sample rate and the centre frequency are
+all off the table — hidden or greyed.
+
+What a visitor DOES get: tune within the slice, pick a demod, set bandwidth, and all the display
+settings. That is the whole VibeDSP experience, which is the point of the demo.
+
+★ **The SERVER is its own thing entirely** (Stuart, 2026-07-19). It is a one-off installation with
+its own rules — shared slice, queue, time limits, everything locked. **Do not build that into the
+shipped product.** Making every VibeServer carry demo-only plumbing for the benefit of one Pi is the
+wrong trade, and §1 already requires the demo's rules never leak into the product's model. Keeping it
+separate also means it can be tuned freely without any risk of regressing the app.
+
+★★ **But the CLIENT should not be forked either** — because the mechanism it needs already exists:
+
+- `lockedRate` is advertised precisely so the client **hides** its rate picker rather than
+  *"offering a control whose every use is silently dropped"* (`local_sdr_shim.cpp` hwinfo).
+- `maxFftRate` was added the same way (2026-07-19, `96943d3`).
+
+So the demo server simply **declares more things locked** through the descriptor the client already
+understands. Separate server, unmodified client. That is also what keeps the demo honest as a demo:
+a visitor is running the real client, not a special build made to look good.
+
+**Hide vs grey:** follow the existing precedent — **hide** a control that is simply meaningless here
+(sample rate, centre), **grey with a reason** where a user would otherwise wonder where it went
+(gain, bias-T: *"fixed on the demo receiver"*). A screen full of dead controls reads as broken; a
+screen missing everything reads as feature-poor. The reason text is what stops either.
+
+---
+
 ## 3b. ★ Link Management must move stages for THIS mode only
 
 `fftRate` is currently a **DSP-level** lever, not a transmit-level one: it lives on `Impl` (one per
