@@ -227,10 +227,17 @@ store-mechanics constraint, not a preference.
 So today **the binary cannot install on a Series 4–8 at all** — not merely "Standalone is
 unavailable", the whole app is absent. To deliver "Phone Control has wider compatibility":
 
-1. **Rebuild libopus with the arm64_32 slice** (the script calls it "the awkward one to cross-compile"
-   — that was the reason for dropping it, and it now has to come back), OR exclude Opus from the
-   arm64_32 build entirely, since Phone Control never decodes Opus on the watch — the phone does.
-   ★ The second option is probably right and cheaper: the dependency exists only for Standalone.
+1. **Exclude Opus from the arm64_32 slice** rather than cross-compiling it. ★ **CONFIRMED by Stuart
+   (2026-07-19): companion mode does no audio on the watch at all** — *"it's all done on the phone;
+   the phone just sends a waterfall slice for the watch to show, and the watch sends tuning and demod
+   commands back."* So on a Series 4–8 (Phone Control only) the entire audio stack is dead weight and
+   libopus need never be linked.
+
+   **The pattern already exists** — the simulator stub written today (`OpusDecoder.swift`,
+   `#if targetEnvironment(simulator)`) is exactly this shape. Widen the condition to
+   `#if targetEnvironment(simulator) || arch(arm64_32)` and link libopus for arm64 only. Cross-
+   compiling libopus for ILP32 (which `build_opus_watchos.sh` calls "the awkward one") is then
+   unnecessary.
 2. **Gate the mode toggle on DEVICE CAPABILITY, not preference.** On a Series 4–8 the toggle must not
    offer Standalone; it should say plainly *why* ("standalone reception needs Series 9 or newer"),
    never silently fail or hide with no reason.
