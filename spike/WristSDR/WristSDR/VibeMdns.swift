@@ -20,34 +20,47 @@ final class VibeMdns: ObservableObject {
   @Published var found: [VibeAd] = []
   private var browser: NWBrowser?
   private var resolvers: [String: NWConnection] = [:]
+  private var pending: [String: (endpoint: NWEndpoint, name: String, pin: Bool)] = [:]   // for resolve retries
   private var stopped = true
 
   func start() {
     stopped = false
+    startKeepAwake()
     guard browser == nil else { return }
     spawnBrowser()
-    scheduleWake()
   }
 
-  /// Some watchOS network stacks don't populate the Bonjour browse from cold until there's other network
-  /// activity — which is why VibeServer only appeared AFTER connecting to another instance first. Nudge it:
-  /// respawn the browser every few seconds until we've actually found something (then stop nudging).
-  private func scheduleWake() {
-    Task { @MainActor in
-      try? await Task.sleep(nanoseconds: 3_000_000_000)
-      guard !stopped, found.isEmpty else { return }
-      browser?.cancel(); browser = nil
-      spawnBrowser()
-      scheduleWake()
+  private var keepAwake: NWConnection?
+
+  /// KEEP THE NETWORK STACK AWAKE. On watchOS the Bonjour RESOLVE stalls forever until there's a REAL
+  /// sustained outbound connection — an active UberSDR session made discovery start working; a URLSession
+  /// GET did not. So hold a live TLS connection to a real host open the whole time we're searching, and
+  /// drop it the instant we've found something (see upsert). Re-establishes if it drops while still looking.
+  private func startKeepAwake() {
+    guard keepAwake == nil, found.isEmpty else { return }
+    let c = NWConnection(host: "www.apple.com", port: 443, using: .tls)
+    c.stateUpdateHandler = { [weak self] st in
+      switch st {
+      case .failed, .cancelled:
+        Task { @MainActor in
+          guard let self, self.keepAwake === c else { return }
+          self.keepAwake = nil
+          if !self.stopped, self.found.isEmpty { self.startKeepAwake() }
+        }
+      default: break
+      }
     }
+    c.start(queue: .global())
+    keepAwake = c
   }
+
+  private func stopKeepAwake() { keepAwake?.cancel(); keepAwake = nil }
 
   private func spawnBrowser() {
     let params = NWParameters.tcp
     params.includePeerToPeer = false
     let b = NWBrowser(for: .bonjourWithTXTRecord(type: "_vibesdr._tcp", domain: nil), using: params)
     b.stateUpdateHandler = { [weak self] st in
-      Vitals.crumb("MDNS browser state: \(st)")
       // watchOS reaps the browser periodically (-65569 DefunctConnection). Respawn on failure unless we
       // were deliberately stopped — WITHOUT clearing `found`, so the list doesn't flicker out and back.
       guard case .failed = st else { return }
@@ -64,20 +77,31 @@ final class VibeMdns: ObservableObject {
     }
     b.start(queue: .main)
     browser = b
-    Vitals.crumb("MDNS browser (re)started for _vibesdr._tcp")
+  }
+
+  /// USER-TRIGGERED RESCAN. Cold auto-discovery is flaky on watchOS (the resolve stalls until real network
+  /// activity), so give the user a button: tear down + restart the browser and re-warm the stack. Keeps any
+  /// servers already found.
+  func refresh() {
+    stopped = false
+    resolvers.values.forEach { $0.cancel() }; resolvers.removeAll()
+    pending.removeAll()
+    browser?.cancel(); browser = nil
+    startKeepAwake()
+    spawnBrowser()
   }
 
   func stop() {
     stopped = true
     browser?.cancel(); browser = nil
     resolvers.values.forEach { $0.cancel() }; resolvers.removeAll()
+    stopKeepAwake()
     found = []
   }
 
   private func handle(_ results: Set<NWBrowser.Result>) {
     var live = Set<String>()
     for r in results {
-      Vitals.crumb("MDNS endpoint: \(r.endpoint) meta: \(r.metadata)")
       guard case let .service(name, _, _, _) = r.endpoint else { continue }
       var pin = false
       var friendly = name
@@ -87,42 +111,68 @@ final class VibeMdns: ObservableObject {
         if let n = Self.txt(txt, "name"), !n.isEmpty { friendly = n }
       }
       live.insert(name)
-      // Resolve host:port once per service (Bonjour gives a service endpoint, not an address).
-      if resolvers[name] == nil, !found.contains(where: { $0.id == name }) {
-        resolve(endpoint: r.endpoint, name: name, friendly: friendly, pin: pin)
-      }
+      pending[name] = (r.endpoint, friendly, pin)   // keep the freshest endpoint for (re)tries
+      // Resolve host:port (Bonjour gives a service endpoint, not an address). Kick it off if not already.
+      if resolvers[name] == nil, !found.contains(where: { $0.id == name }) { resolve(name) }
     }
     found.removeAll { !live.contains($0.id) }
+    pending = pending.filter { live.contains($0.key) }
   }
 
-  private func resolve(endpoint: NWEndpoint, name: String, friendly: String, pin: Bool) {
-    Vitals.crumb("MDNS resolve start: \(name)")
-    let conn = NWConnection(to: endpoint, using: .tcp)
+  /// Resolve a service to host:port with a TIMEOUT+RETRY. The browse finds the service instantly, but the
+  /// resolve NWConnection sometimes sticks in `.preparing` forever on watchOS until there's other network
+  /// activity — that was the "only appears after connecting elsewhere" bug. Rather than churn the BROWSER
+  /// (which kills the in-flight resolve), we retry just the RESOLVE on a 4s timeout until it lands.
+  private func resolve(_ name: String) {
+    guard let p = pending[name], resolvers[name] == nil, !found.contains(where: { $0.id == name }) else { return }
+    let conn = NWConnection(to: p.endpoint, using: .tcp)
     resolvers[name] = conn
     conn.stateUpdateHandler = { [weak self] state in
       switch state {
-      case .waiting(let e): Vitals.crumb("MDNS resolve \(name) waiting: \(e)")   // usually = can't route (relay)
-      case .failed(let e):  Vitals.crumb("MDNS resolve \(name) failed: \(e)")
+      case .ready:
+        guard let path = conn.currentPath, case let .hostPort(host, port)? = path.remoteEndpoint else { return }
+        let h = "\(host)".split(separator: "%").first.map(String.init) ?? "\(host)"
+        let hp = "\(h):\(port.rawValue)"
+        Task { @MainActor in self?.upsert(VibeAd(id: name, name: p.name, host: hp, pinRequired: p.pin)) }
+        conn.cancel()
+      case .failed:
+        Task { @MainActor in self?.retryResolve(name, after: conn) }
       default: break
       }
-      guard case .ready = state,
-            let path = conn.currentPath,
-            case let .hostPort(host, port)? = path.remoteEndpoint else { return }
-      // Strip any IPv6 scope id ("fe80::1%en0" → "fe80::1").
-      let h = "\(host)".split(separator: "%").first.map(String.init) ?? "\(host)"
-      let hp = "\(h):\(port.rawValue)"
-      Vitals.crumb("MDNS resolved \(name) → \(hp) pin=\(pin)")
-      Task { @MainActor in
-        self?.upsert(VibeAd(id: name, name: friendly, host: hp, pinRequired: pin))
-      }
-      conn.cancel()
     }
     conn.start(queue: .main)
+    // The stuck-in-.preparing backstop. The resolve ONLY lands when done immediately off a FRESH browse
+    // result — a stale endpoint stalls forever (proven: every success is the same second as a browser
+    // respawn). So a short 2s timeout, then respawn the BROWSER to mint a hot endpoint, which handle()
+    // re-resolves instantly. (This is exactly what "connect to a server then back out" did by hand.)
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 2_000_000_000)
+      guard !self.stopped, self.resolvers[name] === conn, !self.found.contains(where: { $0.id == name }) else { return }
+      self.retryResolve(name, after: conn)
+    }
+  }
+
+  private func retryResolve(_ name: String, after conn: NWConnection) {
+    guard resolvers[name] === conn else { return }        // superseded
+    conn.cancel(); resolvers[name] = nil
+    guard !stopped, pending[name] != nil, !found.contains(where: { $0.id == name }) else { return }
+    respawnBrowser()   // fresh browse result → handle() → resolve() with a HOT endpoint
+  }
+
+  /// Cancel + respawn the browser to mint a fresh, resolvable endpoint. Does NOT clear `found`.
+  private func respawnBrowser() {
+    browser?.cancel(); browser = nil
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 300_000_000)
+      guard !stopped, browser == nil else { return }
+      spawnBrowser()
+    }
   }
 
   private func upsert(_ ad: VibeAd) {
     if let i = found.firstIndex(where: { $0.id == ad.id }) { found[i] = ad } else { found.append(ad) }
     resolvers[ad.id]?.cancel(); resolvers[ad.id] = nil
+    stopKeepAwake()          // found one — no need to hold the wake connection open any more
   }
 
   private static func txt(_ txt: NWTXTRecord, _ key: String) -> String? {
