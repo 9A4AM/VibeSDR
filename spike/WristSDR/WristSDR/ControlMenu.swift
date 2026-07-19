@@ -307,6 +307,14 @@ struct ControlMenu: View {
   @State private var showWrist = false
   @State private var showBw = false
   @State private var showDab = false
+  @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
+  private var linkModeBlurb: String {
+    switch LinkManager.Mode(rawValue: linkMode) ?? .adaptive {
+    case .full:     return "Always asks for the full frame rate — may stutter on a poor link."
+    case .adaptive: return "Adjusts the frame rate requested from the server to suit the connection. Results in slower waterfall draws."
+    case .lowData:  return "Holds the lowest frame rate to save data. Waterfall draws slowly; audio is unaffected."
+    }
+  }
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
@@ -443,6 +451,31 @@ struct ControlMenu: View {
           // broke. Resets ONLY the watch's own offsets; the phone is untouched.
           resetTile(h: h)
         }
+
+        // LINK MANAGEMENT — three states, not a switch. "Slow because I chose to" and "slow
+        // because the link is bad" are different situations and must not share a control.
+        VStack(spacing: 3) {
+          Text("LINK MANAGEMENT").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
+          HStack(spacing: 6) {
+            ForEach([(LinkManager.Mode.full, "Full"),
+                     (LinkManager.Mode.adaptive, "Auto"),
+                     (LinkManager.Mode.lowData, "Low data")], id: \.0.rawValue) { m, label in
+              let active = linkMode == m.rawValue
+              Button { linkMode = m.rawValue } label: {
+                Text(label)
+                  .font(.system(size: 11, weight: .semibold))
+                  .frame(maxWidth: .infinity).padding(.vertical, 6)
+                  .foregroundColor(active ? .black : .white)
+                  .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(active ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
+              }.buttonStyle(.plain)
+            }
+          }
+          Text(linkModeBlurb)
+            .font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
+            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }.padding(.top, 3)
+
         // Room to scroll the LAST row clear of the rounded corner — as content,
         // not as a bar. Control Centre lets its tiles run off the bottom edge and
         // simply keeps scrolling; a fixed bottom padding on the outer stack instead
@@ -624,16 +657,8 @@ struct HardwareSheet: View {
   @State private var lastGainDetent = 0
   @State private var showSpan = false
   @FocusState private var crownFocused: Bool
-  /// Auto link management (adaptive FFT/FPS/span on a weak link). Some users want MAX quality always,
-  /// stutters and all — this lets them turn the ABR off. Read by the adaptive loop (built separately).
-  @AppStorage("vibeLinkMode") private var linkMode = LinkManager.Mode.adaptive.rawValue
-  private var linkModeBlurb: String {
-    switch LinkManager.Mode(rawValue: linkMode) ?? .adaptive {
-    case .full:     return "Always asks for the full frame rate — may stutter on a poor link."
-    case .adaptive: return "Adjusts the frame rate requested from the server to suit the connection. Results in slower waterfall draws."
-    case .lowData:  return "Holds the lowest frame rate to save data. Waterfall draws slowly; audio is unaffected."
-    }
-  }
+  // (Link Management is NOT here — it lives at the bottom of the main menu, because this sheet is
+  // VibeServer-only and the ladder is for the remote backends that have no dongle.)
 
   /// A grid cell: small title, big value, glass when off / lit (green on-state, cyan armed) when active.
   private func cell(title: String, value: String, lit: Bool, litColor: Color = .green, dim: Bool = false) -> some View {
@@ -725,30 +750,6 @@ struct HardwareSheet: View {
               }.buttonStyle(.plain)
             }
           }
-        }.padding(.top, 3)
-
-        // LINK MANAGEMENT — three states, not a switch. "Slow because I chose to" and "slow
-        // because the link is bad" are different situations and must not share a control.
-        VStack(spacing: 3) {
-          Text("LINK MANAGEMENT").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5))
-          HStack(spacing: 6) {
-            ForEach([(LinkManager.Mode.full, "Full"),
-                     (LinkManager.Mode.adaptive, "Auto"),
-                     (LinkManager.Mode.lowData, "Low data")], id: \.0.rawValue) { m, label in
-              let active = linkMode == m.rawValue
-              Button { linkMode = m.rawValue } label: {
-                Text(label)
-                  .font(.system(size: 11, weight: .semibold))
-                  .frame(maxWidth: .infinity).padding(.vertical, 6)
-                  .foregroundColor(active ? .black : .white)
-                  .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(active ? AnyShapeStyle(Color.green) : AnyShapeStyle(.white.opacity(0.14))))
-              }.buttonStyle(.plain)
-            }
-          }
-          Text(linkModeBlurb)
-            .font(.system(size: 9)).foregroundColor(.white.opacity(0.5))
-            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }.padding(.top, 3)
 
         if gainArmed, !radio.gainAuto {

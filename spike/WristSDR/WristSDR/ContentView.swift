@@ -536,15 +536,24 @@ struct ContentView: View {
         )
       }
     }
-    // DEBUG: backend status (Kiwi drop reason) — small, top-centre, so we can read WHY it drops.
+    // WHAT THE CONNECTION IS DOING, top-centre — see `connectionStatus`. User-facing, not debug:
+    // a multi-step negotiation with nothing on screen reads as "broken" long before it is.
     .overlay(alignment: .top) {
-      if !link.backendStatus.isEmpty && link.backendStatus != "live" {
-        Text(link.backendStatus)
-          .font(.system(size: 9)).foregroundStyle(.orange)
-          .lineLimit(2).multilineTextAlignment(.center)
-          .padding(.horizontal, 6).padding(.vertical, 2)
-          .background(.black.opacity(0.7), in: Capsule())
-          .padding(.top, 2)
+      if let st = connectionStatus {
+        HStack(spacing: 4) {
+          if st.working {
+            ProgressView().progressViewStyle(.circular).scaleEffect(0.4).frame(width: 10, height: 10)
+          }
+          Text(st.text)
+            .font(.system(size: 9))
+            .foregroundStyle(st.working ? .white : .orange)
+            .lineLimit(2).multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(.black.opacity(0.7), in: Capsule())
+        .padding(.top, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(st.text)
       }
     }
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
@@ -1210,6 +1219,17 @@ struct ContentView: View {
       case .indeterminate:  return ["wifi.exclamationmark"]
       }
     }()
+    // The glyph row says WHICH HOP is bad; the caption says WHAT IS HAPPENING. The diagram alone
+    // asked the user to decode it mid-glance — on a wrist, with the thing already going wrong.
+    let caption: String = {
+      switch h {
+      case .reconnecting:  return "Reconnecting…"
+      case .serverHop:     return "Server link rough"
+      case .wristHop:      return "Watch link weak"
+      case .indeterminate: return "Link rough"
+      }
+    }()
+    VStack(spacing: 1) {
     HStack(spacing: 3) {
       ForEach(Array(glyphs.enumerated()), id: \.offset) { _, g in
         Group {
@@ -1231,9 +1251,15 @@ struct ContentView: View {
         .opacity(g == "wifi.exclamationmark" ? pulse : 1)
       }
     }
-    .padding(.horizontal, 7)
+      Text(caption)
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(.white)
+        .lineLimit(1).minimumScaleFactor(0.8)
+    }
+    .padding(.horizontal, 8)
     .padding(.vertical, 3)
-    .background(.orange.opacity(0.85), in: Capsule())
+    // A capsule is for one line; two rows need corners that don't bow the text off the edges.
+    .background(.orange.opacity(0.85), in: RoundedRectangle(cornerRadius: 9))
     // VoiceOver gets the words the sighted user no longer needs.
     .accessibilityElement(children: .ignore)
     .accessibilityLabel({
@@ -1297,6 +1323,53 @@ struct ContentView: View {
   /// blank screen, and that ambiguity cost hours of chasing. The state channel keeps
   /// working in every one of those cases except the last (it's why the frequency kept
   /// updating), so it carries the reason with it.
+  /// THE CONNECTION, IN PLAIN ENGLISH.
+  ///
+  /// Connecting to an SDR server is a multi-step negotiation — authenticate, register the session,
+  /// open audio, then open the spectrum — and on a watch over Bluetooth it is not instant. With
+  /// nothing on screen but a still waterfall, a user cannot tell "working on it" from "broken", and
+  /// assumes broken. These are the same lines we used as developer diagnostics; they turned out to
+  /// be exactly what a user wants too, just not phrased for one. Like a page-load bar: the point is
+  /// not the detail, it is that something is visibly happening.
+  ///
+  /// `working` drives the styling — a step in progress is informational (white, with a spinner), a
+  /// refusal is a problem (orange). Everything reads as a warning if it is all one colour.
+  private var connectionStatus: (text: String, working: Bool)? {
+    let s = link.backendStatus
+    guard !s.isEmpty, s != "live", s != "idle" else { return nil }
+
+    // Live developer read-outs (OWRX's KB/s + fft + cpu line, secondary-decoder debug). Never
+    // user-facing — they are numbers for us, noise for everyone else.
+    if s.contains("KB/s") || s.contains("cpu:") || s.hasPrefix("sec=") { return nil }
+
+    switch s {
+    case "starting":              return ("Starting up…", true)
+    case "authenticating":        return ("Checking your PIN…", true)
+    case "registering":           return ("Registering with the server…", true)
+    case "connecting":            return ("Connecting to the server…", true)
+    case "reconnecting":          return ("Connection dropped — reconnecting…", true)
+    case "retrying (ws)…":        return ("Reconnecting…", true)
+    case "switching profile…":    return ("Switching profile…", true)
+    case "background · audio only": return ("In the background — audio only", true)
+    case "no wifi — using phone": return ("No Wi‑Fi — going through your iPhone", true)
+    case "refused":               return ("The server refused the connection", false)
+    case "can't reach server":    return ("Can't reach that server", false)
+    case "bad server URL":        return ("That server address doesn't look right", false)
+    case "not a VibeServer?":     return ("That doesn't look like a VibeServer", false)
+    case "no HTTP response":      return ("No answer from the server", false)
+    default: break
+    }
+    if s.hasPrefix("retrying (fresh session)") { return ("Retrying with a fresh session…", true) }
+    if s.hasPrefix("reconnect ")               { return ("Reconnecting…", true) }
+    if s.hasPrefix("connection failed:")       { return ("Couldn't connect", false) }
+    // An HTTP refusal carries THE SERVER'S OWN WORDS after the colon. Keep them: that sentence is
+    // the only thing that tells a user whether they're banned, full, or simply mistyped something.
+    if s.hasPrefix("HTTP "), let r = s.split(separator: ":", maxSplits: 1).last {
+      return (r.trimmingCharacters(in: .whitespaces), false)
+    }
+    return (s, false)
+  }
+
   private var stalledMessage: (icon: String, text: String)? {
     // A reconnect is NOT a hard fault on the standalone watch — the audio keeps playing and the
     // spectrum socket is coming back. Let the soft "Reconnecting" pill (rawHint) own it instead
@@ -1419,7 +1492,11 @@ struct ContentView: View {
   }
 
   private var placeholder: some View {
+    // Prefer the LIVE step over "Waiting for signal": while a connection is still being negotiated,
+    // naming what's happening is the difference between "it's working on it" and "it's broken".
+    let working = connectionStatus.flatMap { $0.working ? $0.text : nil }
     let msg = stalledMessage
+      ?? working.map { ("dot.radiowaves.left.and.right", $0) }
       ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
                          : ("iphone.slash", "Open VibeSDR on iPhone"))
     return VStack(spacing: 6) {
