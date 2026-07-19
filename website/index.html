@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/png" href="assets/favicon.png" />
+<link rel="apple-touch-icon" href="assets/icon.png" />
+<title>VibeSDR — the radio spectrum on your wrist</title>
+<meta name="description" content="A live SDR waterfall drawn on your Apple Watch, tuned with the Digital Crown. Multi-server, local RTL-SDR, and its own clean-room DSP. On the App Store." />
+<style>
+  :root {
+    --ground: #060809;
+    --panel: #0E1315;
+    --panel-2: #131A1C;
+    --line: #1E2A2A;
+    --phosphor: #35E08A;
+    --phosphor-dim: #1F8A57;
+    --amber: #FF8C00;
+    --ink: #E7EEEA;
+    --muted: #7E8C86;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --maxw: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(53,224,138,0.28); }
+  a { color: inherit; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* eyebrow / mono labels */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--phosphor);
+  }
+
+  /* ── Top bar ── */
+  header {
+    position: relative; z-index: 3;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 20px 24px; max-width: var(--maxw); margin: 0 auto;
+  }
+  .wordmark { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; font-size: 18px; }
+  .wordmark .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--phosphor);
+    box-shadow: 0 0 10px var(--phosphor), 0 0 2px #fff inset;
+    animation: pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+  header nav { display: flex; gap: 22px; font-size: 14px; }
+  header nav a { color: var(--muted); text-decoration: none; transition: color .18s; }
+  header nav a:hover { color: var(--ink); }
+  @media (max-width: 620px) { header nav { display: none; } }
+
+  /* ── Hero ── */
+  .hero { position: relative; padding: 34px 0 56px; }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center;
+  }
+  @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 34px; } }
+
+  /* The app icon — the VFO dial, our branding, front and centre */
+  .hero-icon { display: flex; justify-content: center; }
+  .hero-icon .frame { position: relative; }
+  .hero-icon img {
+    display: block; width: min(340px, 72vw); height: auto;
+    border-radius: 23%;
+    box-shadow:
+      0 0 0 1px rgba(53,224,138,0.14),
+      0 30px 70px -22px rgba(255,140,0,0.42),
+      0 18px 60px -26px rgba(53,224,138,0.5);
+    animation: float 7s ease-in-out infinite;
+  }
+  /* phosphor glow puddle behind the dial */
+  .hero-icon .frame::after {
+    content: ""; position: absolute; inset: 8% 8% -14% 8%; z-index: -1;
+    background: radial-gradient(closest-side, rgba(53,224,138,0.28), transparent 72%);
+    filter: blur(28px);
+  }
+  @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+  @media (max-width: 860px) { .hero-icon { order: -1; } .hero-icon img { width: min(240px, 58vw); } }
+
+  /* Showcase — the real app, tuning by hand */
+  .showcase { margin-top: 58px; display: grid; grid-template-columns: auto 1fr; gap: 52px; align-items: center; }
+  @media (max-width: 820px) { .showcase { grid-template-columns: 1fr; gap: 34px; justify-items: center; } }
+  .phone {
+    position: relative; width: 300px; max-width: 74vw;
+    border-radius: 34px; padding: 8px;
+    background: linear-gradient(160deg, #1b2422, #090c0b);
+    box-shadow:
+      0 0 0 1px rgba(53,224,138,0.12),
+      0 42px 90px -30px rgba(255,140,0,0.4),
+      0 30px 80px -34px rgba(53,224,138,0.42);
+  }
+  .phone::after {
+    content: ""; position: absolute; inset: 14% 12% -12% 12%; z-index: -1;
+    background: radial-gradient(closest-side, rgba(53,224,138,0.22), transparent 72%); filter: blur(30px);
+  }
+  .phone video { display: block; width: 100%; height: auto; border-radius: 27px; background: #000; }
+  .showcase-copy { max-width: 52ch; }
+  .sc-h { font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; font-weight: 750; margin: 8px 0 14px; text-wrap: balance; }
+  .showcase-copy > p { color: #C4CFC9; margin: 0 0 20px; }
+  .ticks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+  .ticks li { position: relative; padding-left: 26px; font-size: 15px; color: var(--ink); }
+  .ticks li::before {
+    content: ""; position: absolute; left: 2px; top: 8px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--phosphor); box-shadow: 0 0 8px var(--phosphor);
+  }
+
+  /* Apple Watch — point 2, the free beta */
+  .watch-grid { display: grid; grid-template-columns: 1fr 0.92fr; gap: 50px; align-items: center; }
+  @media (max-width: 820px) { .watch-grid { grid-template-columns: 1fr; gap: 30px; } .watch-shot { order: -1; } }
+  .watch-shot img {
+    display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto; border-radius: 18px;
+    box-shadow: 0 34px 80px -30px rgba(0,0,0,0.85), 0 0 0 1px var(--line);
+  }
+  .badge-free {
+    display: inline-block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: #06210f; background: var(--phosphor); padding: 3px 9px; border-radius: 6px; margin-left: 8px; font-weight: 700;
+  }
+  .watch-shot video {
+    display: block; width: 100%; max-width: 372px; height: auto; margin: 0 auto; border-radius: 20px;
+    filter: drop-shadow(0 30px 62px rgba(53,224,138,0.3)) drop-shadow(0 18px 50px rgba(255,140,0,0.22));
+  }
+  .soon-card {
+    margin-top: 24px; border: 1px solid var(--phosphor-dim); border-radius: 14px; padding: 16px 18px;
+    background: linear-gradient(180deg, rgba(53,224,138,0.07), rgba(53,224,138,0.02));
+  }
+  .soon-k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); margin: 0 0 7px; }
+  .soon-h { font-size: 19px; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 6px; text-wrap: balance; }
+  .soon-h .glow { color: var(--phosphor); text-shadow: 0 0 18px rgba(53,224,138,0.4); }
+  .soon-p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.5; }
+  .watch-shot { display: flex; flex-direction: column; align-items: center; gap: 26px; }
+  .wrist { margin: 0 auto; max-width: 340px; }
+  .wrist img { display: block; width: 100%; height: auto; border-radius: 16px; box-shadow: 0 24px 60px -26px rgba(0,0,0,0.85), 0 0 0 1px var(--line); }
+  .wrist figcaption { font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; color: var(--muted); text-align: center; margin-top: 10px; }
+
+  /* VibeServer — no more e-waste */
+  .sub.big { font-size: clamp(16px, 2vw, 19px); max-width: 68ch; color: #C4CFC9; }
+  .ewaste h2 .glow { display: inline; }
+  .browser {
+    margin: 34px 0 30px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--panel); box-shadow: 0 40px 90px -34px rgba(0,0,0,0.85), 0 0 0 1px rgba(53,224,138,0.06);
+  }
+  .browser-bar {
+    display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+    background: var(--panel-2); border-bottom: 1px solid var(--line);
+  }
+  .browser-bar > span { width: 10px; height: 10px; border-radius: 50%; background: #2b3a37; }
+  .browser-bar > span:first-child { background: #FF8C00; }
+  .browser-bar em {
+    font-family: var(--mono); font-style: normal; font-size: 12px; color: var(--muted);
+    margin-left: 12px; padding: 3px 12px; border-radius: 7px; background: rgba(0,0,0,0.35); letter-spacing: 0.02em;
+  }
+  .browser img { display: block; width: 100%; height: auto; }
+  .ticks-row { flex-direction: row; flex-wrap: wrap; gap: 10px 28px; }
+  .ticks-row li { flex: 1 1 240px; }
+  @media (max-width: 620px) { .ticks-row { flex-direction: column; } }
+
+  .readout {
+    display: inline-flex; align-items: baseline; gap: 12px;
+    font-family: var(--mono);
+    padding: 9px 14px; margin-bottom: 26px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(6,8,9,0.6); backdrop-filter: blur(4px);
+  }
+  .readout .freq { font-size: 20px; font-weight: 600; color: var(--amber); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+  .readout .mode { font-size: 12px; color: var(--phosphor); letter-spacing: 0.16em; }
+  .readout .bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; margin-left: 2px; }
+  .readout .bars i { width: 3px; background: var(--phosphor); border-radius: 1px; display: block; }
+
+  h1 {
+    font-size: clamp(38px, 7.2vw, 76px);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    font-weight: 800;
+    margin: 0 0 22px;
+    max-width: 15ch;
+    text-wrap: balance;
+  }
+  h1 .glow { color: var(--phosphor); text-shadow: 0 0 26px rgba(53,224,138,0.35); }
+  .lede { font-size: clamp(17px, 2.2vw, 21px); color: #C4CFC9; max-width: 56ch; margin: 0 0 34px; }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--sans); font-size: 15px; font-weight: 600;
+    padding: 13px 20px; border-radius: 12px; text-decoration: none;
+    border: 1px solid transparent; transition: transform .12s ease, box-shadow .18s, background .18s, border-color .18s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-buy { background: var(--amber); color: #1a1200; box-shadow: 0 6px 30px -8px rgba(255,140,0,0.6); }
+  .btn-buy:hover { box-shadow: 0 10px 40px -8px rgba(255,140,0,0.8); }
+  .btn-buy .price { font-family: var(--mono); font-weight: 700; opacity: 0.72; }
+  .btn-beta { background: rgba(53,224,138,0.08); color: var(--ink); border-color: var(--phosphor-dim); }
+  .btn-beta:hover { background: rgba(53,224,138,0.16); border-color: var(--phosphor); }
+  .btn-ghost { color: var(--muted); border-color: var(--line); }
+  .btn-ghost:hover { color: var(--ink); border-color: var(--muted); }
+  .btn-soon { color: var(--muted); border: 1px dashed var(--line); cursor: default; }
+  .btn-soon .price { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--phosphor); opacity: 0.85; }
+  .trust { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 20px; letter-spacing: 0.01em; }
+  .trust b { color: var(--phosphor); font-weight: 600; }
+
+  /* ── Section scaffold ── */
+  section { position: relative; z-index: 2; }
+  .band { border-top: 1px solid var(--line); padding: 72px 0; }
+  .band h2 {
+    font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; font-weight: 750;
+    margin: 10px 0 8px; text-wrap: balance;
+  }
+  .band .sub { color: var(--muted); max-width: 60ch; margin: 0 0 40px; }
+
+  /* ── Connects grid ── */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: 14px; padding: 20px 20px 22px;
+    transition: border-color .2s, transform .2s;
+  }
+  .card:hover { border-color: var(--phosphor-dim); transform: translateY(-2px); }
+  .card .k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--phosphor); }
+  .card h3 { font-size: 18px; margin: 8px 0 6px; letter-spacing: -0.01em; }
+  .card p { color: var(--muted); font-size: 14.5px; margin: 0; line-height: 1.55; }
+  .card.accent .k { color: var(--amber); }
+  .card.accent:hover { border-color: rgba(255,140,0,0.5); }
+
+  /* ── Honesty / craft ── */
+  .honest { background: var(--panel); }
+  .honest .inner { display: grid; grid-template-columns: 1.4fr 1fr; gap: 48px; align-items: start; }
+  @media (max-width: 780px) { .honest .inner { grid-template-columns: 1fr; gap: 28px; } }
+  .honest p { color: #C4CFC9; }
+  .honest p + p { margin-top: 16px; }
+  .honest .tagline {
+    font-size: clamp(30px, 5.2vw, 48px); font-weight: 800; letter-spacing: -0.03em;
+    line-height: 1.04; margin: 14px 0 22px; color: var(--ink); text-wrap: balance;
+  }
+  .honest .tagline .glow { color: var(--phosphor); text-shadow: 0 0 24px rgba(53,224,138,0.35); }
+  .honest .pull { font-size: clamp(19px, 2.4vw, 23px); line-height: 1.4; color: var(--ink); letter-spacing: -0.01em; }
+  .honest .pull b { color: var(--phosphor); font-weight: 600; }
+  .stat-stack { display: flex; flex-direction: column; gap: 2px; border-left: 2px solid var(--phosphor-dim); padding-left: 20px; }
+  .stat { padding: 8px 0; }
+  .stat .n { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .stat .l { font-size: 13px; color: var(--muted); }
+
+  /* ── Footer ── */
+  footer { border-top: 1px solid var(--line); padding: 44px 0 60px; }
+  .foot { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: space-between; }
+  .foot .links { display: flex; flex-wrap: wrap; gap: 22px; font-size: 14px; }
+  .foot .links a { color: var(--muted); text-decoration: none; }
+  .foot .links a:hover { color: var(--ink); }
+  .foot .fine { font-family: var(--mono); font-size: 12px; color: #4C5A55; max-width: 42ch; line-height: 1.5; }
+
+  a.btn:focus-visible, header nav a:focus-visible, .foot .links a:focus-visible {
+    outline: 2px solid var(--phosphor); outline-offset: 3px; border-radius: 6px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wordmark .dot { animation: none; }
+    * { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark"><span class="dot"></span>VibeSDR</div>
+  <nav>
+    <a href="#tunes">What it tunes</a>
+    <a href="#made">How it's made</a>
+    <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
+    <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App&nbsp;Store</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first SDR · iOS · Android · Apple&nbsp;Watch</p>
+      <h1>Two dials control everything. <span class="glow">Just like radio used to feel.</span></h1>
+      <p class="lede">
+        A mobile&#8209;first SDR receiver built around two large weighted drums — spin them, flick them, let them coast, exactly like the analog dials of days gone by. Live GPU waterfall, most major SDR networks, local RTL&#8209;SDR, and the spectrum drawn right on your Apple&nbsp;Watch.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get it on the App&nbsp;Store <span class="price">£2.99</span></a>
+        <span class="btn btn-soon" aria-disabled="true">Play&nbsp;Store <span class="price">Coming&nbsp;soon</span></span>
+        <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Free Apple&nbsp;Watch beta →</a>
+        <a class="btn btn-ghost" href="https://github.com/Stuey3D/VibeSDR">View source</a>
+      </div>
+      <p class="trust">£2.99 covers <b>Apple's fee, not a paywall</b> — VibeSDR is GPLv3 and the source is free forever.</p>
+    </div>
+    <div class="hero-icon">
+      <div class="frame"><img src="assets/icon.png" alt="VibeSDR app icon — the VFO tuning dial" /></div>
+    </div>
+  </div>
+
+  <div class="wrap showcase">
+    <div class="phone">
+      <video src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR running on iPhone — tuning across the AM band with the drum dial, live waterfall scrolling"></video>
+    </div>
+    <div class="showcase-copy">
+      <p class="eyebrow">Designed for your thumbs</p>
+      <h2 class="sc-h">Tuned by hand, the way it should be.</h2>
+      <p>Two large weighted drums with real inertia — spin them, flick them, let them coast to a stop. Watch the frequency roll and the waterfall track it live. It feels like tuning a radio, because that's exactly what it's modelled on.</p>
+      <ul class="ticks">
+        <li>GPU-rendered waterfall, drawn in real time</li>
+        <li>Full demod set — AM, FM, SSB, CW and more</li>
+        <li>Background audio, band plan, live signal readout</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="band watch" id="watch">
+  <div class="wrap watch-grid">
+    <div class="watch-copy">
+      <p class="eyebrow">New in v9 <span class="badge-free">Free beta</span></p>
+      <h2>And the spectrum, on your wrist.</h2>
+      <p class="sub">The live waterfall drawn on the Apple&nbsp;Watch itself — not a two-button remote. Tune real hardware with the Digital&nbsp;Crown while your iPhone stays locked in your pocket.</p>
+      <div class="cta-row" style="margin-top:4px">
+        <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Join the free Watch beta →</a>
+      </div>
+      <p class="trust">TestFlight · v9.0.1 · approved by Apple for external testing · needs an iPhone&nbsp;+ Apple&nbsp;Watch.</p>
+      <div class="soon-card">
+        <p class="soon-k">Coming soon to TestFlight</p>
+        <p class="soon-h">A full <span class="glow">standalone</span> Apple&nbsp;Watch client. No iPhone needed.</p>
+        <p class="soon-p">The watch does it all itself — its own connection, its own DSP, its own audio. Just your wrist and the airwaves.</p>
+      </div>
+    </div>
+    <div class="watch-shot">
+      <figure class="wrist">
+        <img src="assets/watch-wrist.jpg" alt="VibeSDR running on an Apple Watch worn on the wrist, tuned to an AM broadcast" />
+        <figcaption>The v9 beta, on the wrist — free on TestFlight today.</figcaption>
+      </figure>
+      <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR live on an Apple Watch — spectrum waterfall, tuning the AM band with the Digital Crown"></video>
+    </div>
+  </div>
+</section>
+
+<section class="band ewaste" id="server">
+  <div class="wrap">
+    <p class="eyebrow">VibeServer · built in, free</p>
+    <h2>No more e&#8209;waste. <span class="glow">Turn an old phone into a receiver.</span></h2>
+    <p class="sub big">
+      Got an Android phone gathering dust in a drawer? Give it a second life as your own personal SDR server. Plug in an RTL&#8209;SDR — <b>no drivers, no setup</b> — tap <b>Use as server</b>, and it's live. VibeServer even serves its own web page, so you're not tied to the app: point any browser on your desktop or laptop at it and tune from there too.
+    </p>
+    <div class="browser">
+      <div class="browser-bar"><span></span><span></span><span></span><em>vibesdr.local</em></div>
+      <img src="assets/web-client.jpg" alt="The VibeServer web client running in a desktop browser — waterfall, controls and audio, no app needed" />
+    </div>
+    <ul class="ticks ticks-row">
+      <li>No drivers, no config — plug in and tap</li>
+      <li>Built&#8209;in web client — any browser, no app</li>
+      <li>~25× lighter than raw rtl_tcp — Wi&#8209;Fi or hotspot</li>
+    </ul>
+  </div>
+</section>
+
+<section class="band" id="tunes">
+  <div class="wrap">
+    <p class="eyebrow">One interface, every receiver</p>
+    <h2>Point it at almost any SDR.</h2>
+    <p class="sub">Native adapters for the major SDR servers, local USB hardware, and its own phone-hosted server — all behind one dial, on iOS, Android and the Watch.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="k">Remote servers</div>
+        <h3>UberSDR · OpenWebRX · KiwiSDR</h3>
+        <p>Native clients for the big shared-receiver networks, with a directory chooser to find one near you.</p>
+      </div>
+      <div class="card">
+        <div class="k">FM broadcast DX</div>
+        <h3>FM-DX Webserver</h3>
+        <p>The worldwide network of shared FM tuners — station names, RadioText and distances, in stereo.</p>
+      </div>
+      <div class="card">
+        <div class="k">Local hardware</div>
+        <h3>RTL-SDR over USB</h3>
+        <p>Plug a dongle into an Android phone, or reach a networked rtl_tcp. VibeSDR demodulates the raw IQ itself.</p>
+      </div>
+      <div class="card accent">
+        <div class="k">Serve your own</div>
+        <h3>VibeServer</h3>
+        <p>Turn a phone with an RTL-SDR into a private receiver — you get the whole radio, compressed, ~25× lighter than raw rtl_tcp.</p>
+      </div>
+      <div class="card accent">
+        <div class="k">New</div>
+        <h3>Apple&nbsp;Watch</h3>
+        <p>Not a two-button remote — the live waterfall drawn on the watch, tuned by the Crown, iPhone in your pocket.</p>
+      </div>
+      <div class="card">
+        <div class="k">Own engine</div>
+        <h3>VibeDSP</h3>
+        <p>A from-scratch, ARM-NEON demodulation engine — no bundled third-party GPL DSP. Fast and light on battery.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band honest" id="made">
+  <div class="wrap inner">
+    <div>
+      <p class="eyebrow">How it's made</p>
+      <p class="tagline">Vibe&#8209;Coded, <span class="glow">but not slop.</span></p>
+      <p class="pull">I'm not a licensed amateur and I don't transmit — I'm a <b>listener</b>, fascinated by radio and the dials that got me interested in the first place. VibeSDR is the receiver I'd have loved to own.</p>
+      <p>Every feature was designed and personally tested on real hardware across five devices — from an iPhone&nbsp;17 Pro&nbsp;Max down to a Moto&nbsp;G35 and an iPhone&nbsp;SE. If the GPU waterfall and the NEON DSP hold up on those, they hold up anywhere. I don't ship things I wouldn't use myself.</p>
+      <p>The code was written with AI assistance (Claude) — hence the name. I designed it, I broke it, I tested it, I filed the bugs and I signed off every release. The full source is public under GPL-3.0, dead ends included — because the honest thing is to say it on the tin and then let people check.</p>
+    </div>
+    <div class="stat-stack" aria-hidden="false">
+      <div class="stat"><div class="n">631</div><div class="l">commits in six weeks</div></div>
+      <div class="stat"><div class="n">51</div><div class="l">public releases, and counting</div></div>
+      <div class="stat"><div class="n">500+</div><div class="l">tests before I was happy with the dial</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">real devices, high-end to budget</div></div>
+      <div class="stat"><div class="n">GPLv3</div><div class="l">full source, free forever</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div>
+      <div class="wordmark" style="margin-bottom:10px"><span class="dot"></span>VibeSDR</div>
+      <p class="fine">A mobile-first SDR receiver for iOS, Android and Apple&nbsp;Watch. Built and tested by one listener; released open under GPL-3.0.</p>
+    </div>
+    <div class="links">
+      <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App Store · £2.99</a>
+      <a href="https://testflight.apple.com/join/AnKTNhuZ">TestFlight beta</a>
+      <a href="https://github.com/Stuey3D/VibeSDR">GitHub</a>
+      <a href="https://github.com/Stuey3D/VibeSDR/issues">Report a bug</a>
+    </div>
+  </div>
+</footer>
+
+
+</body>
+</html>
