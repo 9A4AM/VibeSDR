@@ -45,12 +45,58 @@ Each radio carries a descriptor. This is the single abstraction the rest of the 
   "gainPolicy": "auto",              // or fixed value / AGC policy
   "ppm": 0,                          // calibration
   "public": true,                    // false = admin-reserved "dark" dongle (§4, §7)
-  "locked": ["biasT","gain","ppm",   // owner-locked controls — see below
-             "agc","directSampling","sampleRate"]
+  "controls": {                      // PER-CONTROL policy, owner's choice — see below
+    "biasT":          "hidden",      // free | locked | hidden
+    "gain":           { "policy": "range", "min": 0, "max": 300 },
+    "autoGain":       "free",
+    "ppm":            "locked",
+    "agc":            "free",
+    "directSampling": "hidden",
+    "sampleRate":     "locked"
+  }
 }
 ```
 
-### ★ Owner-locked controls — a PRODUCT feature, not a demo one
+### ★ Per-control exposure — a PRODUCT feature, not a demo one
+
+**The admin chooses, per control, exactly what a guest gets.** Not one blanket lock: hide bias-T
+entirely, restrict gain to a range, leave AGC free, lock PPM — every hardware control is
+independently settable.
+
+Three states, and the difference between the last two is meaningful rather than cosmetic:
+
+| policy | client behaviour | says to the guest |
+|---|---|---|
+| `free` | normal control | yours to change |
+| `locked` | **shown, greyed, with a reason** | exists, but the owner holds it |
+| `hidden` | not rendered at all | not part of this receiver |
+
+…plus **`range`** for continuous controls, where the owner permits a subset rather than all-or-nothing
+— chiefly gain, e.g. capping it below the point where a strong local signal desensitises the front
+end for everyone.
+
+★ **Default to `locked` for anything unspecified.** A descriptor from an unknown server that omits a
+control must fail CLOSED — an older server talking to a newer client should never hand out a hardware
+control it never agreed to expose.
+
+★★ **The default profile: GAIN, and nothing else.** Stuart: *"in most cases for an RTL-SDR the only
+control a user will need is the Gain Slider."* Everything else is the owner's calibration of their own
+station, so:
+
+```jsonc
+"controls": {                     // DEFAULT for a shared RTL-SDR
+  "gain": "free", "autoGain": "free",   // the one thing a guest actually needs
+  "biasT": "hidden", "ppm": "hidden", "agc": "hidden",
+  "directSampling": "hidden", "sampleRate": "hidden"
+}
+```
+
+This makes `hidden` the common case, which is the RIGHT default for the UI as well as for safety: a
+guest sees **one slider**, not a panel of dead controls. `locked` is then reserved for the rarer case
+where an owner deliberately wants a guest to SEE that something exists but is theirs to hold.
+
+Someone sharing a radio for the first time should be safe by default, not safe only if they read the
+docs — and the guest gets a cleaner screen out of the same decision.
 
 A guest on someone else's radio must not be able to change the hardware. This is not primarily a UX
 concern:
