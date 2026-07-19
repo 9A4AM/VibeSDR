@@ -52,10 +52,21 @@ After choosing, you land on the **servers screen**.
 - Reason it must be reachable mid-session: **running two SDRs at once** — the phone on one server and
   the watch standalone on another.
 
-### What comes from where
-- **ALL screens are lifted from the spike.** They are fully customised and correct, and they
-  **supersede the companion's**.
-- **The warning/status system is lifted from the spike** too — same reason.
+### What comes from where — the spike wins, without exception
+
+- **ALL screens are lifted from the spike.** Fully customised and correct; they **supersede the
+  companion's**.
+- **ALL menus and options are lifted from the spike** — the hold-menu, the control grid, every picker
+  and sheet. Same rule, no exceptions.
+- **The warning/status system is lifted from the spike** too.
+
+★ **So the companion contributes NO UI AT ALL.** Its entire user-facing layer is deleted, not merged.
+The only thing it contributes is the WCSession transport, which becomes `PhoneClient: SDRClient`
+(§1). If a decision ever seems to need "but the companion did X" — it does not; the spike's version
+is the answer by default, and any exception has to be argued explicitly.
+
+This also settles the earlier file-by-file comparison (§1, §2): those tables are now just evidence,
+not a decision to make.
 - **Favourites AND their use counts sync** between phone and watch (§2d).
 - Server connections and waterfall handling behave exactly as they do now in each mode.
 
