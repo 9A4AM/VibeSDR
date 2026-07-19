@@ -71,6 +71,40 @@ RECOMMENDED      4 listeners   — leaves headroom for transient load
 
 ---
 
+## 1b. Two tiers — Quick and Sustained
+
+**Quick (~30s)** — local workload once, plus the upload test. Gives a cold-hardware ceiling. Fine
+for "roughly what have I got".
+
+**Sustained / thermal (10–20 min)** — loops the LOCAL workload only. ★ **No repeated speedtest** — it
+would burn the owner's data for a number that barely moves.
+
+The sustained run is the one that produces a trustworthy figure, because **a phone serving on a shelf
+all evening is a thermally-limited device and the quick test measures a cold one.** Its output is the
+shape of the decline, not a single number:
+
+```
+HARD CEILING     6 listeners cold
+                 4 listeners sustained  — throttled after 11 min, settled at 68% of peak
+RECOMMENDED      3 listeners
+```
+
+- ★ **Report WHEN throttling began, not just that it did.** A phone that holds full speed for 20
+  minutes is fine for casual sharing; one that throttles at 3 minutes is not, and the ceiling alone
+  cannot tell those apart.
+- **Recommend on the SUSTAINED figure** whenever a sustained run exists. The cold number is a
+  curiosity; the settled one is what an owner's guests will actually experience.
+- Sample **battery temperature** alongside (`BatteryManager.EXTRA_TEMPERATURE`) so the decline can be
+  attributed to heat rather than guessed at.
+- ★ **Test in the state you will SERVE in.** A phone on charge runs hotter and throttles sooner, so an
+  unplugged benchmark flatters a server that will live plugged in on a shelf. Say this, and note in
+  the result which state it ran in.
+- **Abortable at any point**, keeping the results gathered so far — 15 minutes is a long time to be
+  unable to change your mind.
+- **Warn before starting**: it will get hot, it will use battery, and it should probably be plugged in.
+
+---
+
 ## 2. ★ Honesty constraints (the part that makes it worth having)
 
 - **Peak ≠ sustained.** A 10-second burst will not reveal the thermal throttling that shows up 20
