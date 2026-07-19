@@ -217,6 +217,15 @@
   .trust { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 20px; letter-spacing: 0.01em; }
   .trust b { color: var(--phosphor); font-weight: 600; }
 
+  /* ── Works-with strip: the first question a visitor has is "does it do MY server?" ── */
+  .worksfor { margin-top: 22px; }
+  .worksfor .wf-lead { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
+  .wf-list { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0; }
+  .wf-list li { font-family: var(--mono); font-size: 11.5px; color: var(--phosphor);
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
+    background: rgba(255,255,255,0.02); white-space: nowrap; }
+
   /* ── Section scaffold ── */
   section { position: relative; z-index: 2; }
   .band { border-top: 1px solid var(--line); padding: 72px 0; }
@@ -284,6 +293,7 @@
   <div class="wordmark"><span class="dot"></span>VibeSDR</div>
   <nav>
     <a href="#tunes">What it tunes</a>
+    <a href="#dsp">VibeDSP</a>
     <a href="#made">How it's made</a>
     <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
     <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App&nbsp;Store</a>
@@ -303,6 +313,19 @@
         <span class="btn btn-soon" aria-disabled="true">Play&nbsp;Store <span class="price">Coming&nbsp;soon</span></span>
         <a class="btn btn-beta" href="https://testflight.apple.com/join/AnKTNhuZ">Free Apple&nbsp;Watch beta →</a>
         <a class="btn btn-ghost" href="https://github.com/Stuey3D/VibeSDR">View source</a>
+      </div>
+      <div class="worksfor">
+        <p class="wf-lead">Works with</p>
+        <ul class="wf-list">
+          <li>UberSDR</li>
+          <li>OpenWebRX</li>
+          <li>KiwiSDR</li>
+          <li>FM&#8209;DX Webserver</li>
+          <li>SpyServer</li>
+          <li>RTL&#8209;TCP</li>
+          <li>RTL&#8209;SDR via USB</li>
+          <li>VibeServer</li>
+        </ul>
       </div>
       <p class="trust">£2.99 covers <b>Apple's fee, not a paywall</b> — VibeSDR is GPLv3 and the source is free forever.</p>
     </div>
@@ -373,11 +396,26 @@
   </div>
 </section>
 
+<section class="band" id="dsp">
+  <div class="wrap">
+    <p class="eyebrow">VibeDSP · our own engine</p>
+    <h2>One engine. <span class="glow">One waterfall, everywhere.</span></h2>
+    <p class="sub big">
+      Most SDR apps show you <em>the server's</em> waterfall. Connect somewhere else and the display changes character — different colours, different scaling, different controls — and whatever you'd set up starts again from scratch. VibeSDR doesn't work that way. <b>VibeDSP demodulates the signal and draws every pixel on your own device</b>, so the waterfall is the same one whether you're on UberSDR, OpenWebRX, a KiwiSDR, an FM&#8209;DX tuner, a dongle plugged into your phone, or your own VibeServer. <b>Set your colours, contrast and zoom once — they follow you</b>, to every receiver and onto the Watch and the browser. Nothing to relearn, nothing to set up twice.
+    </p>
+    <ul class="ticks ticks-row">
+      <li>The same waterfall on iPhone, Android, Apple&nbsp;Watch and in the browser</li>
+      <li>Interpolated to a smooth scroll — even when a server sends just 5 frames a second</li>
+      <li>Own ARM&#8209;NEON engine — no third&#8209;party GPL DSP, and easy on the battery</li>
+    </ul>
+  </div>
+</section>
+
 <section class="band" id="tunes">
   <div class="wrap">
     <p class="eyebrow">One interface, every receiver</p>
     <h2>Point it at almost any SDR.</h2>
-    <p class="sub">Native adapters for the major SDR servers, local USB hardware, and its own phone-hosted server — all behind one dial, on iOS, Android and the Watch.</p>
+    <p class="sub">Native adapters for the major SDR servers, local USB hardware, and its own phone-hosted server — all behind one dial <em>and one waterfall</em>. Every receiver looks and works the same, on iOS, Android and the Watch.</p>
     <div class="grid">
       <div class="card">
         <div class="k">Remote servers</div>
@@ -407,7 +445,7 @@
       <div class="card">
         <div class="k">Own engine</div>
         <h3>VibeDSP</h3>
-        <p>A from-scratch, ARM-NEON demodulation engine — no bundled third-party GPL DSP. Fast and light on battery.</p>
+        <p>Our own from&#8209;scratch ARM&#8209;NEON demodulation engine — no bundled third&#8209;party GPL DSP. It's why the waterfall is the same everywhere, and why it's light on battery.</p>
       </div>
     </div>
   </div>
