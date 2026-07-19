@@ -145,6 +145,50 @@ name consistent. Do not try to unify the two modes here; they are honestly diffe
 
 ---
 
+## 2d. ★ FAVOURITES SYNC — a driver for the merge, not a nice-to-have
+
+Stuart (2026-07-19): *"we need to build the sync with the phone app of the favourites."* Already on
+the picker roadmap ([[instance_picker_overhaul]]) as "favourites … phone↔spike sync".
+
+**Today they are two unrelated stores:**
+
+| | key | where |
+|---|---|---|
+| spike (watch) | `vibe.spike.favourites` | UserDefaults |
+| phone | `vsdr_favourites` (+ `vsdr_rtltcp_favs`) | AsyncStorage |
+
+Nothing connects them, so a server saved on the phone is invisible on the wrist and vice versa.
+
+### The design problem: sync must be OPPORTUNISTIC
+
+Standalone has **no phone**. So sync cannot be the source of truth — the watch must work fully with
+its own list and reconcile *when a phone happens to be reachable*. That means both sides can edit
+while apart, i.e. a genuine two-way merge:
+
+- **Per-entry timestamps, last-write-wins.** A whole-list overwrite would silently discard whichever
+  side synced second.
+- ★ **Deletions are the hard case.** With a naive union merge, a favourite deleted on the phone comes
+  back from the watch's copy on the next sync — the classic resurrection bug. Needs tombstones (a
+  deleted-at marker kept for a while), not just absence.
+- **Order is user intent** once drag-reorder lands, so it must sync too, and it conflicts differently
+  from membership.
+- **Don't sync the whole picker.** `lsv_last_tune:*` and `lsv_display_prefs:*` are per-device by
+  design (the watch's brightness is not the phone's, see [[small_screen_splash_overlap]]).
+
+### ★★ Do NOT sync PINs by default
+
+`vs_pin:<host>:<port>` (`InstancePickerScreen.tsx:601`) is a **credential**, not a preference.
+Pushing VibeServer PINs to a watch because a favourite synced is a security decision made on the
+user's behalf. Either leave PINs device-local, or make it an explicit opt-in — never a side effect.
+
+### Why it argues for merging FIRST
+
+In Phone Control the WCSession pipe already exists, so sync is plumbing rather than new transport.
+Building it twice — once in the companion, once in the spike — is exactly the duplication the merge
+exists to remove.
+
+---
+
 ## 3. What must NOT regress
 
 - **Chat** — explicitly called out. Working on both today; must survive.
