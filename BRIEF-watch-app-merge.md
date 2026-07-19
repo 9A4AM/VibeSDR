@@ -48,11 +48,32 @@ Everything else in the spike (`UberClient`, `KiwiClient`, `OwrxClient`, `AudioSo
 
 ---
 
-## 2. The one real reconciliation: FmdxView
+## 2. The one real reconciliation: FmdxView — and it is the LOGO PIPELINE
 
-The companion's FM-DX view is **~2× the size of the spike's**. Understand why before touching it — the
-phone can hand the watch data the spike would have to fetch itself, so the companion may genuinely do
-more. **This is the only file where "merge" rather than "delete" is the right verb.**
+The companion's FM-DX view is ~2× the size of the spike's, but **not because it does more overall.**
+Measured:
+
+- **Chat: the SPIKE is ahead** — 7 refs in `FmdxView` *plus* a whole `Chat.swift` (17 refs) the
+  companion does not have. It is simply factored out, so it does not show up in the file size.
+- **Logos: the COMPANION is ahead** — 10 logo refs vs 1. The spike's own comment says why:
+  *"no logo pipeline on the spike — the frosted fallback, always"* (`FmdxView.swift:125`). The PHONE
+  can hand the watch station logos (the v8 logo work); the standalone spike has no way to fetch them.
+  That is the whole Background section: 18 lines vs 57.
+
+- **Layout: the SPIKE is ahead.** Its FM-DX view has since been **fully space-optimised** for the
+  wrist. So the smaller file is the *better* one — ★ **file size is a misleading proxy here, and a
+  merge that "takes the bigger file" would silently undo that layout work.**
+
+So the reconciliation is narrow: **the spike's FmdxView is the base — keep its chat, its
+learned-station dial and its optimised layout. Take ONLY the logo pipeline from the companion.**
+
+★ **But that pipeline only works when a phone is attached.** A merged app would show real station
+logos in Phone Control and frosted fallbacks in Standalone — a visible difference between modes,
+which cuts against "screens and options match for all services". Decide deliberately:
+  1. accept the difference (logos are a bonus of having a phone), or
+  2. give Standalone its own logo fetch (it already does its own directory + learned stations, so this
+     is not out of character), or
+  3. drop logos from the merged app entirely for consistency (almost certainly wrong — they are good).
 
 ---
 
