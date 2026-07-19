@@ -4,6 +4,33 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v9.0.2 — the CONTINUE button that couldn't be pressed (2026-07-19)
+
+### Fixed — VibeSDR was unusable on small screens
+
+With thanks to **@Sagistario306**, who reported that VibeSDR would no longer get past
+the opening screen on his ZTE Blade L8, and stuck with it long enough for us to find
+out why. He was right, and it was our fault.
+
+On a 5-inch 480×854 display the power-saving notice at the foot of the first-run
+splash was landing directly **on top of** the CONTINUE button. The button was drawn,
+and it was tappable — but the block of text sitting over it swallowed every press.
+The app looked frozen. It wasn't; it just had no way to hear you.
+
+The notice was pinned to the bottom of the screen while the button was centred, an
+arrangement that works on every large phone and quietly collides on a small one.
+Reproduced on an Android 9 emulator at exactly that size: three taps on CONTINUE,
+and nothing moved.
+
+The two are no longer allowed to overlap at any screen size, and the notice can no
+longer intercept a touch even if it wanted to.
+
+This affected **every release from v5.1.3 (2026-06-27) onward** — which is why older
+builds worked on these phones and newer ones didn't. Anyone who gave up on VibeSDR
+after that on a compact device: it wasn't you, and it's worth another go.
+
+---
+
 ## v9.0.1 — SSB was throwing away half the voice (2026-07-14)
 
 ### Fixed — the bandwidth slider was lying to you

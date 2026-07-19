@@ -526,7 +526,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -540,7 +540,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 9.0.1;
+				MARKETING_VERSION = 9.0.2;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -565,7 +565,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				INFOPLIST_FILE = VibeSDR/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
@@ -574,7 +574,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 9.0.1;
+				MARKETING_VERSION = 9.0.2;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -732,7 +732,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
@@ -741,7 +741,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				MARKETING_VERSION = 9.0.1;
+				MARKETING_VERSION = 9.0.2;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.vibesdr.app.watchkitapp;
@@ -762,7 +762,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
@@ -771,7 +771,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(inherited)";
-				MARKETING_VERSION = 9.0.1;
+				MARKETING_VERSION = 9.0.2;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.vibesdr.app.watchkitapp;
