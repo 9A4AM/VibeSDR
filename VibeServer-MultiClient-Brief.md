@@ -98,6 +98,25 @@ where an owner deliberately wants a guest to SEE that something exists but is th
 Someone sharing a radio for the first time should be safe by default, not safe only if they read the
 docs — and the guest gets a cleaner screen out of the same decision.
 
+### ★ The one exception: DIRECT SAMPLING on dongles without an upconverter
+
+An RTL-SDR **v4 has a built-in upconverter**, so HF works natively and direct sampling is meaningless
+there — hide it. A **v3 or clone does not**: direct sampling (Q branch) is the ONLY way it reaches HF.
+Hide it on one of those and a guest simply cannot hear anything below ~24 MHz.
+
+So the default should be **derived from the hardware and the radio's own frequency range**, not fixed
+— consistent with §3's "derived, never selected":
+
+| dongle | radio's freqMin/freqMax | direct sampling |
+|---|---|---|
+| v4 (has upconverter) | anything | **`hidden`** — meaningless |
+| v3 / clone | entirely HF (< ~24 MHz) | **`locked` ON** — the owner's antenna is HF; the guest never needs to touch it |
+| v3 / clone | spans HF *and* VHF/UHF | **`free`** — the guest MUST be able to switch, or half the radio is unreachable |
+
+Note the third row is a genuine trap: on a v3 with direct sampling ON, **VHF/UHF stops working**. A
+guest who switches it and cannot switch back has broken the receiver for themselves — which is an
+argument for exposing it *with* a clear label, not for hiding it.
+
 A guest on someone else's radio must not be able to change the hardware. This is not primarily a UX
 concern:
 
