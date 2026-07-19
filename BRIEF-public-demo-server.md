@@ -146,13 +146,34 @@ small lie the whole positioning refuses — and it is the first thing a sceptica
 
 ---
 
-## 7. Site integration
+## 7. Site integration — ★ the ON AIR sign IS the way in
 
-- Link at the top: **"Feel VibeDSP for yourself"** → the live receiver.
-- **A dead link is worse than no link.** Health-check the Pi; when it is down the entry point says
-  "offline right now" rather than dropping a visitor into a timeout. A visitor's first impression of
-  the product must not be a hang.
-- Label it plainly: *running on a Raspberry Pi 5 with an RTL-SDR v4 — not a simulation.*
+The ON AIR sign survives the parking of §6, repurposed as **the entry point itself**:
+
+- **ON AIR** — lit, clickable → straight into the live receiver.
+- **OFF AIR** — dark, not clickable, plainly worded ("the receiver is offline right now").
+
+This is strictly better than a plain link plus a separate health indicator, because **the health
+state and the affordance are the same object** — it cannot dangle, and it cannot lie. It also keeps
+the showmanship that made §6 appealing, at essentially zero streaming cost: a small JSON health
+poll, not a spectrum feed.
+
+```jsonc
+// GET /demo/status  — small, cacheable
+{ "onAir": true, "slotsFree": 3, "slotsTotal": 20, "queue": 2 }
+```
+
+- Show the live detail on the sign when it is up: **"ON AIR · 3 of 20 free"**, or **"ON AIR · 2
+  waiting"**. It is more honest than a bare light and it is more enticing — a visitor can see the
+  thing is genuinely in use by other people.
+- ★ **Cache the status JSON at the Cloudflare edge (~15–30s).** Otherwise every visitor's poll hits
+  the Pi directly and a traffic spike DoSes the very box the sign is advertising. This is the same
+  per-visitor scaling trap that killed §6, in miniature — it is cheap here only because the payload
+  is tiny *and* cacheable.
+- Fail **OFF AIR on any doubt**: timeout, stale timestamp, malformed response. The failure mode must
+  be "closed", never "lit but broken".
+- Label it plainly next to the sign: *running on a Raspberry Pi 5 with an RTL-SDR v4 — not a
+  simulation.*
 
 ---
 
@@ -169,7 +190,7 @@ cannot be manufactured at home. Log rung transitions per session and use them to
 1. Locked-centre, single-user server on the Pi — prove the slice, the antenna and the CPU numbers.
 2. Multi-user from one shared IQ stream: one FFT, N views, N demods. Runtime health guard.
 3. Sessions + queue + countdown.
-4. Cloudflare Tunnel; public URL; health check + "offline" state on the site.
-5. Site link ("Feel VibeDSP for yourself").
+4. Cloudflare Tunnel; public URL; `/demo/status` endpoint, edge-cached.
+5. The **ON AIR / OFF AIR sign** on the site, wired to that endpoint (§7) — this is the entry point.
 6. ~~Live background + ON AIR~~ — **parked, see §6.** Everything above is useful without it, and the
    demo itself is the differentiator.
