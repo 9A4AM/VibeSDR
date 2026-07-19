@@ -160,25 +160,25 @@ struct DabView: View {
       // fourth needs ~200pt and a 41mm has ~162, so the row overflowed and dragged the whole screen
       // off its left edge (lock button gone entirely). Even distribution adapts to any width.
       HStack(spacing: 0) {
-        LockButton(locked: $locked, size: 20)
-        Spacer(minLength: 6)
+        LockButton(locked: $locked, size: 18)
+        Spacer(minLength: 2)
         // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
         Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
           Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
-            .font(.system(size: 20, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
-            .padding(6).contentShape(Rectangle())
+            .padding(4).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
-        Spacer(minLength: 6)
+        Spacer(minLength: 2)
         Button { if !locked { showMenu = true } } label: {
-          Image(systemName: "line.3.horizontal").font(.system(size: 20, weight: .semibold))
+          Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .white)
-            .padding(6).contentShape(Rectangle())
+            .padding(4).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
         // Chat was missing from DAB and ADS-B entirely — same OWRX server, same room of listeners,
         // no way to talk to them from these screens. The glyph carries the listener COUNT too.
         if link.supportsChat {
-          Spacer(minLength: 6)
+          Spacer(minLength: 2)
           ChatGlyph(clients: link.clients, activity: link.chatActivity) {
             if !locked { showChat = true }
           }

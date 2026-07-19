@@ -75,24 +75,24 @@ struct AircraftView: View {
       // Lock · Map · Menu · Chat. SPACERS, not a fixed gap: a hardcoded 24pt was fine for three
       // buttons on a 49mm and does not fit four on a 41mm. Even distribution adapts to any width.
       HStack(spacing: 0) {
-        LockButton(locked: $locked, size: 20)
-        Spacer(minLength: 6)
+        LockButton(locked: $locked, size: 18)
+        Spacer(minLength: 2)
         Button { if !locked { showMap.toggle() } } label: {
-          Image(systemName: showMap ? "list.bullet" : "map.fill").font(.system(size: 20, weight: .semibold))
+          Image(systemName: showMap ? "list.bullet" : "map.fill").font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .cyan)
-            .padding(6).contentShape(Rectangle())
+            .padding(4).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
-        Spacer(minLength: 6)
+        Spacer(minLength: 2)
         Button { if !locked { showMenu = true } } label: {
-          Image(systemName: "line.3.horizontal").font(.system(size: 20, weight: .semibold))
+          Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : .white)
-            .padding(6).contentShape(Rectangle())
+            .padding(4).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(locked)
         // Chat was missing from ADS-B and DAB entirely — the same OWRX server, the same room of
         // listeners, and no way to talk to them from these screens. The glyph carries the listener
         // COUNT as well, so one control answers "who else is here" and "say something".
         if link.supportsChat {
-          Spacer(minLength: 6)
+          Spacer(minLength: 2)
           ChatGlyph(clients: link.clients, activity: link.chatActivity) {
             if !locked { showChat = true }
           }
@@ -101,7 +101,7 @@ struct AircraftView: View {
         }
       }
     }
-    .padding(.horizontal, 10).padding(.top, 40).padding(.bottom, 4)   // clears the status band (top ignored)
+    .padding(.horizontal, 6).padding(.top, 40).padding(.bottom, 4)   // clears the status band (top ignored)
   }
 
   private var empty: some View {
@@ -130,7 +130,12 @@ struct AircraftView: View {
         Text(p.flight?.isEmpty == false ? p.flight! : p.icao)
           .font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(.white).lineLimit(1)
         HStack(spacing: 6) {
-          if let a = p.altitude { Text("\(Int(a))ft").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)) }
+          // lineLimit(1): a thousands-separated altitude wraps MID-NUMBER on a 41mm ("11,37" /
+          // "5ft"), which reads as two different figures. Never break a number across lines.
+          if let a = p.altitude {
+            Text("\(Int(a))ft").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6))
+              .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+          }
           if let s = p.speed { Text("\(Int(s))kt").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)) }
           if let c = p.ccode { Text("\(Self.flag(c)) \(c)").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.85)) }
         }
@@ -221,7 +226,7 @@ struct LockButton: View {
     } label: {
       Image(systemName: locked ? "lock.fill" : "lock.open")
         .font(.system(size: size, weight: .semibold)).foregroundStyle(locked ? .orange : .white.opacity(0.8))
-        .padding(6).contentShape(Rectangle())   // bigger hit area than the glyph
+        .padding(4).contentShape(Rectangle())   // bigger hit area than the glyph
     }.buttonStyle(.plain)
   }
 }

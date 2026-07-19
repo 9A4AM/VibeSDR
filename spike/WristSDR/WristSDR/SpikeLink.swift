@@ -305,7 +305,13 @@ final class SpikeLink: ObservableObject {
     client.drainSpectrum(now: now)
     if connectError != client.lastError { connectError = client.lastError }
     if backendStatus != client.status { backendStatus = client.status }
-    if clients != client.clients { clients = client.clients }
+    // ★ NEVER let a 0 blank the count. While we are CONNECTED, 0 is not a truthful listener
+    // count — we are ourselves a client — so it only ever means "the server has not told us
+    // yet". OWRX sends `clients` on CHANGE, so after a reconnect or a profile switch there may
+    // be no message until somebody joins or leaves, and the glyph would sit blank for minutes
+    // while the chat sheet (opened later, after an update arrived) showed the real number.
+    // Hold the last known value instead; goIdle() resets it to 0 on a real disconnect.
+    if client.clients > 0, clients != client.clients { clients = client.clients }
     if profiles != client.profiles { profiles = client.profiles }
     if stationName != client.stationName { stationName = client.stationName }
     if dabProgrammes != client.dabProgrammes { dabProgrammes = client.dabProgrammes }
