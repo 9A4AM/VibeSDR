@@ -109,8 +109,17 @@ rather than assume. If it is a problem, the fallback is a cheap VPS relay, still
 > regardless of audience. But it costs a paid Workers plan plus real complexity, for a decorative
 > feature, on top of a demo server that has to exist and be reliable first. Right call to defer.
 >
-> Kept in full because the idea is good, the analysis is done, and it becomes cheap to revisit once
-> §§1–5 are running. **Do not start this before the demo server is live and stable.**
+> **Revisit condition — explicit, not vague.** Stuart: *"if we start making money from sales to
+> afford it then the live background is not out of the question, but I'm not paying for something
+> that so far has been a hobby."*
+>
+> So: **revisit only when App Store revenue comfortably covers the recurring cost**, and only after
+> §§1–5 are live and stable. This is not merely about £5/mo — the project's framing is that £2.99
+> covers Apple's fee rather than being a paywall, and taking on a standing bill to make the site look
+> impressive is the wrong trade while it is a hobby. The demo server itself costs nothing but
+> hardware already owned, which is exactly why it goes first.
+>
+> Kept in full because the idea is good and the analysis is done, so it is cheap to pick up later.
 
 Render the demo receiver's waterfall as the **live background of vibesdr.net**, with an **ON AIR**
 indicator. No competitor does this, and it demonstrates the product in the most literal way available.
