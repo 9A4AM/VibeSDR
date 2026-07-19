@@ -66,6 +66,40 @@ rather than silently corrupting everyone's audio.
 
 ---
 
+## 3b. ★ Link Management must move stages for THIS mode only
+
+`fftRate` is currently a **DSP-level** lever, not a transmit-level one: it lives on `Impl` (one per
+engine) and the comment says why — *"the engine skips the FFT work entirely
+(`specStride_ = sampleRate/fps`)"*, so both the CPU and the Wi-Fi radio wind down. That is exactly
+right for the product model and must not be changed there.
+
+**In the normal VibeServer model this is a non-issue.** One user per radio, **independent DSP engines
+per radio** — each user's rate is already their own, and a user on a bad connection cannot affect
+anyone else. The ladder works per-user for free.
+
+**This demo is the deliberate exception** (§1): many users, ONE radio, therefore ONE engine. A global
+`fftRate` here means **the worst connection in the room sets the frame rate for everybody** — which is
+the same antisocial-by-construction failure §1 was written to avoid, wearing a different hat.
+
+So for the shared-slice mode only:
+
+| | product model (1 user / radio) | this demo (N users / radio) |
+|---|---|---|
+| where the rate applies | **DSP** — skip the FFT | **per-connection send** — compute once, decimate per client |
+| saves | CPU *and* wire | wire only |
+| adaptivity | per-user already | per-user, needs the new stage |
+
+Compute the FFT at the highest rate any connected client wants, then **drop frames per connection on
+the way out**. Dropping frames is nearly free; re-running FFTs per client is not. Same for bin count —
+compute full, decimate per client (recall a zoom-in raises bytes/frame at constant fps, so bins are a
+lever in their own right).
+
+★ **Do not "fix" the DSP-level lever in the product to suit this.** Keep both: a single-client engine
+should still collapse to the DSP lever and keep the CPU saving, which is what makes a solar or
+battery-powered VibeServer viable.
+
+---
+
 ## 4. Sessions
 
 - **20 concurrent users, 5–10 minutes each**, then the slot recycles.
