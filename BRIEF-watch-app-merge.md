@@ -90,8 +90,9 @@ is the answer by default, and any exception has to be argued explicitly.
 
 This also settles the earlier file-by-file comparison (§1, §2): those tables are now just evidence,
 not a decision to make.
-- **Favourites AND their use counts sync** between phone and watch (§2d). ★ **Counts SUM**: 3 visits
-  on the phone + 2 on the watch = **5**.
+- **Favourites AND their use counts sync** between phone and watch (§2d). ★ **Counts take the MAXIMUM**,
+  not the sum (Stuart: *"I don't want weird duplicates"*) — 3 on the phone and 2 on the watch reads
+  as **3**.
 - Server connections and waterfall handling behave exactly as they do now in each mode.
 
 ---
@@ -251,11 +252,17 @@ while apart, i.e. a genuine two-way merge:
   deleted-at marker kept for a while), not just absence.
 - **Order is user intent** once drag-reorder lands, so it must sync too, and it conflicts differently
   from membership.
-- ★★ **USE COUNTS SUM — and that makes them a trap.** 3 phone + 2 watch = 5. So each device must keep
-  its OWN counter and the displayed figure is the sum; **never write the summed total back into
-  either side's counter**, or the next sync squares it (5 becomes 5+5, then 20…). Exchange the two
-  numbers, add them for display, keep them separate on disk. Unlike membership, a count cannot be
-  reconciled by last-write-wins.
+- ★★ **USE COUNTS TAKE THE MAXIMUM, not the sum** (Stuart, 2026-07-19: *"use maximum then, I don't
+  want weird duplicates"*). 3 on the phone and 2 on the watch = **3**.
+
+  **Max is idempotent, and that is the whole point.** Both sides converge on the same number, syncing
+  twice is a no-op, and a repeated or partial sync cannot inflate anything — so unlike a sum it is
+  SAFE TO WRITE BACK, which removes a whole class of bug. (A summed counter written back squares on
+  the next sync: 5 → 10 → 20. It looks right the first time and is very hard to notice.)
+
+  The cost is deliberate undercounting, and it is acceptable: the count drives "most used" SORTING,
+  and the ordering barely moves — a server used heavily on one device still outranks one barely
+  touched on either.
 - **Don't sync the whole picker.** `lsv_last_tune:*` and `lsv_display_prefs:*` are per-device by
   design (the watch's brightness is not the phone's, see [[small_screen_splash_overlap]]).
 
