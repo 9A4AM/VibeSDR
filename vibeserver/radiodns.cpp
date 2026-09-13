@@ -66,7 +66,33 @@ std::string httpGet(const std::string& url, const std::string& accept) {
      *  ★★ An argument vector cannot have this bug: one argument is one argument whatever bytes are
      *     in it. There is nothing to escape, so there is nothing to escape WRONGLY — which matters
      *     because the old code believed it was quoting correctly. */
-    std::vector<std::string> argv{"curl", "-fsS", "--max-time", "12"};
+    /* ★★★ FOLLOW REDIRECTS, OR HALF THE BROADCASTERS ARE UNREACHABLE. The SRV record gives a
+     *  host AND A PORT, and plenty of broadcasters advertise port 80 and then 301 you to HTTPS.
+     *  Without -L curl returns the redirect's body — a few bytes of nothing — and the chain dies
+     *  one step from the answer.
+     *
+     *  ★★★ MEASURED, 2026-09-13. Hits Radio 90s / 00s and Magic Radio on D1 National all had
+     *      logos in RadioDNS's own bundle and none in our list. Every step of the chain was fine:
+     *        0.c245.c181.ce1.dab.radiodns.org  CNAME planetradio.co.uk
+     *        _radioepg._tcp.planetradio.co.uk  SRV   listenapi.planetradio.co.uk:80
+     *        http://listenapi.planetradio.co.uk/radiodns/spi/3.1/SI.xml
+     *            -> 301 https://listenapi.planetradio.co.uk:443/radiodns/spi/3.1/SI.xml
+     *            -> 200, 295,469 bytes, containing C245, C246 AND C0C6.
+     *      The document was there the whole time. Stuart asked the right question — "are we being
+     *      too strict with the lookup?" — and this was the strictness: taking the SRV's port as
+     *      final and refusing the redirect it answers with.
+     *
+     *  ★★ IT ALSO EXPLAINS WHY THE APP LOOKED BETTER THAN THE SERVER. radiodns.ts uses fetch(),
+     *     which follows redirects by default — but on a VibeServer the app deliberately PREFERS
+     *     the server's cached answer, so the server's stricter fetch is the one that decides.
+     *
+     *  ★ BOUNDED, because this URL is built from identifiers decoded OFF THE AIR and a hostname
+     *    that came out of a DNS answer — the same reasoning as the no-shell note above. Three hops
+     *    maximum, and http/https only, so a redirect cannot walk us onto file:// or any other
+     *    scheme curl happens to support. No --location-trusted: we send no credentials and a
+     *    redirect must never be able to acquire any. */
+    std::vector<std::string> argv{"curl", "-fsS", "--max-time", "12",
+                                  "-L", "--max-redirs", "3", "--proto", "=http,https"};
     if (!accept.empty()) { argv.push_back("-H"); argv.push_back("accept: " + accept); }
     argv.push_back(url);
     std::string out;
