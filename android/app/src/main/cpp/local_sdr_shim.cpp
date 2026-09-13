@@ -17675,13 +17675,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ THE EYE AS A PRINTABLE GRID, NOT AN ARRAY OF NUMBERS. 64x32 is 2048 cells, and
         // as JSON integers that is several times the size of everything else in this message
         // put together. One character per cell at 64 intensity levels is finer than the plot
-        // can show and costs about 2 KB flat. Base 33 keeps it clear of the quote, the
-        // backslash and every control character, so it needs no escaping.
+        // can show and costs about 2 KB flat.
+        // ★★★ AN EXPLICIT ALPHABET, NOT AN OFFSET. This first shipped as (33 + level), with a
+        //     comment claiming that cleared the quote and the backslash. It does not: level 1
+        //     is '"' (34) and level 59 is '\\' (92), so the first frame containing either
+        //     ENDED THE JSON STRING EARLY or opened a bad escape — and the whole rdsx message
+        //     became unparseable. Every field in this message died at once (pilot, MPX S/N,
+        //     multipath, blanker, CEQ, the spectrum, the constellation) while PI, station and
+        //     radiotext carried on, because those arrive in DIFFERENT messages. That split is
+        //     what named it (Stuart, 2026-09-13: "the advanced RDS is broken").
+        // ★★ A RANGE CHECK CANNOT BE EYEBALLED. Write the alphabet out and the question
+        //    "is the quote in it" answers itself.
+        static const char kEyeAlphabet[65] =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
         j += "],\"eyeW\":" + std::to_string(eyeW);
         j += ",\"eyeH\":" + std::to_string(eyeH);
         { char b[32]; snprintf(b, sizeof b, "%.1f", eyeDev); j += ",\"eyeDev\":"; j += b; }
         j += ",\"eye\":\"";
-        for (size_t i = 0; i < eye.size(); ++i) j += (char)(33 + (eye[i] >> 2));
+        for (size_t i = 0; i < eye.size(); ++i) j += kEyeAlphabet[eye[i] >> 2];
         j += "\"}";
         sendText(sock, j);
     }

@@ -145,9 +145,10 @@ export interface RdsExt {
   ceqWhy: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
-  /** The composite eye: eyeW*eyeH intensities, row 0 = top (+peak), one printable character
-   *  per cell at base 33 (see the note where it is built). eyeDev is the kHz deviation that
-   *  full scale currently represents, because the plot autoscales. */
+  /** The composite eye: eyeW*eyeH intensities, row 0 = top (+peak), one character per cell
+   *  from a fixed 64-character alphabet (EYE_ALPHABET in main.ts, kEyeAlphabet on the server —
+   *  they must match). eyeDev is the kHz deviation full scale currently represents, because
+   *  the plot autoscales. */
   eye: string;
   eyeW: number;
   eyeH: number;

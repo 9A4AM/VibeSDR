@@ -1578,14 +1578,17 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   bounced."
        * ★ Breathing and marked as a fault, because something DID go wrong — it is just being
        *   handled. Six seconds, then back to whatever the chip normally shows. */
-      if (m.agcReinit || m.agcInit) {
+      /* ★★ ONE EVENT, ONE CHIP. This used to fire on `agcInit` as well, which put TWO chips on
+       *  the bar saying the same thing in different case — INITIALISING AGC from initChip and
+       *  "AGC initialising" from here (Stuart, 2026-09-13: "there are 2 initialising chips").
+       *  Normal start-up belongs to initChip; this one is for the FAULT, where the API stopped
+       *  running its own IF AGC and we restarted it in place. Keeping the distinction is the
+       *  whole point of the chip — a start-up is expected, a restart means something broke. */
+      if (m.agcReinit) {
         const chip = $('ovlChip');
-        /* ★ Two different events, and the difference matters to whoever is watching: starting up
-         *   is normal and expected, being restarted means something went wrong and is being
-         *   handled. Only the second is marked as a fault. */
-        chip.textContent = m.agcReinit ? 'AGC stalled — reinitialising' : 'AGC initialising';
+        chip.textContent = 'AGC stalled — reinitialising';
         chip.classList.add('set');
-        chip.classList.toggle('fault', !!m.agcReinit);
+        chip.classList.add('fault');
         chip.classList.remove('easing');     // ★ breathe: it is working, not stuck
         return;
       }
@@ -8532,6 +8535,11 @@ function drawEye() {
   }
 }
 
+/** The eye grid's alphabet — MUST match kEyeAlphabet in local_sdr_shim.cpp exactly. An offset
+ *  encoding was tried first and shipped a '"' and a '\\' inside a JSON string, which killed the
+ *  whole rdsx message; an explicit alphabet makes "is the quote in it" answerable by looking. */
+const EYE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-';
+
 /** ★★ THE COMPOSITE EYE — the MPX in TIME, the view the pira.cz oscillograms show.
  *
  *  ★★★ THE TRIGGER IS THE PILOT PLL, not an edge detector. A scope has to find something to
@@ -8568,7 +8576,7 @@ function drawMpxEye() {
   const cw = W / ew, ch = H / eh;
   for (let y = 0; y < eh; y++) {
     for (let x = 0; x < ew; x++) {
-      const v = eye.charCodeAt(y * ew + x) - 33;   // 0..63, base 33 — see the server note
+      const v = EYE_ALPHABET.indexOf(eye[y * ew + x]);   // 0..63, -1 if unknown
       if (v <= 0) continue;
       // Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
       // faint outliers are the whole point of a persistence display.
