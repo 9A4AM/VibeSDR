@@ -34,7 +34,11 @@ const LOCAL_CAPS: BackendCapabilities = {
 
 export class UberSDRAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
-  readonly caps: BackendCapabilities;
+  /* ★ NOT readonly any more, and the declaration should say so: the tuning range is LEARNED from
+   *  the receiver after construction (see learnTuningRange), so this genuinely changes once. It
+   *  was declared readonly and assigned in a method anyway — which tsc did not flag here, and a
+   *  declaration that quietly disagrees with the code is how the next reader is misled. */
+  caps: BackendCapabilities;
   protected client: SdrWsClient;
   private baseUrl: string;
   private cb: BackendCallbacks;
@@ -53,8 +57,13 @@ export class UberSDRAdapter implements SDRBackend {
     this.client = this.makeClient(baseUrl, uuid, callbacks, password);
     this.baseUrl = baseUrl;
     this.cb = callbacks;
-    // Local hardware tunes far beyond UberSDR's HF 30 MHz cap.
-    this.caps = local ? LOCAL_CAPS : UBERSDR_CAPS;
+    /* ★★★ A COPY, NOT THE SHARED CONSTANT. The tuning range is learned from the server below,
+     *  and `UBERSDR_CAPS` is a module-level object: writing the learned ceiling into it would
+     *  leak one receiver's limit onto every later connection in the same session — a 60 MHz
+     *  server would leave the next 30 MHz one believing it could tune to 60. */
+    // Local hardware tunes far beyond UberSDR's HF cap.
+    this.caps = { ...(local ? LOCAL_CAPS : UBERSDR_CAPS) };
+    if (!local) void this.learnTuningRange(baseUrl);
     if (local) {
       this.client.minHz = LOCAL_CAPS.freqRange[0];
       this.client.maxHz = LOCAL_CAPS.freqRange[1];
@@ -64,6 +73,55 @@ export class UberSDRAdapter implements SDRBackend {
 
 
 
+
+  /** ★★★ ASK THE RECEIVER HOW FAR IT TUNES — DO NOT ASSUME 30 MHz.
+   *
+   *  UberSDR's span is derived from the front end's sample rate, and their own source spells the
+   *  arithmetic out (receiver_span.go):
+   *
+   *       64.8 Msps -> 30,456,000 usable -> 30,000,000 span
+   *      129.6 Msps -> 60,912,000 usable -> 60,000,000 span
+   *
+   *  So "30 MHz" was never a property of UberSDR — it was the sample rate the receivers happened
+   *  to run. A 129.6 Msps RX-888 reaches 60 MHz, and we clamped its listeners to half the radio.
+   *  Stuart, with the spectrum drawn out to 45 MHz and the dial stuck on exactly 30000.000:
+   *  "we show the spectrum above 30, just cannot reach it."
+   *
+   *  ★★ IT IS PUBLISHED, AND WE WERE ALREADY FETCHING THE ENDPOINT. `/api/description` carries a
+   *     `tuning_range` object — confirmed live on a public receiver:
+   *       { "min_frequency": 10000, "max_frequency": 30000000, "input_samprate": 64800000,
+   *         "spectrum_span_hz": 30000000, "samprate_source": "radiod-conf" }
+   *     We read `description` for the receiver name and threw the rest away.
+   *
+   *  ★ THE FALLBACK IS THEIRS, NOT A GUESS. receiver_span.go states the client contract outright:
+   *    "Consumers must treat a missing object, or any field of it that is absent or zero, as
+   *    10 kHz - 30 MHz." So an older server, a missing field or a zero all keep exactly today's
+   *    behaviour — which is why this can be read eagerly without risking a regression.
+   *  ★ Failure is silent and harmless: no response, bad JSON or nonsense numbers leave the
+   *    defaults in place. A receiver that will not say keeps the range it has always had. */
+  private async learnTuningRange(baseUrl: string): Promise<void> {
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/description`);
+      if (!r.ok) return;
+      const tr = (await r.json())?.tuning_range;
+      const lo = Number(tr?.min_frequency);
+      const hi = Number(tr?.max_frequency);
+      // ★ Both must be sane AND ordered before either is believed — a half-read range that
+      //   clamped the dial to nothing would be worse than the assumption it replaces.
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo <= 0 || hi <= lo) return;
+      this.caps = { ...this.caps, freqRange: [lo, hi] };
+      this.client.minHz = lo;
+      this.client.maxHz = hi;
+      /* ★ NO CALLBACK, DELIBERATELY — there is no onCaps and `caps` is declared readonly on the
+       *  backend interface precisely because the UI re-reads `client.current.caps` on every
+       *  render rather than being told. Spectrum frames re-render continuously, so the new
+       *  ceiling is in force within a frame of it arriving.
+       *  ★★ I first wrote `this.cb.onCaps?.(...)`, which does not exist. Fifth invented name this
+       *     session — grep before reaching for a plausible one. */
+    } catch {
+      // A receiver that will not say keeps 10 kHz - 30 MHz, per their documented contract.
+    }
+  }
 
   get uuid(): string { return this.client.uuid; }
 
