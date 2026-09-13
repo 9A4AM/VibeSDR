@@ -240,6 +240,29 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
 std::shared_ptr<Listener> listen(const std::string& host, int port) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) throw std::runtime_error("socket() failed");
+    /* ★★★ NO CHILD MAY INHERIT THE LISTENING SOCKET, AND ONE DID — WITH THE PORT.
+     *
+     *  We spawn cloudflared through popen(), which forks a shell; without CLOEXEC that child
+     *  inherits every open fd, this listener included. Measured on Stuart's OWRX box,
+     *  2026-09-13, after the front door tried to restart itself:
+     *      LISTEN 0.0.0.0:48000  users:(("cloudflared",pid=11317,fd=3),("sh",pid=11316,fd=3))
+     *  The TUNNEL HELPER was holding the front door's port. `ss` still says LISTEN, so the
+     *  machine looks healthy and nothing can be bound there — but the process answering is a
+     *  tunnel client that speaks no HTTP, so a connection is accepted by nobody and simply
+     *  hangs. A fresh instance cannot take the port back either, however many times systemd
+     *  restarts it.
+     *
+     *  ★★ IT IS INVISIBLE ON A LAN, which is why this survived. The inherited fd only exists on a
+     *     box that spawned a tunnel, and it only bites when the door restarts — which is what a
+     *     settings save does. Set up over the tunnel, it strands you; set up on the LAN, you
+     *     never see it. Stuart, comparing against the two boxes he configured remotely: "I'm
+     *     pretty sure this is not a problem I have had with my Pi and Sabers box."
+     *
+     *  ★ FD_CLOEXEC after the fact rather than SOCK_CLOEXEC in the socket() call, deliberately:
+     *    this file is shared with the Android build and macOS, and the flag spelling is portable
+     *    where the socket-type flag is not. It is set before bind/listen, so there is no window
+     *    in which a fork could inherit it. */
+    { const int fl = ::fcntl(fd, F_GETFD, 0); if (fl >= 0) ::fcntl(fd, F_SETFD, fl | FD_CLOEXEC); }
     int one = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in addr {};

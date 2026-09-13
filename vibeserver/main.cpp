@@ -2908,11 +2908,32 @@ int main(int argc, char** argv) {
              *    The kernel closes the USB handles, systemd brings us straight back.
              *  ★ Detached, and it exits the process rather than being joined: the whole point is
              *    that the thread it is guarding may never finish. */
+            /* ★★★ AND THE WATCHDOG'S OWN LAST WORDS MUST NOT BE ABLE TO HANG IT.
+             *
+             *  This printed its message and then did not exit. Stuart's OWRX box, 2026-09-13,
+             *  after a settings save through the tunnel:
+             *      13:58:22  Configuration saved — restarting to apply it.
+             *      13:58:31  shutdown did not complete in 8s — exiting anyway ...
+             *  and FORTY MINUTES LATER the same pid was still alive, answering nothing on 48000.
+             *  The message is proof the thread woke and reached the print; _exit() is a syscall
+             *  that cannot fail. So the hang was BETWEEN them, and the only call there was
+             *  `fflush(nullptr)` — which flushes EVERY open stream in the process, including the
+             *  popen() pipe for cloudflared and whatever stdout is attached to. A blocking flush
+             *  down a pipe nobody is draining never returns.
+             *
+             *  ★★★ THE GUARD AGAINST A HANG MUST NOT CONTAIN ONE. The whole reason this thread
+             *      exists is that something else is already stuck; anything it calls must be
+             *      bounded. write(2) is a single unbuffered syscall on a fd we know is open, and
+             *      it is what _exit's own contract expects — no destructors, no stream machinery,
+             *      no locks held by the threads we are escaping.
+             *  ★ Nothing is lost by dropping the flush: the spectrogram is saved above, the config
+             *    is on disk, and this message goes straight to fd 2 rather than through stdio. */
             std::thread([]{
                 std::this_thread::sleep_for(std::chrono::seconds(8));
-                std::fprintf(stderr, "VibeServer: shutdown did not complete in 8s — exiting anyway "
-                                     "so the service can restart.\n");
-                std::fflush(nullptr);
+                static const char msg[] =
+                    "VibeServer: shutdown did not complete in 8s — exiting anyway "
+                    "so the service can restart.\n";
+                (void)!::write(2, msg, sizeof msg - 1);
                 _exit(0);
             }).detach();
             shim.stop();
