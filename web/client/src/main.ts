@@ -8598,13 +8598,42 @@ function drawMpxEye() {
    *    legitimately reads low — so the words say which, and never "weak" or "bad". */
   if (vd) {
     const d = rdsExt?.eyeDev ?? 0;
-    let what: string;
-    if (d < 3)       what = 'little above the audio — mono, or fully blended';
-    else if (d < 10) what = 'pilot dominates · little stereo';
-    else if (d < 25) what = 'pilot, stereo and RDS';
-    else if (d < 50) what = 'strong stereo';
-    else             what = 'very strong · near full deviation';
-    vd.textContent = d > 0.1 ? `${what} · scale ±${d.toFixed(0)} kHz` : '—';
+    /* ★★★ NO PILOT LOCK, NO READING — AND SAY SO. The trigger IS the recovered pilot, so without
+     *   a lock the sweeps are not aligned to anything and the picture is a noise field rather
+     *   than a triggered trace. Worse, the autoscale then tracks NOISE peaks: 105.4 Capital
+     *   (pilot 0.8 kHz, not locked, everything else on the panel reading "cannot measure")
+     *   showed ±74 kHz, which the level wording below would have announced as "very strong,
+     *   near full deviation" on a station barely present. Exactly backwards, and caught by
+     *   Stuart pointing at the one signal where every other readout had already given up.
+     * ★★ THE PLOT IS STILL WORTH DRAWING — "nothing coherent here" is a real answer, and the
+     *   only one this panel can still give on a signal like that. It just must not be dressed
+     *   up as a measurement. */
+    /* ★★★ THREE STATES, NOT TWO — and the middle one is the whole point of the plot.
+     *   "No lock" as a flat verdict is too absolute: on 105.4 Capital the pilot is PRESENT and
+     *   repeatedly ALMOST locking, and the persistence makes that visible as a trace that forms
+     *   and collapses. Stuart, watching it: "you can see the signal forming slightly before it
+     *   drops again." No single number says that — PILOT DEV 0.8 kHz only says "low" — and for
+     *   a DXer "nearly there, flickering" is a completely different situation from "nothing".
+     *   The server already draws this distinction in its own log ("[pilot] present but NOT
+     *   LOCKED"); the panel should too. */
+    const locked = !!rdsExt?.pilotLock;
+    const pilotSeen = (rdsExt?.pilotDev ?? 0) > 0.5;
+    if (!locked && pilotSeen) {
+      vd.textContent = 'pilot present but not locking — the trace forms and collapses';
+      vd.className = 'ok';
+    } else if (!locked) {
+      vd.textContent = 'no pilot — untriggered, so this is noise rather than a trace';
+      vd.className = 'bad';
+    } else {
+      let what: string;
+      if (d < 3)       what = 'little above the audio — mono, or fully blended';
+      else if (d < 10) what = 'pilot dominates · little stereo';
+      else if (d < 25) what = 'pilot, stereo and RDS';
+      else if (d < 50) what = 'strong stereo';
+      else             what = 'very strong · near full deviation';
+      vd.textContent = d > 0.1 ? `${what} · scale ±${d.toFixed(0)} kHz` : '—';
+      vd.className = '';
+    }
   }
 }
 
