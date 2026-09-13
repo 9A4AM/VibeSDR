@@ -1434,7 +1434,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }, 4000);
     },
     onRspStat: (sys, lna, ifgr, overload, settling, m: any = {}) => {
-      $('initChip').classList.toggle('set', settling);
+      /* ★★★ THE WHOLE START-UP CYCLE, NOT THE SIX-STEP KICK. This read `settling`, which is the
+       *  kick alone — a few seconds — and then went out while the visible settling was still to
+       *  come: the grace, the liveness check, the one coarse placement (which momentarily removes
+       *  every signal) and the window rule's first correction. Stuart, 2026-09-13: "when it goes
+       *  you think its ready to go only to have further AGC settling steps afterwards including
+       *  one that removes all signals for a few seconds."
+       *  ★ `agcInit` now spans all of it (see the note at its send site); `settling` keeps its
+       *    narrower meaning for the sliders, which is what they want. */
+      $('initChip').classList.toggle('set', Number(m.agcInit) === 1 || settling);
       /* ★★★ THE GAIN READOUTS HAVE STOPPED BEING READINGS — SAY SO, AND OFFER THE REPAIR.
        *
        *  The server sets `gainStuck` when its own gain writes stop landing, which freezes every

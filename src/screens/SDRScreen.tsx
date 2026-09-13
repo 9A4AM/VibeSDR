@@ -3137,6 +3137,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [rspAgcSet,   setRspAgcSet]   = useState(-30);
   const [rspLnaN,     setRspLnaN]     = useState(0);
   const [rspGainStuck, setRspGainStuck] = useState(false);
+  /* ★★★ THE WHOLE AGC START-UP CYCLE, not the six-step kick. The app has no initialising chip on
+   *  the main screen at all — only "settling…" inside the hardware panel, which nobody is looking
+   *  at when they first connect. Stuart, 2026-09-13: "maybe the VTS should scroll it too as in the
+   *  app the chip is far less visible." */
+  const [rspAgcInit, setRspAgcInit] = useState(false);
   /* ★★★ HackRF One live state. Mirrors what we last SENT, like the HF+ above — the shim has no
    *   read-back for these and the radio is single-occupant, so our own last write is the truth.
    * ★★★ AND EVERY ONE OF THEM STARTS AT ZERO/OFF, DELIBERATELY. Stuart: "the hackrf MUST DEFAULT
@@ -4392,6 +4397,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRspAutoNotch(r.autoNotch); setRspUserNotch(r.userNotch);
         setRspRfAgc(r.rfAgc); setRspAgcSet(r.agcSet);
         setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
+        setRspAgcInit(r.agcInit);
       },
       // ★★ THE OWNER'S NOTICE. Kept in state rather than shown as a toast: it explains something
       //    ONGOING — an aerial being worked on — so it must stay on screen while it is true, not
@@ -6826,6 +6832,37 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   it — a station name, a band announcement — so the key is checked first.
     setVtsNotif((n) => (n && n.key === gainMinNotifKey.current ? null : n));
   }, [showGainMinWarning, showVtsNotice]);
+
+  /* ★★★ THE AGC IS STILL SETTING ITSELF UP — SAY SO, AND KEEP SAYING IT UNTIL IT IS DONE.
+   *
+   *  The web client has a chip for this; the app had nothing on the main screen, and the chip is
+   *  small there anyway. Stuart, 2026-09-13: "maybe the VTS should scroll it too as in the app the
+   *  chip is far less visible."
+   *
+   *  ★★★ AND THE TIMING IS THE WHOLE POINT. `agcInit` used to mean only the six-step kick, so an
+   *      indicator driven by it went out while the visible settling was still to come — the coarse
+   *      placement momentarily removes EVERY signal, and the window rule's first correction lands
+   *      after that. It now spans the full cycle (see sdrpInitAgc, server side), which is exactly
+   *      what Stuart described watching: "it flashed for a few seconds and MW had good signal but
+   *      was flat out 6/6 RF Min Gain IF. A few seconds later the entire noisefloor flattens ...
+   *      then a few seconds later RF 3/6 IF 41 so perfect."
+   *
+   *  ★ NO DURATION GUESS. 10 minutes is a ceiling, not an expectation: the notice is WITHDRAWN the
+   *    moment the server says the cycle is complete, so the bar reflects the radio rather than a
+   *    timer I picked. A fixed few seconds is what was wrong with the chip in the first place.
+   *  ★ Withdrawn by KEY, like the gain warning above, so it cannot wipe a station name that has
+   *    replaced it in the meantime. */
+  const agcInitNotifKey = useRef(0);
+  useEffect(() => {
+    if (rspAgcInit) {
+      agcInitNotifKey.current = showVtsNotice(
+        'Initialising AGC — this receiver is setting its gain up. The picture will rearrange once '
+        + 'or twice more, and may go briefly flat, before it settles.',
+        600000);
+      return;
+    }
+    setVtsNotif((n) => (n && n.key === agcInitNotifKey.current ? null : n));
+  }, [rspAgcInit, showVtsNotice]);
 
   /* ★★★ EXPLAIN THE ZOOM-FOLLOWING IF FILTER — nothing else behaves this way.
    *   A tuner whose real selectivity moves when you zoom is, as far as we know, ours alone, so a

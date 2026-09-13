@@ -3768,6 +3768,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // connecting — a fix for one person's problem becoming another's bug (Stuart).
     bool sdrpAgcWanted = true;
     bool sdrpSettling = true;      // true while the AGC is being kicked and settling
+    /* ★★★ THE WHOLE START-UP CYCLE, FOR THE READOUT ONLY — NOT A GATE.
+     *
+     *  `sdrpSettling` is the SIX-STEP KICK and nothing more; the note beside the RF loop says so
+     *  outright ("it does NOT say the IF AGC has converged"). But the kick is only the first few
+     *  seconds of what a listener SEES. After it there is a grace period, a liveness check, ONE
+     *  coarse placement, and then the window rule's first correction — and that correction can
+     *  flatten the entire noise floor for a moment.
+     *
+     *  So the chip went out while the visible settling was still to come. Stuart, testing a
+     *  handover from VibeServer to OWRX and back, 2026-09-13: "it flashed for a few seconds and MW
+     *  had good signal but was flat out 6/6 RF Min Gain IF. A few seconds later the entire
+     *  noisefloor flattens as the AGC hammers the RF to minimum then a few seconds later RF 3/6
+     *  IF 41 so perfect ... when it goes you think its ready to go only to have further AGC
+     *  settling steps afterwards including one that removes all signals for a few seconds."
+     *
+     *  ★★★ A SEPARATE FLAG, DELIBERATELY, AND IT GATES NOTHING. `sdrpSettling` is read by five
+     *      decisions in the gain loop; widening it would change the AGC, and the AGC is right.
+     *      Stuart: "the whole AGC cycle is perfect now, that does not change — just the
+     *      indication." This exists only to be reported.
+     *  ★ Cleared when the coarse placement is done AND the loop has had a few seconds after it,
+     *    which is the first moment the picture on screen stops rearranging itself. */
+    bool sdrpInitAgc = true;
     /** ★★ THE RF GAIN THE KICK STARTS FROM, expressed the way the UI expresses it: a slider
      *  POSITION out of (lnaStateCount-1), where higher = more RF gain. 7/9 on an RSP1B is the
      *  working point Stuart runs the demo at, and it maps to LNA STATE 2 (state counts the other
@@ -8031,7 +8053,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *      writes is the whole point — it is what stops us breaking the API. */
             static bool coarseDone = false;
             static auto coarseAt   = std::chrono::steady_clock::time_point{};
-            if (sdrpSettling) { coarseDone = false; coarseAt = {}; }
+            /* ★ When the coarse placement landed, so the chip can outlive it by a few seconds —
+             *   that step is the one that momentarily removes every signal. */
+            static auto coarseSettledAt = std::chrono::steady_clock::time_point{};
+            /* ★ `sdrpInitAgc` is raised in the SAME branch that resets the coarse state, so the
+             *  original if/else chain below is left exactly as it was — a re-kick restarts the
+             *  whole cycle and the listener watches the same rearrangement again. */
+            if (sdrpSettling) { coarseDone = false; coarseAt = {}; sdrpInitAgc = true; }
             else if (graceDone && ifAgcAlive && armedOnce && !coarseDone
                      && g_rspRfAgc.load(std::memory_order_relaxed)) {
                 const auto nowC = std::chrono::steady_clock::now();
@@ -8039,6 +8067,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else if (std::chrono::duration_cast<std::chrono::seconds>(nowC - coarseAt).count()
                              >= 4) {
                     coarseDone = true;
+                    /* ★ AND THE CHIP STAYS UP A LITTLE LONGER STILL. The coarse step is the one
+                     *  that flattens the floor, so clearing the moment it is APPLIED would put the
+                     *  indicator out at exactly the wrong instant. `coarseSettledAt` gives the
+                     *  window rule time to take its first correction with the chip still showing. */
+                    coarseSettledAt = std::chrono::steady_clock::now();
                     const int    n    = sdrp->lnaStateCount();
                     const int    cur  = sdrp->currentLnaState();
                     const int    gr   = sdrp->currentIfGr();
@@ -8089,6 +8122,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         }
                     }
                 }
+            }
+
+            /* ★★★ THE READOUT'S FLAG IS CLEARED HERE — AFTER the chain above, never inside it.
+             *
+             *  It marks the end of the WHOLE start-up cycle, which is what a listener waits for:
+             *  the six-step kick, then the grace, the liveness check, the ONE coarse placement —
+             *  the step that momentarily removes every signal — and the window rule's first
+             *  correction. `sdrpSettling` covers only the kick, so the chip used to go out with
+             *  most of that still to come. Stuart, 2026-09-13: "when it goes you think its ready
+             *  to go only to have further AGC settling steps afterwards including one that removes
+             *  all signals for a few seconds."
+             *
+             *  ★★★ A STANDALONE `if`, OUTSIDE THE if/else-if ABOVE, AND THAT MATTERS. I first
+             *      wrote it INTO that chain, which made the coarse placement conditional on a
+             *      READOUT — the gain loop's behaviour hanging off an indicator. It compiled
+             *      cleanly and was wrong. The AGC is right and must not be touched: "the whole
+             *      AGC cycle is perfect now that does not change just the indication."
+             *  ★ Six seconds after the placement, not at it: clearing when the coarse step LANDS
+             *    would put the indicator away at the exact instant the picture goes blank. */
+            if (sdrpInitAgc && !sdrpSettling && coarseDone
+                && coarseSettledAt.time_since_epoch().count() != 0
+                && std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::steady_clock::now() - coarseSettledAt).count() >= 6) {
+                sdrpInitAgc = false;
+                LOGI("RSP: AGC start-up cycle complete — LNA %d/%d, IF reduction %d dB. The "
+                     "initialising indicator goes NOW, not when the six-step kick ended.",
+                     sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
+                     sdrp->currentIfGr());
             }
 
             /* ★★★ THE RADIO'S OWN IF AGC RUNS THE IF. WE RUN THE RF, FROM ITS READINGS.
@@ -8230,8 +8291,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   dead — and that is the exact moment a new listener decides the receiver is
                      *   broken. Stuart, who has built this thing: "wow initial kick too ages with
                      *   no initialising chip, i was about to tell you it was broken again."
-                     *   If he nearly called it, a stranger certainly would. */
-                    sdrpSettling ? 1 : 0,
+                     *   If he nearly called it, a stranger certainly would.
+                     * ★★★ AND IT NOW COVERS THE WHOLE CYCLE, NOT JUST THE KICK. `agcInit` was a
+                     *   second copy of `settling` — the same value under two names, one of which
+                     *   claimed to be about AGC INITIALISATION while only spanning the six-step
+                     *   kick. The kick is a few seconds; what follows it (grace, liveness, the one
+                     *   coarse placement, the first window correction) is what a listener actually
+                     *   watches, and the coarse step momentarily removes every signal. The chip
+                     *   went out before all of that. Stuart: "when it goes you think its ready to
+                     *   go only to have further AGC settling steps afterwards including one that
+                     *   removes all signals for a few seconds."
+                     * ★ `settling` above keeps its own narrower meaning — a gain change just
+                     *   happened, so the reading is not meaningful yet — because the sliders and
+                     *   the readouts depend on exactly that. Two names, two meanings, at last. */
+                    sdrpInitAgc ? 1 : 0,
                     /* ★★★ ONLY WHEN IT IS ACTUALLY HURTING. Stuart, 2026-09-13: "to reduce the
                      *   amount of warnings we actively monitor the noisefloor and signals, and if
                      *   a user is seeing a good clean spectrum like I am we dont fire it — but if
