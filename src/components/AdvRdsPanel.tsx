@@ -556,6 +556,47 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   /** ★ SAY WHAT FULL SCALE IS. The eye autoscales — a quiet passage genuinely shrinks the
    *  composite — so without this it would look identical at every level. */
   const eyeDevTxt = (x?.eyeDev ?? 0) > 0.1 ? ` · ±${Math.round(x!.eyeDev)} kHz` : '';
+  /* ★★ THE SAME PLAIN-ENGLISH READING THE WEB CLIENT GIVES. A bare scale says how far the axis
+   *  goes and nothing about whether that is good, which is the only question anyone has.
+   *  ★ THREE PILOT STATES, and the middle one is the point of the plot: a pilot that is PRESENT
+   *  but repeatedly almost locking shows as a trace that forms and collapses, which no single
+   *  number reports. And the level wording is suppressed entirely at low S/N, because the
+   *  autoscale then tracks NOISE and would call mush "very strong". */
+  const eyeVerdict = useMemo(() => {
+    const d = x?.eyeDev ?? 0;
+    const snr = x?.mpxSnr ?? 0;
+    const locked = !!x?.pilotLock;
+    const pilotSeen = (x?.pilotDev ?? 0) > 0.5;
+    if (!locked && pilotSeen) return { t: 'pilot present but not locking — forms and collapses', c: C.warn };
+    if (!locked)              return { t: 'no pilot — untriggered, so this is noise not a trace', c: C.bad };
+    if (snr > 0 && snr < 20)  return { t: 'buried in noise — level not measurable', c: C.bad };
+    let what: string;
+    if (d < 3)       what = 'little above the audio — mono or blended';
+    else if (d < 10) what = 'pilot dominates · little stereo';
+    else if (d < 25) what = 'pilot, stereo and RDS';
+    else if (d < 50) what = 'strong stereo';
+    else             what = 'very strong · near full deviation';
+    const noisy = (snr > 0 && snr < 28) ? ' · noisy' : '';
+    return { t: d > 0.1 ? `${what}${noisy}` : '—', c: (snr > 0 && snr < 28) ? C.warn : C.muted };
+  }, [x?.eyeDev, x?.mpxSnr, x?.pilotLock, x?.pilotDev]);
+
+  /* ★★ TOTAL PEAK DEVIATION against the 75 kHz limit — the headline broadcast figure, and the
+   *  one the eye draws as a flattened top while nothing reports it. Averaged on the panel's
+   *  clock; the number NEVER disappears, it dims and says so, because a row that vanishes reads
+   *  as a broken feature (Stuart, 2026-09-13). */
+  const mpxDevInfo = useMemo(() => {
+    const md = x?.mpxDev ?? 0;
+    const snr = x?.mpxSnr ?? 0;
+    const ok = md > 0.1 && snr >= 10;
+    if (!(md > 0.1)) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
+    const pk = md;
+    const t = ok
+      ? `deviation ${pk.toFixed(0)} kHz · ${pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal'}`
+      : `deviation ${pk.toFixed(0)} kHz · low S/N, unreliable`;
+    const c = !ok ? C.muted : pk > 82 ? C.bad : pk > 75 ? C.warn : C.good;
+    return { t, c, pct: Math.max(0, Math.min(100, md)),
+             hold: Math.max(0, Math.min(100, x?.mpxHold ?? 0)) };
+  }, [x?.mpxDev, x?.mpxHold, x?.mpxSnr]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
@@ -1039,6 +1080,25 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               </Text>
               <MpxEye eyeP={x?.eyeP ?? ''} eyeS={x?.eyeS ?? ''} eyeR={x?.eyeR ?? ''}
                       ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={72} />
+              <Text style={[s.verdict, { color: eyeVerdict.c, minHeight: 30 }]}>
+                {eyeVerdict.t}
+              </Text>
+              {/* ★ The deviation bar: 0-100 kHz with the 75 kHz limit marked three quarters
+                  along, and the peak-hold tick. Drawn dim when the reading is not trusted. */}
+              <View style={{ width: 180, height: 8, marginTop: 4, borderRadius: 2,
+                             backgroundColor: 'rgba(255,160,0,0.10)',
+                             borderWidth: 1, borderColor: 'rgba(255,160,0,0.25)',
+                             overflow: 'hidden' }}>
+                <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0,
+                               width: `${mpxDevInfo.pct}%`, backgroundColor: mpxDevInfo.c }} />
+                <View style={{ position: 'absolute', top: 0, bottom: 0, width: 2,
+                               left: `${mpxDevInfo.hold}%`, backgroundColor: '#fff' }} />
+                <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1,
+                               left: '75%', backgroundColor: 'rgba(255,255,255,0.55)' }} />
+              </View>
+              <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 26 }]}>
+                {mpxDevInfo.t}
+              </Text>
               <Text style={[s.plotLbl, { marginTop: 4 }]}>EYE</Text>
               <Eye xy={plotXy} width={180} height={44} />
             </View>
