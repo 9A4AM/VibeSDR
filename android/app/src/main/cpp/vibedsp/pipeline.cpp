@@ -1044,6 +1044,52 @@ void RxPipeline::feed(const cf32* iq, int n) {
                               wantRds ? ref57Buf_.data()  : nullptr,
                               wantRds ? ref57qBuf_.data() : nullptr,
                               wantRds ? bitClkBuf_.data() : nullptr);
+            // ── THE COMPOSITE EYE ───────────────────────────────────────────────────────
+            // ★★★ THE PILOT PLL IS THE TRIGGER. A scope needs an edge detector and its
+            //     trigger jitters; we already have the recovered pilot phase, so every sweep
+            //     is aligned by construction. bitClk = (cycle*2pi + phase)/16, so multiplying
+            //     back by 16 recovers a phase that runs continuously across cycles — no extra
+            //     per-sample work in the PLL loop, which is the hottest loop in WFM.
+            // ★★ TWO CYCLES, because the cycle counter wraps at 16 and 16 is divisible by 2.
+            //    Three cycles would leave one sweep in sixteen starting at the wrong phase and
+            //    smear the whole picture.
+            if (wantRds && cb_.rdsExt) {
+                if ((int)eyeAcc_.size() != kEyeW * kEyeH) {
+                    eyeAcc_.assign((size_t)kEyeW * kEyeH, 0.0f);
+                    eyeOut_.assign((size_t)kEyeW * kEyeH, 0);
+                }
+                // Persistence: the grid fades rather than clearing, exactly as a phosphor does.
+                for (float& v : eyeAcc_) v *= 0.86f;
+                // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
+                //   passage genuinely shrinks the composite, and a fixed full scale would hide
+                //   the structure instead of magnifying it (Stuart, 2026-09-13).
+                eyePeak_ *= 0.995f;
+                for (int i = 0; i < nc; ++i) {
+                    const float a = std::fabs(demodBuf_[i]);
+                    if (a > eyePeak_) eyePeak_ = a;
+                }
+                const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
+                const double kSpan = 2.0 * 2.0 * M_PI;        // two pilot cycles
+                for (int i = 0; i < nc; ++i) {
+                    double ph = std::fmod((double)bitClkBuf_[i] * 16.0, kSpan);
+                    if (ph < 0.0) ph += kSpan;
+                    int cx = (int)(ph * (double)kEyeW / kSpan);
+                    if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
+                    // Row 0 is the TOP, so +full scale is drawn at the top like a scope.
+                    const float u = demodBuf_[i] * inv;       // -1..+1
+                    int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
+                    if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
+                    eyeAcc_[(size_t)cy * kEyeW + cx] += 1.0f;
+                }
+                float mx = 0.0f;
+                for (float v : eyeAcc_) if (v > mx) mx = v;
+                const float es = (mx > 1e-6f) ? (255.0f / mx) : 0.0f;
+                for (size_t j = 0; j < eyeAcc_.size(); ++j) {
+                    const int v = (int)(eyeAcc_[j] * es);
+                    eyeOut_[j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                }
+            }
+
             // RDS (only meaningful once the pilot is locked).
             rdsDemod_.setPilotRef(pll_.lockAmp());
             if (wantRds && cb_.rdsBer)
@@ -1192,6 +1238,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.pilotDevKHz = extPilotDev_;
                 x.mpx = mpxOut_.empty() ? nullptr : mpxOut_.data();
                 x.nMpx = (int)mpxOut_.size();
+                // ★ The same 75 kHz convention as pilotDeviationKHz(), so the eye's scale
+                //   readout is comparable with the pilot and RDS deviation figures beside it.
+                x.eye  = eyeOut_.empty() ? nullptr : eyeOut_.data();
+                x.eyeW = eyeOut_.empty() ? 0 : kEyeW;
+                x.eyeH = eyeOut_.empty() ? 0 : kEyeH;
+                x.eyeDevKHz = eyePeak_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);
             }

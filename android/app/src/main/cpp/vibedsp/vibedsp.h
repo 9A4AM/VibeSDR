@@ -1797,6 +1797,17 @@ public:
              *  decoders, so this is one FFT away (Stuart, 2026-07-26).
              *  dB, one entry per bin, 0 Hz to kMpxSpanHz. */
             const float* mpx; int nMpx;
+            /** ★★ THE COMPOSITE EYE — the oscillogram the pira.cz MPX photographs show, except
+             *  triggered on the pilot PLL's own phase rather than on a scope's edge detector,
+             *  which is strictly better: the trigger cannot jitter because it IS the recovered
+             *  pilot. Two pilot cycles wide (16 divides by 2, so the cycle counter's wrap
+             *  cannot misalign a sweep), every composite sample folded onto that span and
+             *  accumulated into an intensity histogram so PERSISTENCE is free and the wire cost
+             *  is one small byte grid instead of thousands of sample pairs.
+             *  Row 0 is the TOP (+peak). eyeDevKHz is what full scale currently represents, so
+             *  the plot can autoscale and still say what it is showing. */
+            const unsigned char* eye; int eyeW, eyeH;
+            float eyeDevKHz;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
@@ -2188,6 +2199,11 @@ private:
     std::atomic<bool> nbOn_{true};
     std::atomic<bool> nbxOn_{false};        // ★ the audio-menu blanker, every mode but WFM
     float          nbRate_ = 0.0f;          // fraction of samples blanked, smoothed
+    // ── The composite eye (see Callbacks::RdsExt::eye) ──────────────────────────────────────
+    static constexpr int kEyeW = 64, kEyeH = 32;
+    std::vector<float>         eyeAcc_;     // intensity, decayed each block = persistence
+    std::vector<unsigned char> eyeOut_;     // the same grid scaled to 0..255 for the wire
+    float                      eyePeak_ = 0.0f;   // tracked composite peak, slow decay
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};

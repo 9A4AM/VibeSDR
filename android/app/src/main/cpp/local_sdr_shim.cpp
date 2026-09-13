@@ -4697,6 +4697,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<int> rdsAfAll; std::vector<unsigned char> rdsAfAllOk;
         std::vector<float> rdsConst;
         std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
+        std::vector<unsigned char> rdsEye;     // composite eye, eyeW*eyeH intensities, row 0 = top
+        int   rdsEyeW = 0, rdsEyeH = 0;
+        float rdsEyeDev = 0.0f;                // kHz deviation that full scale represents
         std::atomic<bool> stereoDetected{false};
         // Last values pushed to THIS listener (change-detect, to avoid marquee re-trigger).
         float lastSentSig_ = -999.0f;
@@ -8721,6 +8724,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
         st.rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
         if (x.mpx && x.nMpx > 0) st.rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
+        if (x.eye && x.eyeW > 0 && x.eyeH > 0) {
+            st.rdsEye.assign(x.eye, x.eye + (size_t)x.eyeW * x.eyeH);
+            st.rdsEyeW = x.eyeW; st.rdsEyeH = x.eyeH;
+        }
+        st.rdsEyeDev = x.eyeDevKHz;
         st.rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
         st.rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
         st.rdsLongPs = x.longPs ? x.longPs : "";
@@ -17483,11 +17491,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp, afAll; std::vector<unsigned char> afAllOk;
         std::vector<float> pts, mpx;
+        std::vector<unsigned char> eye; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f;
         { std::lock_guard<std::mutex> lk(R.rdsMtx);
           pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
           ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
           ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
           af = R.rdsAf; afAll = R.rdsAfAll; afAllOk = R.rdsAfAllOk; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
+          eye = R.rdsEye; eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
@@ -17649,7 +17659,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (v < -128) v = -128; else if (v > 0) v = 0;
             j += std::to_string(v);
         }
-        j += "]}";
+        // ★★ THE EYE AS A PRINTABLE GRID, NOT AN ARRAY OF NUMBERS. 64x32 is 2048 cells, and
+        // as JSON integers that is several times the size of everything else in this message
+        // put together. One character per cell at 64 intensity levels is finer than the plot
+        // can show and costs about 2 KB flat. Base 33 keeps it clear of the quote, the
+        // backslash and every control character, so it needs no escaping.
+        j += "],\"eyeW\":" + std::to_string(eyeW);
+        j += ",\"eyeH\":" + std::to_string(eyeH);
+        { char b[32]; snprintf(b, sizeof b, "%.1f", eyeDev); j += ",\"eyeDev\":"; j += b; }
+        j += ",\"eye\":\"";
+        for (size_t i = 0; i < eye.size(); ++i) j += (char)(33 + (eye[i] >> 2));
+        j += "\"}";
         sendText(sock, j);
     }
 
