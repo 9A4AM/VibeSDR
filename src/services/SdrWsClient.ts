@@ -148,7 +148,12 @@ export interface RdsExt {
   /** The composite eye: eyeW*eyeH intensities, row 0 = top (+peak), one character per cell from
    *  a fixed 64-character alphabet (EYE_ALPHABET in AdvRdsPanel, kEyeAlphabet on the server —
    *  they must match). eyeDev is the kHz deviation full scale represents; the plot autoscales. */
-  eye: string;
+  /** One grid per component — [0] pilot 19 kHz, [1] stereo L-R 38 kHz, [2] RDS 57 kHz,
+   *  run-length encoded (see the encoder in local_sdr_shim.cpp). Drawn additively they
+   *  reproduce the composite picture with the colour saying what makes each part of it. */
+  eyeP: string;
+  eyeS: string;
+  eyeR: string;
   eyeW: number;
   eyeH: number;
   eyeDev: number;
@@ -2238,7 +2243,9 @@ export abstract class SdrWsClient {
         grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
         // ★ NAMED EXPLICITLY, like every other field here — this object literal is built by
         //   hand, so a field left out arrives undefined rather than failing to compile.
-        eye: typeof msg.eye === 'string' ? msg.eye : '',
+        eyeP: typeof msg.eyeP === 'string' ? msg.eyeP : '',
+        eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
+        eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
         eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],

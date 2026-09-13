@@ -8560,10 +8560,47 @@ function drawMpxEye() {
   const W = c.width, H = c.height;
   g.fillStyle = '#000';
   g.fillRect(0, 0, W, H);
-  const eye = rdsExt?.eye ?? '';
   const ew = rdsExt?.eyeW ?? 0, eh = rdsExt?.eyeH ?? 0;
   const vd = $('rdsEyeVerdict');
-  if (!eye || ew <= 0 || eh <= 0 || eye.length < ew * eh) {
+  /* ★★★ THREE COMPONENTS, ONE BOX, DRAWN ADDITIVELY. Stuart: "so it looks the same as it does
+   *   now, just made up of the 3 component colours" — and the reading that buys you: "if you see
+   *   little green speckles you know the RDS is getting scattered, but a strong amber line is
+   *   good stereo and a strong red line is good pilot". One plot, three verdicts at once.
+   * ★★ THE PALETTE IS THE COOL END ON PURPOSE. This panel already speaks green/amber/red for
+   *   QUALITY and its chrome is amber, so warm hues here would fight both — a strong red line
+   *   would read as a problem when it means a healthy pilot. Cyan and magenta are the most
+   *   legible and go to the two components judged by eye; RDS reads by SPECKLE TEXTURE more
+   *   than hue, so it takes the weaker violet. */
+  const bands: Array<{ g: string; r: number; gr: number; b: number; cells: Uint8Array | null }> = [
+    { g: rdsExt?.eyeP ?? '', r:  80, gr: 230, b: 255, cells: null },   // pilot  — cyan
+    { g: rdsExt?.eyeS ?? '', r: 255, gr:  90, b: 210, cells: null },   // stereo — magenta
+    { g: rdsExt?.eyeR ?? '', r: 170, gr: 110, b: 255, cells: null },   // RDS    — violet
+  ];
+  /** ★★ DECODE THE RUN-LENGTH FORM — see the encoder in local_sdr_shim.cpp. A '.' means a run
+   *  of zeros whose length is the NEXT character (1..64); anything else is one literal cell.
+   *  That is what lets the grid be 96x48 per component without the wire cost tripling: the
+   *  picture is mostly empty and the empty space is nearly free. */
+  const decodeEye = (src: string, want: number): Uint8Array | null => {
+    if (!src) return null;
+    const out = new Uint8Array(want);
+    let o = 0;
+    for (let i = 0; i < src.length && o < want; i++) {
+      const c = src[i];
+      if (c === '.') {
+        const n = EYE_ALPHABET.indexOf(src[++i]) + 1;
+        if (n <= 0) return null;                 // malformed: draw nothing rather than noise
+        o += n;
+      } else {
+        const v = EYE_ALPHABET.indexOf(c);
+        if (v < 0) return null;
+        out[o++] = v;
+      }
+    }
+    return o >= want ? out : null;
+  };
+  for (const bnd of bands) bnd.cells = decodeEye(bnd.g, ew * eh);
+  const haveAny = bands.some((x) => x.cells !== null);
+  if (!haveAny || ew <= 0 || eh <= 0) {
     if (vd) vd.textContent = '—';
     return;
   }
@@ -8574,16 +8611,45 @@ function drawMpxEye() {
   g.strokeStyle = 'rgba(255,160,60,0.18)';
   g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
   const cw = W / ew, ch = H / eh;
-  for (let y = 0; y < eh; y++) {
-    for (let x = 0; x < ew; x++) {
-      const v = EYE_ALPHABET.indexOf(eye[y * ew + x]);   // 0..63, -1 if unknown
-      if (v <= 0) continue;
-      // Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
-      // faint outliers are the whole point of a persistence display.
-      const a = Math.pow(v / 63, 0.45);
-      g.fillStyle = `rgba(125,255,154,${(0.06 + 0.94 * a).toFixed(3)})`;
-      g.fillRect(x * cw, y * ch, Math.ceil(cw), Math.ceil(ch));
+  /* ★★ ADDITIVE, so the components BLEND where they coincide rather than the last one drawn
+   *  winning. That is what keeps the composite's shape: the sum of the three bands is what the
+   *  single-colour eye used to draw, and where all three land together the cell goes pale. */
+  const prev = g.globalCompositeOperation;
+  g.globalCompositeOperation = 'lighter';
+  for (const bnd of bands) {
+    const cells = bnd.cells;
+    if (!cells) continue;
+    for (let y = 0; y < eh; y++) {
+      for (let x = 0; x < ew; x++) {
+        const v = cells[y * ew + x];
+        if (v <= 0) continue;
+        /* Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
+         * faint outliers are the whole point of a persistence display.
+         * ★ KEPT DELIBERATELY DIM. Three additive layers saturate to white far too easily — at
+         *   the first alpha the stereo band alone bleached the middle of the plot and the cyan
+         *   pilot underneath it could not be seen at all. Lower alpha keeps the HUES readable,
+         *   which is the entire point of splitting them. */
+        const a = Math.pow(v / 63, 0.45);
+        g.fillStyle = `rgba(${bnd.r},${bnd.gr},${bnd.b},${(0.03 + 0.52 * a).toFixed(3)})`;
+        g.fillRect(x * cw, y * ch, Math.ceil(cw) , Math.ceil(ch));
+      }
     }
+  }
+  g.globalCompositeOperation = prev;
+  /* ★ THE KEY, IN THE PLOT — three words in their own colours, which is the whole legend. A
+   *  separate key would cost a row of the panel and be read once; this is read every time. */
+  g.font = '7px ui-monospace, monospace';
+  g.textBaseline = 'top';
+  const keys: Array<[string, string]> = [
+    ['PILOT',  'rgba(80,230,255,0.95)'],
+    ['STEREO', 'rgba(255,90,210,0.95)'],
+    ['RDS',    'rgba(170,110,255,0.95)'],
+  ];
+  let kx = 3;
+  for (const [txt, col] of keys) {
+    g.fillStyle = col;
+    g.fillText(txt, kx, 2);
+    kx += g.measureText(txt).width + 6;
   }
   /* ★★ SAY WHAT YOU ARE LOOKING AT, THEN THE SCALE — not the scale alone.
    *  The plot autoscales, so without a figure it would look identical at every level; but a bare

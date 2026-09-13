@@ -149,7 +149,12 @@ export interface RdsExt {
    *  from a fixed 64-character alphabet (EYE_ALPHABET in main.ts, kEyeAlphabet on the server —
    *  they must match). eyeDev is the kHz deviation full scale currently represents, because
    *  the plot autoscales. */
-  eye: string;
+  /** One grid per component — [0] pilot 19 kHz, [1] stereo L-R 38 kHz, [2] RDS 57 kHz. Drawn
+   *  ADDITIVELY they reproduce the composite picture, with the colour saying what makes each
+   *  part of it. All three share one scale, so a weak component genuinely looks weak. */
+  eyeP: string;
+  eyeS: string;
+  eyeR: string;
   eyeW: number;
   eyeH: number;
   eyeDev: number;
@@ -1076,7 +1081,9 @@ export class SpectrumClient {
           ceqWhy: Number(msg.ceqWhy ?? 3),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
-          eye: typeof msg.eye === 'string' ? msg.eye : '',
+          eyeP: typeof msg.eyeP === 'string' ? msg.eyeP : '',
+          eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
+          eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
           eyeW: Number(msg.eyeW ?? 0),
           eyeH: Number(msg.eyeH ?? 0),
           eyeDev: Number(msg.eyeDev ?? 0),

@@ -465,24 +465,76 @@ const EYE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
  *      and drawing a Rect per cell is exactly the mistake the Constellation note below warns
  *      about. Raw pixels into an SkImage is one draw call regardless of the grid size.
  */
+/** ★★ Decode the run-length form — '.' then one character giving 1..64 zeros, anything else a
+ *  literal cell. See the encoder in local_sdr_shim.cpp; it is what lets the grid be 96x48 per
+ *  component without the wire cost tripling. */
+function decodeEye(src: string, want: number): Uint8Array | null {
+  if (!src) return null;
+  const out = new Uint8Array(want);
+  let o = 0;
+  for (let i = 0; i < src.length && o < want; i++) {
+    const c = src[i];
+    if (c === '.') {
+      const n = EYE_ALPHABET.indexOf(src[++i]) + 1;
+      if (n <= 0) return null;
+      o += n;
+    } else {
+      const v = EYE_ALPHABET.indexOf(c);
+      if (v < 0) return null;
+      out[o++] = v;
+    }
+  }
+  return o >= want ? out : null;
+}
+
+/** The three component colours — cool end on purpose: this panel already speaks green/amber/red
+ *  for QUALITY and its chrome is amber, so a warm trace would read as a verdict. */
+const EYE_COLOURS: Array<[number, number, number]> = [
+  [ 80, 230, 255],   // pilot  — cyan
+  [255,  90, 210],   // stereo — magenta
+  [170, 110, 255],   // RDS    — violet
+];
+
 const MpxEye = React.memo(function MpxEye(
-  { eye, ew, eh, width, height }:
-  { eye: string; ew: number; eh: number; width: number; height: number }) {
+  { eyeP, eyeS, eyeR, ew, eh, width, height }:
+  { eyeP: string; eyeS: string; eyeR: string; ew: number; eh: number;
+    width: number; height: number }) {
   const img = useMemo(() => {
-    if (!eye || ew <= 0 || eh <= 0 || eye.length < ew * eh) return null;
-    const px = new Uint8Array(ew * eh * 4);
-    for (let i = 0; i < ew * eh; i++) {
-      const v = EYE_ALPHABET.indexOf(eye[i]);
+    if (ew <= 0 || eh <= 0) return null;
+    const n = ew * eh;
+    const grids = [decodeEye(eyeP, n), decodeEye(eyeS, n), decodeEye(eyeR, n)];
+    if (!grids.some((x) => x)) return null;
+    const px = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      // ★★ ADDITIVE, summed straight into the pixel: where components coincide the cell goes
+      //    pale, which is what preserves the composite's shape while the colour says what is
+      //    making each part of it.
+      let r = 0, g2 = 0, b = 0;
+      for (let k = 0; k < 3; k++) {
+        const cells = grids[k];
+        if (!cells) continue;
+        const v = cells[i];
+        if (v <= 0) continue;
+        // Gamma: a linear ramp buries everything but the densest trace, and the faint outliers
+        // are the whole point of a persistence display.
+        const a = 0.03 + 0.52 * Math.pow(v / 63, 0.45);
+        r += EYE_COLOURS[k][0] * a; g2 += EYE_COLOURS[k][1] * a; b += EYE_COLOURS[k][2] * a;
+      }
       const o = i * 4;
-      px[o] = 125; px[o + 1] = 255; px[o + 2] = 154;
-      // Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
-      // faint outliers are the whole point of a persistence display.
-      px[o + 3] = v > 0 ? Math.round(255 * (0.06 + 0.94 * Math.pow(v / 63, 0.45))) : 0;
+      const mx = Math.max(r, g2, b);
+      if (mx <= 0) { px[o + 3] = 0; continue; }
+      // Scale the hue to full brightness and carry the level in alpha, so a faint cell keeps its
+      // colour instead of fading to grey.
+      const k2 = 255 / Math.max(255, mx);
+      px[o]     = Math.min(255, Math.round(r * k2 * (255 / Math.min(255, mx))));
+      px[o + 1] = Math.min(255, Math.round(g2 * k2 * (255 / Math.min(255, mx))));
+      px[o + 2] = Math.min(255, Math.round(b * k2 * (255 / Math.min(255, mx))));
+      px[o + 3] = Math.min(255, Math.round(mx));
     }
     return Skia.Image.MakeImage(
       { width: ew, height: eh, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpremul },
       Skia.Data.fromBytes(px), ew * 4);
-  }, [eye, ew, eh]);
+  }, [eyeP, eyeS, eyeR, ew, eh]);
   return (
     <Canvas style={{ width, height }}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
@@ -985,8 +1037,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <Text style={[s.plotLbl, { marginTop: 4 }]}>
                 COMPOSITE EYE{eyeDevTxt}
               </Text>
-              <MpxEye eye={x?.eye ?? ''} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0}
-                      width={180} height={72} />
+              <MpxEye eyeP={x?.eyeP ?? ''} eyeS={x?.eyeS ?? ''} eyeR={x?.eyeR ?? ''}
+                      ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={72} />
               <Text style={[s.plotLbl, { marginTop: 4 }]}>EYE</Text>
               <Eye xy={plotXy} width={180} height={44} />
             </View>

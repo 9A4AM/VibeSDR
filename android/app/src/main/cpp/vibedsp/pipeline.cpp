@@ -1054,12 +1054,32 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    Three cycles would leave one sweep in sixteen starting at the wrong phase and
             //    smear the whole picture.
             if (wantRds && cb_.rdsExt) {
-                if ((int)eyeAcc_.size() != kEyeW * kEyeH) {
-                    eyeAcc_.assign((size_t)kEyeW * kEyeH, 0.0f);
-                    eyeOut_.assign((size_t)kEyeW * kEyeH, 0);
+                for (int b = 0; b < kEyeBands; ++b) {
+                    if ((int)eyeAcc_[b].size() != kEyeW * kEyeH) {
+                        eyeAcc_[b].assign((size_t)kEyeW * kEyeH, 0.0f);
+                        eyeOut_[b].assign((size_t)kEyeW * kEyeH, 0);
+                    }
                 }
-                // Persistence: the grid fades rather than clearing, exactly as a phosphor does.
-                for (float& v : eyeAcc_) v *= 0.86f;
+                // ★★ The three resonators, designed once per rate. Q from what each component
+                //    actually occupies: the pilot is a tone, L-R carries the stereo sidebands
+                //    (wide), RDS is +/-2.4 kHz about 57.
+                if (eyeBandFs_ != chFs_) {
+                    for (int sct = 0; sct < 2; ++sct) {
+                        eyeBand_[0][sct].design(chFs_, 19000.0, 14.0);   // pilot — a tone
+                        eyeBand_[1][sct].design(chFs_, 38000.0,  1.6);   // L-R sidebands — wide
+                        eyeBand_[2][sct].design(chFs_, 57000.0,  9.0);   // RDS  — +/-2.4 kHz
+                    }
+                    eyeBandFs_ = chFs_;
+                }
+                // ★ Maintenance runs at ~12 Hz, not per block — see eyeSince_. The ACCUMULATION
+                //   below is per block; only the display work is gated.
+                eyeSince_ += nc;
+                const bool eyeMaint = (chFs_ > 0.0) && (eyeSince_ >= chFs_ / 12.0);
+                if (eyeMaint) {
+                    // Persistence: the grids fade rather than clearing, as a phosphor does.
+                    for (int b = 0; b < kEyeBands; ++b)
+                        for (float& v : eyeAcc_[b]) v *= 0.55f;
+                }
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
                 //   passage genuinely shrinks the composite, and a fixed full scale would hide
                 //   the structure instead of magnifying it (Stuart, 2026-09-13).
@@ -1072,6 +1092,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
                     eyeHp2_ += eyeHpA_ * (h1 - eyeHp2_);      const float h2 = h1 - eyeHp2_;
                     eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      eyeHp_[i] = h2 - eyeHp3_;
+                }
+                // ★ The three components, from the same high-passed copy the scale is taken
+                //   from — so their sum is what the single-colour eye drew, and the picture
+                //   keeps its shape while gaining colour.
+                for (int b = 0; b < kEyeBands; ++b) {
+                    if ((int)eyeBandBuf_[b].size() < nc) eyeBandBuf_[b].resize((size_t)nc);
+                    for (int i = 0; i < nc; ++i)
+                        eyeBandBuf_[b][i] = eyeBand_[b][1].step(eyeBand_[b][0].step(eyeHp_[i]));
                 }
                 eyePeak_ *= 0.995f;
                 for (int i = 0; i < nc; ++i) {
@@ -1088,23 +1116,37 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // bitClk = (cycle*2pi + phase)/16, so bitClk * 16/(4pi) is the position in
                 // two-pilot-cycle units; its fractional part is the sweep position.
                 const float kTurns = (float)(16.0 / (2.0 * 2.0 * M_PI));
+                // ★★ ONE x FOR ALL THREE — they share the trigger, which is the whole point:
+                //    the components line up on the same axis and their relationship is visible.
                 for (int i = 0; i < nc; ++i) {
                     const float t = bitClkBuf_[i] * kTurns;
                     const float frac = t - std::floor(t);     // 0..1 across two pilot cycles
                     int cx = (int)(frac * (float)kEyeW);
                     if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
-                    // Row 0 is the TOP, so +full scale is drawn at the top like a scope.
-                    const float u = eyeHp_[i] * inv;          // -1..+1
-                    int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
-                    if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
-                    eyeAcc_[(size_t)cy * kEyeW + cx] += 1.0f;
+                    for (int b = 0; b < kEyeBands; ++b) {
+                        // Row 0 is the TOP, so +full scale is at the top like a scope.
+                        const float u = eyeBandBuf_[b][i] * inv;   // -1..+1, shared scale
+                        int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
+                        if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
+                        eyeAcc_[b][(size_t)cy * kEyeW + cx] += 1.0f;
+                    }
                 }
-                float mx = 0.0f;
-                for (float v : eyeAcc_) if (v > mx) mx = v;
-                const float es = (mx > 1e-6f) ? (255.0f / mx) : 0.0f;
-                for (size_t j = 0; j < eyeAcc_.size(); ++j) {
-                    const int v = (int)(eyeAcc_[j] * es);
-                    eyeOut_[j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                /* ★★★ ONE NORMALISATION ACROSS ALL THREE, not one each. Scaling every band to
+                 *   its own maximum would make a dead RDS carrier look exactly as bright as a
+                 *   healthy pilot — destroying the reading the colours exist to give ("a strong
+                 *   line is good, speckle is scatter"). They are judged against each other, so
+                 *   they must share a scale. */
+                if (eyeMaint) {
+                    eyeSince_ = 0.0;
+                    float mx = 0.0f;
+                    for (int b = 0; b < kEyeBands; ++b)
+                        for (float v : eyeAcc_[b]) if (v > mx) mx = v;
+                    const float es = (mx > 1e-6f) ? (255.0f / mx) : 0.0f;
+                    for (int b = 0; b < kEyeBands; ++b)
+                        for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
+                            const int v = (int)(eyeAcc_[b][j] * es);
+                            eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                        }
                 }
             }
 
@@ -1258,9 +1300,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.nMpx = (int)mpxOut_.size();
                 // ★ The same 75 kHz convention as pilotDeviationKHz(), so the eye's scale
                 //   readout is comparable with the pilot and RDS deviation figures beside it.
-                x.eye  = eyeOut_.empty() ? nullptr : eyeOut_.data();
-                x.eyeW = eyeOut_.empty() ? 0 : kEyeW;
-                x.eyeH = eyeOut_.empty() ? 0 : kEyeH;
+                const bool haveEye = !eyeOut_[0].empty();
+                for (int b = 0; b < kEyeBands; ++b)
+                    x.eyeBand[b] = haveEye ? eyeOut_[b].data() : nullptr;
+                x.eyeW = haveEye ? kEyeW : 0;
+                x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);

@@ -2599,6 +2599,14 @@ static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the re
 static std::atomic<bool> g_rspApiStuck{false};
 /** ★ A listener has tapped the chip. Performed on the radio thread, never where it arrives. */
 static std::atomic<bool> g_rspAgcRestartReq{false};
+/** ★★★ A REPAIR MUST CLEAR THE EVIDENCE THAT ACCUSED THE API, or the warning can never go away.
+ *  `deadSteps` only resets when the IF reduction MOVES, so after a restart the flag was cleared
+ *  and then re-raised from stale state on the very next tick — Stuart, 2026-09-13: "I click the
+ *  restart, the audio keeps flowing but the warning never goes away." A control that cannot be
+ *  seen to work is worse than no control: the listener concludes the repair is broken too.
+ *  ★ Set by the repair, consumed by the detector, which then needs FRESH evidence before it may
+ *    complain again. */
+static std::atomic<bool> g_rspAgcClearEvidence{false};
 
 /* ── AUTOMATIC DIRECT SAMPLING FOR HF (RTL only) ─────────────────────────────────────────────
  * ★★ An owner setting, OFF by default — see RadioConfig::autoDirectSampling for why it must stay
@@ -2828,6 +2836,11 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *    reads the commanded struct field, so it always agrees with what we asked for. That is
      *    exactly why nothing looked wrong on screen tonight while the loop shed six rungs.
      */
+    // ★ A repair has been performed: forget what we thought we knew — see g_rspAgcClearEvidence.
+    if (g_rspAgcClearEvidence.exchange(false, std::memory_order_relaxed)) {
+        deadSteps = 0; unhonoured = 0; deadWarned = false;
+        grAtLastStep = -1; structGainAtStep = -999.0f;
+    }
     if (grAtLastStep >= 0) {
         const float gNow    = sdrp->structGainDb();
         const bool  haveG   = gNow > -998.0f && structGainAtStep > -998.0f;
@@ -4722,7 +4735,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<int> rdsAfAll; std::vector<unsigned char> rdsAfAllOk;
         std::vector<float> rdsConst;
         std::vector<float> rdsMpx;             // MPX spectrum, dB per bin
-        std::vector<unsigned char> rdsEye;     // composite eye, eyeW*eyeH intensities, row 0 = top
+        std::vector<unsigned char> rdsEye[3];  // composite eye per component: pilot, stereo, RDS
         int   rdsEyeW = 0, rdsEyeH = 0;
         float rdsEyeDev = 0.0f;                // kHz deviation that full scale represents
         std::atomic<bool> stereoDetected{false};
@@ -7841,6 +7854,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const bool asked = g_rspAgcRestartReq.exchange(false, std::memory_order_relaxed);
                 sdrp->clearApiFailed();
                 g_rspApiStuck.store(false, std::memory_order_relaxed);
+                // ★ …and the evidence with it, or the next tick re-raises it from stale state.
+                g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
                 const int gnow   = sdrp->currentIfGr();
                 const int nudged = (gnow >= 40) ? std::max(20, gnow - 2) : std::min(59, gnow + 2);
                 LOGI("RSP: %s — restarting its IF AGC in place (%d -> %d -> AGC on).",
@@ -8751,8 +8766,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsGrp.assign(x.groupCounts, x.groupCounts + 32);
         st.rdsConst.assign(x.constXY, x.constXY + x.nPts * 2);
         if (x.mpx && x.nMpx > 0) st.rdsMpx.assign(x.mpx, x.mpx + x.nMpx);
-        if (x.eye && x.eyeW > 0 && x.eyeH > 0) {
-            st.rdsEye.assign(x.eye, x.eye + (size_t)x.eyeW * x.eyeH);
+        if (x.eyeBand[0] && x.eyeW > 0 && x.eyeH > 0) {
+            const size_t n = (size_t)x.eyeW * x.eyeH;
+            for (int b = 0; b < 3; ++b)
+                if (x.eyeBand[b]) st.rdsEye[b].assign(x.eyeBand[b], x.eyeBand[b] + n);
             st.rdsEyeW = x.eyeW; st.rdsEyeH = x.eyeH;
         }
         st.rdsEyeDev = x.eyeDevKHz;
@@ -17539,13 +17556,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp, afAll; std::vector<unsigned char> afAllOk;
         std::vector<float> pts, mpx;
-        std::vector<unsigned char> eye; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f;
+        std::vector<unsigned char> eye[3]; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f;
         { std::lock_guard<std::mutex> lk(R.rdsMtx);
           pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
           ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
           ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
           af = R.rdsAf; afAll = R.rdsAfAll; afAllOk = R.rdsAfAllOk; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
-          eye = R.rdsEye; eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev;
+          for (int b = 0; b < 3; ++b) eye[b] = R.rdsEye[b];
+          eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
@@ -17726,9 +17744,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += "],\"eyeW\":" + std::to_string(eyeW);
         j += ",\"eyeH\":" + std::to_string(eyeH);
         { char b[32]; snprintf(b, sizeof b, "%.1f", eyeDev); j += ",\"eyeDev\":"; j += b; }
-        j += ",\"eye\":\"";
-        for (size_t i = 0; i < eye.size(); ++i) j += kEyeAlphabet[eye[i] >> 2];
-        j += "\"}";
+        /* ★★ THREE GRIDS, ONE PER COMPONENT — pilot, stereo L-R, RDS. Drawn additively they
+         *  reproduce the composite picture the single grid used to draw, with the colour saying
+         *  what is making each part of it. 48x24x3 lands near where one 64x32 grid was rather
+         *  than three times it, which is why the grid shrank in the same change. */
+        /* ★★★ RUN-LENGTH ENCODED, WHICH IS WHAT PAYS FOR THE RESOLUTION.
+         *   Stuart asked for more detail, correctly noting the CPU is nothing beside DAB. The
+         *   limit was never CPU — it was BYTES on a socket shared with the spectrum stream:
+         *   96x48x3 sent raw is ~83 KB/s. But an eye grid is mostly EMPTY, so the zeros compress
+         *   hard and the detail is paid for out of the empty space instead of out of itself.
+         * ★★ '.' IS NOT IN kEyeAlphabet, which is what makes it usable as the run marker with no
+         *   escaping and no ambiguity: '.' then one alphabet character giving 1..64 zeros. A run
+         *   longer than 64 simply emits another pair. Everything else is a literal cell. */
+        static const char* kEyeKeys[3] = { "eyeP", "eyeS", "eyeR" };
+        for (int b = 0; b < 3; ++b) {
+            j += std::string(",\"") + kEyeKeys[b] + "\":\"";
+            const auto& gsrc = eye[b];
+            for (size_t i = 0; i < gsrc.size(); ) {
+                const int v = gsrc[i] >> 2;
+                if (v == 0) {
+                    size_t run = 0;
+                    while (i + run < gsrc.size() && (gsrc[i + run] >> 2) == 0 && run < 64) ++run;
+                    j += '.';
+                    j += kEyeAlphabet[run - 1];
+                    i += run;
+                } else {
+                    j += kEyeAlphabet[v];
+                    ++i;
+                }
+            }
+            j += "\"";
+        }
+        j += "}";
         sendText(sock, j);
     }
 

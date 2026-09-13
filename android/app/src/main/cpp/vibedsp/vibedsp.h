@@ -1836,7 +1836,10 @@ public:
              *  is one small byte grid instead of thousands of sample pairs.
              *  Row 0 is the TOP (+peak). eyeDevKHz is what full scale currently represents, so
              *  the plot can autoscale and still say what it is showing. */
-            const unsigned char* eye; int eyeW, eyeH;
+            /** Three grids, one per component: [0] pilot 19 kHz, [1] stereo L-R 38 kHz,
+             *  [2] RDS 57 kHz. Drawn ADDITIVELY they reproduce the composite picture, with the
+             *  colour saying what is making each part of it. All three share one scale. */
+            const unsigned char* eyeBand[3]; int eyeW, eyeH;
             float eyeDevKHz;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
@@ -2230,10 +2233,69 @@ private:
     std::atomic<bool> nbxOn_{false};        // ★ the audio-menu blanker, every mode but WFM
     float          nbRate_ = 0.0f;          // fraction of samples blanked, smoothed
     // ── The composite eye (see Callbacks::RdsExt::eye) ──────────────────────────────────────
-    static constexpr int kEyeW = 64, kEyeH = 32;
-    std::vector<float>         eyeAcc_;     // intensity, decayed each block = persistence
-    std::vector<unsigned char> eyeOut_;     // the same grid scaled to 0..255 for the wire
-    float                      eyePeak_ = 0.0f;   // tracked composite peak, slow decay
+    /** ★★★ 96x48 PER COMPONENT — RESOLUTION IS LIMITED BY THE WIRE, NOT THE CPU.
+     *  Stuart, 2026-09-13: "you could increase the resolution if you wanted, it will use less CPU
+     *  than DAB which the Xcover can handle with ease" — correct, and the eye measured 0.3 % of a
+     *  core for one band. What actually constrained it was BYTES: this shares a socket with the
+     *  spectrum stream, and 96x48x3 sent raw would be ~83 KB/s against the waterfall's own needs.
+     *  ★★ So the grids are RUN-LENGTH ENCODED instead of shrunk. An eye grid is mostly empty, so
+     *  the zeros compress hard and the picture is paid for out of the empty space rather than out
+     *  of its own detail. See the encoder in local_sdr_shim.cpp. */
+    static constexpr int kEyeW = 96, kEyeH = 48;
+    /** ★★★ THE EYE IS SPLIT INTO ITS THREE COHERENT COMPONENTS so the plot can be drawn in three
+     *  colours ADDITIVELY — the same composite picture as before, with the colour saying what is
+     *  making each part of it. Stuart, 2026-09-13: "so it looks the same as it does now, just made
+     *  up of the 3 component colours", and "if you see little green speckles you know the RDS is
+     *  getting scattered, but a strong amber line is good stereo and a strong red line is good
+     *  pilot". That is the real value: one plot, three simultaneous verdicts.
+     *  ★ Index 0 = pilot (19 kHz), 1 = stereo L-R (38 kHz), 2 = RDS (57 kHz). */
+    static constexpr int kEyeBands = 3;
+    std::vector<float>         eyeAcc_[kEyeBands];   // intensity, decayed each block = persistence
+    std::vector<unsigned char> eyeOut_[kEyeBands];   // the same grids scaled to 0..255 for the wire
+    float                      eyePeak_ = 0.0f;      // ONE peak for all three: they share an axis
+    /** ★★★ THE GRID WORK IS A DISPLAY COST, NOT AN AUDIO COST — DO IT AT THE FRAME RATE.
+     *  Accumulating samples has to happen every block, but DECAYING, scanning for the maximum and
+     *  converting to bytes are needed once per frame SENT. Doing all three every audio block over
+     *  13824 cells took a listener to 110 % of a core and dropped audio (Stuart, 2026-09-13) —
+     *  about twenty-five times the work required. This counts samples so the maintenance runs at
+     *  ~12 Hz, comfortably ahead of the 6 Hz the frames actually go out at. */
+    double                     eyeSince_ = 0.0;      // samples since the last grid maintenance
+
+    /** ★★ A 2-POLE RESONATOR PER COMPONENT. A one-pole pair is far too broad — the bands are at
+     *  19, 38 and 57 kHz and would leak into each other, which would defeat the whole point of
+     *  colouring them. Q is chosen from what each component actually occupies: the pilot is a
+     *  tone (narrow), L-R carries the stereo sidebands (wide), RDS is +/-2.4 kHz (narrow-ish). */
+    struct EyeBiquad {
+        float b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+        float x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        void design(double fs, double f0, double q) {
+            if (!(fs > 0.0) || !(f0 > 0.0) || f0 >= fs * 0.5) { b0 = b1 = b2 = a1 = a2 = 0; return; }
+            const double w0 = 2.0 * M_PI * f0 / fs;
+            const double alpha = std::sin(w0) / (2.0 * q);
+            const double a0 = 1.0 + alpha;
+            b0 = (float)( alpha / a0);          // band-pass, unity peak gain
+            b1 = 0.0f;
+            b2 = (float)(-alpha / a0);
+            a1 = (float)(-2.0 * std::cos(w0) / a0);
+            a2 = (float)((1.0 - alpha) / a0);
+            x1 = x2 = y1 = y2 = 0.0f;
+        }
+        inline float step(float x) {
+            const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = x; y2 = y1; y1 = y;
+            return y;
+        }
+    };
+    /** ★★★ TWO SECTIONS PER BAND, NOT ONE. A single 2-pole band-pass wide enough for the L-R
+     *  sidebands (23-53 kHz) has skirts gentle enough to pass a great deal of the 19 kHz PILOT,
+     *  so the stereo trace drew the pilot's own sine and the two colours added to white — the
+     *  plot looked like one bleached waveform instead of three components (seen on air,
+     *  2026-09-13). Cascading a second section steepens the skirts and separates them, which is
+     *  the entire point of colouring the bands in the first place. Six biquads at the channel
+     *  rate is nothing next to the FFT beside it. */
+    EyeBiquad eyeBand_[kEyeBands][2];
+    double    eyeBandFs_ = 0.0;                      // what they were designed for
+    std::vector<float> eyeBandBuf_[kEyeBands];       // the filtered copies the folds read
     // ★★★ THE EYE IS TAKEN ABOVE THE AUDIO. L+R has no fixed relationship to the pilot, so
     //     folding the FULL composite onto the pilot phase smears the audio into a featureless
     //     band and buries the three things that ARE coherent with the trigger — the 19 kHz
