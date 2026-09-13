@@ -8254,7 +8254,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     [&]{
                         if (!g_rspApiStuck.load(std::memory_order_relaxed)) return 0;
                         const int  target  = vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30;
-                        const bool saturated = sdrp->overloadReal() || sdrp->adcClipPct() > 0.0;
+                        /* ★★★ AND "HOT WITH NOTHING LEFT TO GIVE" COUNTS AS SATURATED, which
+                         *     testing only the clip flags missed. Measured on the live RSP1A:
+                         *     lna 9, ifgr 59 — BOTH STAGES AT MINIMUM — and adcPeak -8.2 dBFS
+                         *     against a -30 target. Twenty-two decibels above target with no gain
+                         *     left to shed is the AGC having lost control in the hot direction,
+                         *     and it is audible long before a sample actually clips: overload
+                         *     read 0 and adcClip read 0 throughout.
+                         *  ★ Symmetric with `starved` by construction — same 20 dB, same reason,
+                         *    same target-relative definition. The two together say "the level is
+                         *    out of reach", which is the only thing that makes a frozen gain API
+                         *    worth interrupting anybody about. */
+                        const bool saturated = sdrp->overloadReal() || sdrp->adcClipPct() > 0.0
+                                            || sdrp->adcPeakDbfs() > (double)target + 20.0;
                         const bool starved   = sdrp->adcPeakDbfs() < (double)target - 20.0;
                         return (saturated || starved) ? 1 : 0;
                     }());
