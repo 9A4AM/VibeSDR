@@ -311,6 +311,17 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  NOT background tasks). Pairs with onSdrUsage so the user can tell whether an
    *  in-use SDR has real listeners before switching its profile. */
   onClients?: (count: number) => void;
+  /** ★★★ OWRX SAYING WHY IT REFUSED SOMETHING — `{"type":"log_message","value":"…"}`.
+   *
+   *  This is how the server explains itself, and nothing read it. The one that matters most is
+   *  "This profile is locked, keeping current profile." — sent when a locked profile is selected
+   *  without the magic key, alongside a resetSdr() that snaps the picker back. Without this the
+   *  profile visibly bounced back and the app said nothing, which is the same fault as the
+   *  VibeServer refusals (`notice.why`) read by no client: THE SERVER EXPLAINS ITSELF AND WE
+   *  THROW IT AWAY. Third instance found today; it is worth looking for a fourth.
+   *  ★ Not onError — that path is for terminal CONNECTION failures and retries the socket. A
+   *    refusal is neither: the receiver is working and is telling you about the thing you asked. */
+  onLogMessage?: (text: string) => void;
   /** OWRX: an inbound chat message (server broadcasts incl. our own echo). */
   onChatMessage?: (name: string, text: string, color?: string) => void;
   /** OWRX: whether the server has chat enabled (config `allow_chat`). */

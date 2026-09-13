@@ -47,6 +47,13 @@ interface FreqModalProps {
   sdrUsage?:        Record<string, { name: string; inUse: boolean; activeProfileId?: string }>;
   clientCount?:     number;
   onSelectProfile?: (id: string) => void;
+  /** ★★★ OWRX'S MAGIC KEY, under the profiles it unlocks — Stuart's placement: "maybe under the
+   *  Profiles dropdown for the tuner box we have a text entry box for magic key which unlocks
+   *  OWRX." It is the operator's password for a LOCKED profile (and for centre-frequency changes),
+   *  checked server-side as `params.key` — see OwrxAdapter.setMagicKey.
+   *  ★ Offered only where there are profiles to unlock, i.e. on OWRX. */
+  magicKey?:        string;
+  onMagicKey?:      (key: string) => void;
 
   /** VTS "nearby station" skip — relocated from MenuSheet (§4.1). Shown as a row above the
    *  number: ◄ name ►. The always-on VTSBar is untouched. FM-DX disables skip (one shared
@@ -195,6 +202,7 @@ export default function FreqModal({
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
+  magicKey, onMagicKey,
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
   currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [], topInset,
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
@@ -644,6 +652,36 @@ export default function FreqModal({
                 onSelectProfile={onSelectProfile}
                 onPicked={onClose}
               />
+              {/* ★★★ THE MAGIC KEY. An OWRX operator can LOCK a profile; selecting it without the
+                  key is refused and the picker snaps back, with the server saying "This profile is
+                  locked, keeping current profile." (now surfaced — see onLogMessage). Given the
+                  key, the same selection succeeds.
+                  ★ Sits directly under the profiles because that is what it unlocks, and because a
+                    listener only discovers they need it by being refused one.
+                  ★★ AND IT IS NOT A GUARANTEE. The key also unlocks centre-frequency changes, but
+                     only where the operator has ALSO enabled allow_center_freq_changes — with that
+                     off, a correct key changes nothing and OWRX says nothing either. Said here so
+                     it reads as the receiver's choice rather than our bug.
+                  ★ No auto-capitalise/correct: it is a password, and a phone keyboard "helping"
+                    with it is the oldest way to make a correct key look wrong. */}
+              {!!onMagicKey && (
+                <View style={st.magicRow}>
+                  <TextInput
+                    style={st.magicInput}
+                    value={magicKey ?? ''}
+                    onChangeText={onMagicKey}
+                    placeholder="OWRX magic key (optional)"
+                    placeholderTextColor="rgba(255,190,90,0.45)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    returnKeyType="done"
+                  />
+                  <Text style={st.magicHint}>
+                    The operator's key for locked profiles. Blank unless they gave you one.
+                  </Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -887,6 +925,12 @@ const st = StyleSheet.create({
   unitBtnText:  { fontSize: 11 },
   actions:      { flexDirection: 'row', gap: 10 },
   profiles:     { marginBottom: 12 },
+  magicRow:     { marginTop: 8 },
+  magicInput:   { borderWidth: 1, borderColor: 'rgba(255,190,90,0.35)', borderRadius: 6,
+                  paddingHorizontal: 10, paddingVertical: 7, color: '#ffd89b',
+                  fontFamily: 'Nixie One', fontSize: 14 },
+  magicHint:    { color: 'rgba(255,190,90,0.55)', fontFamily: 'Nixie One', fontSize: 11,
+                  marginTop: 4 },
   cancelBtn:    { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   tuneBtn:      { flex: 2, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   // Bookmarks mode (§4.2)

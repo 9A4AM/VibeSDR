@@ -1577,6 +1577,30 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
   const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
+  /* ★★★ OWRX'S MAGIC KEY — the operator's password for the controls they have locked.
+   *  Confirmed against owrx/connection.py: it rides as `params.key` on `selectprofile` (a LOCKED
+   *  profile is refused without it) and on `setfrequency` (centre-frequency changes). A GitHub
+   *  discussion asked for it so a listener the operator trusts can get past the profile limits.
+   *  ★ PER SERVER, never global: the key belongs to one operator and is given to people they
+   *    trust. Storing one key for every OWRX would leak it to receivers it was never meant for. */
+  const [owrxMagicKey, setOwrxMagicKey] = useState('');
+  const magicKeyStore = `lsv_owrx_magic:${baseUrl}`;
+  useEffect(() => {
+    let gone = false;
+    AsyncStorage.getItem(magicKeyStore)
+      .then((v) => { if (!gone && v) { setOwrxMagicKey(v); (client.current as any)?.setMagicKey?.(v); } })
+      .catch(() => {});
+    return () => { gone = true; };
+  }, [magicKeyStore]);
+  const onOwrxMagicKey = useCallback((k: string) => {
+    const v = (k ?? '').trim();
+    setOwrxMagicKey(v);
+    (client.current as any)?.setMagicKey?.(v);
+    // ★ Remove rather than store an empty string: "no key" and "a key that is blank" must not
+    //   look the same on the next connect.
+    (v ? AsyncStorage.setItem(magicKeyStore, v) : AsyncStorage.removeItem(magicKeyStore))
+      .catch(() => {});
+  }, [magicKeyStore]);
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   // OWRX: server/profile preset DSP defaults (initial_squelch_level / initial_nr_level)
   // pushed on connect + every profile switch; seeds the menu's squelch/NR sliders so
@@ -4199,6 +4223,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
+      /* ★ OWRX explaining itself — most usefully "This profile is locked, keeping current
+       *  profile.", which it sends while snapping the picker back. Through the VTS, the same
+       *  channel as the VibeServer refusals, so every backend's refusals land in one place. */
+      onLogMessage: (t: string) => { if (!destroyed.current) showVtsNoticeRef.current?.(t, 7000); },
       onChatEnabled: (en) => { if (!destroyed.current) setChatEnabled(en); },
       onServerInfo: (info) => { if (!destroyed.current) { setServerLabel(info.name); setServerVersion(info.version || null); } },
       onChatMessage: (name, text) => {
@@ -9406,6 +9434,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         sdrUsage={sdrUsage}
         clientCount={clientCount}
         onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
+        magicKey={owrxMagicKey}
+        // ★ Handed over ONLY where the adapter can use it: OWRX is the only backend with a magic
+        //   key, so elsewhere the entry is absent rather than present and inert (AGENTS.md —
+        //   never offer a control whose every use is a no-op).
+        onMagicKey={(client.current as any)?.setMagicKey ? onOwrxMagicKey : undefined}
         vtsName={vtsMenuName}
         vtsFreq={vtsMenuFreq}
         onVtsPrev={onVtsPrev}

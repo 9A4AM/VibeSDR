@@ -431,6 +431,13 @@ export class OwrxAdapter implements SDRBackend {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;
       case 'clients': { const n = Number(json.value); if (Number.isFinite(n)) this.cb.onClients?.(n); break; }
+      /* ★ The server's own words — see onLogMessage. "This profile is locked, keeping current
+       *   profile." is the one a listener needs; the device-failure notices are useful too. */
+      case 'log_message': {
+        const t = typeof json.value === 'string' ? json.value.trim() : '';
+        if (t) this.cb.onLogMessage?.(t);
+        break;
+      }
       case 'chat_message': this.cb.onChatMessage?.(String(json.name ?? '?'), String(json.text ?? ''), json.color); break;
       case 'modes': {
         const arr = (json.value || []) as any[];
@@ -1335,7 +1342,52 @@ export class OwrxAdapter implements SDRBackend {
 
   // ── profiles ─────────────────────────────────────────────────────────────
   getProfiles(): ProfileInfo[] { return this.profiles; }
-  selectProfile(id: string): void { this.send({ type: 'selectprofile', params: { profile: id } }); }
+  /** ★★★ OWRX'S "MAGIC KEY" — the operator's password for the controls they have locked.
+   *
+   *  Confirmed against the real source (luarvique/openwebrx, owrx/connection.py), not guessed:
+   *
+   *      elif message["type"] == "selectprofile":
+   *          key = params["key"] if "key" in params else None
+   *          self.setProfile(profile[0], profile[1], key)
+   *      def setProfile(self, sdr, profile, key=None):
+   *          magic = self.stack["magic_key"]
+   *          if self.sdr.isLocked(profile) and magic != "" and key != magic:
+   *              self.write_log_message("This profile is locked, keeping current profile.")
+   *              self.resetSdr()
+   *
+   *  So it rides INSIDE `params`, as `key`, on the same message we already send — and a locked
+   *  profile is refused without it, with the server explaining itself in a log message.
+   *  ★ Empty string is NOT sent at all: with `magic_key == ""` the server needs no key, and
+   *    sending a blank one would be indistinguishable from a wrong one on a server that does.
+   *  ★ The key is the OPERATOR's, given out to people they trust — so it is stored per server
+   *    and never anywhere global. */
+  private magicKey = '';
+  setMagicKey(k: string): void { this.magicKey = (k ?? '').trim(); }
+
+  selectProfile(id: string): void {
+    const params: Record<string, unknown> = { profile: id };
+    if (this.magicKey) params.key = this.magicKey;
+    this.send({ type: 'selectprofile', params });
+  }
+
+  /** ★★★ THE CENTRE FREQUENCY — the other half of the key, and the one that actually means
+   *  "tune outside the profile". Same file:
+   *
+   *      elif message["type"] == "setfrequency":
+   *          if freq >= 0 and self.stack["allow_center_freq_changes"]:
+   *              magic = self.stack["magic_key"]
+   *              if magic == "" or key == magic:
+   *                  self.sdr.setCenterFreq(freq)
+   *
+   *  ★★ TWO CONDITIONS, AND THE KEY IS ONLY ONE OF THEM. The operator must also have switched
+   *     `allow_center_freq_changes` ON; with it off, a correct key changes nothing and the server
+   *     says nothing either. So this can fail silently by the server's design — which is worth
+   *     knowing before anybody reports it as our bug. */
+  setCenterFrequency(hz: number): void {
+    const params: Record<string, unknown> = { frequency: Math.round(hz) };
+    if (this.magicKey) params.key = this.magicKey;
+    this.send({ type: 'setfrequency', params });
+  }
 
   /** Fetch the landing page once to label the server OpenWebRX vs OpenWebRX+
    *  (the WS ack can't tell them apart) and report name + version to the UI. */
