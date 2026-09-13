@@ -24,7 +24,8 @@ import { useBusValue, type ValueBus } from '../services/valueBus';
 import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { Canvas, Path, Points, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
+import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
+         Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
@@ -449,6 +450,50 @@ const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; wid
   );
 });
 
+/** The eye grid's alphabet — MUST match kEyeAlphabet in local_sdr_shim.cpp and EYE_ALPHABET in
+ *  the web client. An offset encoding was tried first and put a '"' and a '\\' inside a JSON
+ *  string, which killed the whole rdsx message (2026-09-13). */
+const EYE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-';
+
+/** ★★ THE COMPOSITE EYE — the MPX in TIME, triggered on the pilot PLL's own recovered phase, so
+ *  the sweeps cannot jitter the way a scope's do. Two pilot cycles wide, high-passed above the
+ *  audio server-side (L+R is not pilot-coherent and smears into a band), so the 19 kHz pilot,
+ *  the 38 kHz L−R sidebands and 57 kHz RDS braid across it. Shows composite PEAK behaviour —
+ *  overmodulation flattens the tops — which neither the spectrum nor the constellation reveals.
+ *
+ *  ★★★ ONE IMAGE, NOT 2048 RECTS. The grid is an intensity histogram accumulated on the server,
+ *      and drawing a Rect per cell is exactly the mistake the Constellation note below warns
+ *      about. Raw pixels into an SkImage is one draw call regardless of the grid size.
+ */
+const MpxEye = React.memo(function MpxEye(
+  { eye, ew, eh, width, height }:
+  { eye: string; ew: number; eh: number; width: number; height: number }) {
+  const img = useMemo(() => {
+    if (!eye || ew <= 0 || eh <= 0 || eye.length < ew * eh) return null;
+    const px = new Uint8Array(ew * eh * 4);
+    for (let i = 0; i < ew * eh; i++) {
+      const v = EYE_ALPHABET.indexOf(eye[i]);
+      const o = i * 4;
+      px[o] = 125; px[o + 1] = 255; px[o + 2] = 154;
+      // Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
+      // faint outliers are the whole point of a persistence display.
+      px[o + 3] = v > 0 ? Math.round(255 * (0.06 + 0.94 * Math.pow(v / 63, 0.45))) : 0;
+    }
+    return Skia.Image.MakeImage(
+      { width: ew, height: eh, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpremul },
+      Skia.Data.fromBytes(px), ew * 4);
+  }, [eye, ew, eh]);
+  return (
+    <Canvas style={{ width, height }}>
+      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      {img && <SkiaImage image={img} x={0} y={0} width={width} height={height} fit="fill" />}
+      {/* The zero line, and the boundary between the two pilot cycles — both exact, not estimated. */}
+      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.30)" />
+      <Rect x={width / 2 - 0.5} y={0} width={1} height={height} color="rgba(255,160,60,0.18)" />
+    </Canvas>
+  );
+});
+
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const busX = useBusValue(p.bus);
   const x = p.bus ? (busX ?? null) : (p.x ?? null);
@@ -456,6 +501,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // ★ The three Skia plots, at 3 Hz rather than the full rdsx rate — see useThrottledPoints.
   const plotXy  = useThrottledPoints(x?.xy);
   const plotMpx = useThrottledPoints(x?.mpx);
+  /** ★ SAY WHAT FULL SCALE IS. The eye autoscales — a quiet passage genuinely shrinks the
+   *  composite — so without this it would look identical at every level. */
+  const eyeDevTxt = (x?.eyeDev ?? 0) > 0.1 ? ` · ±${Math.round(x!.eyeDev)} kHz` : '';
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
@@ -934,6 +982,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             <View style={{ flex: 1 }}>
               <Text style={s.plotLbl}>MPX</Text>
               <Mpx mpx={plotMpx} width={180} height={72} />
+              <Text style={[s.plotLbl, { marginTop: 4 }]}>
+                COMPOSITE EYE{eyeDevTxt}
+              </Text>
+              <MpxEye eye={x?.eye ?? ''} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0}
+                      width={180} height={72} />
               <Text style={[s.plotLbl, { marginTop: 4 }]}>EYE</Text>
               <Eye xy={plotXy} width={180} height={44} />
             </View>

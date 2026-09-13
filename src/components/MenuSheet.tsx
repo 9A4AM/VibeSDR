@@ -1244,12 +1244,17 @@ function MenuSheetBody({
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
                 {/* ★ Below Floor, because they are easily confused and this is the one that moves
-                     the READINGS. ±20 dB in 1 dB steps, default 0 — Stuart's figures. */}
+                     the READINGS. 1 dB steps, default 0.
+                     ★★ ±40 dB, NOT ±20. It shipped at ±20 and that does not reach the case it was
+                     built for: the GitHub #23 report is an OWRX sitting at S9+ noise floor all the
+                     time, which is about -73 dBm or worse against a sensible -100 — more than 20 dB
+                     of trim before the scale is usable at all (Stuart, 2026-09-13: "20db may not be
+                     enough"). A range that cannot fix the reported problem is not a fix. */}
                 {!!onVisualGain && (
                   <>
                     <View style={styles.sliderWrap}>
                       <Text style={styles.sliderLabel}>Visual Gain</Text>
-                      <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                      <NavSlider style={{flex:1}} minimumValue={-40} maximumValue={40} step={1}
                         value={visualGain} onValueChange={onVisualGain}
                         minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                       <Text style={styles.sliderVal}>{(visualGain > 0 ? '+' : '') + visualGain} dB</Text>
