@@ -2214,7 +2214,6 @@ private:
     float eyeHpA_ = 0.0f;                          // one-pole coefficient for the cascade
     float eyeHp1_ = 0.0f, eyeHp2_ = 0.0f, eyeHp3_ = 0.0f;   // the three low-pass states
     std::vector<float> eyeHp_;                     // the filtered COPY the eye is folded from
-    std::vector<int32_t> eyeIdx_;                  // cell index per sample, computed four-wide
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};
