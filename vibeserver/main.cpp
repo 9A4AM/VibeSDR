@@ -2462,6 +2462,31 @@ int main(int argc, char** argv) {
     //   RADIO, so a value left by another program (or by this owner on a different radio) would
     //   otherwise be inherited silently. 0 / -1 mean "leave the radio's default alone".
     if (g_runtimeConfig.ppm != 0) LocalSdrShim::instance().setPpm(g_runtimeConfig.ppm);
+    /* ★★★ A RADIO CHILD IS BEHIND OUR OWN FRONT DOOR, SO IT MUST TRUST ITS X-Forwarded-For.
+     *
+     *  setTunnelLoopbackTrust() lives in directory.cpp, which runs in the FRONT DOOR ONLY. The
+     *  door therefore un-masks tunnel visitors correctly — and the per-radio child, which is what
+     *  actually serves the spectrum socket and answers secsLeftFor(), never heard about it. So in
+     *  the child every visitor proxied from the door still arrived as 127.0.0.1 and was treated as
+     *  "the person at the machine": the session limit waived and the countdown blank.
+     *  ★★ MEASURED, Lenovo, 2026-09-13 — same radio, same moment:
+     *       LAN     peerAddress='192.168.86.61'  loopback=0  ->  1800 s, counting
+     *       tunnel  peerAddress='127.0.0.1'      loopback=1  ->  -1, EXEMPT
+     *     and the door logged "trusting X-Forwarded-For from 2 proxy entries" while the child
+     *     logged nothing at all. Android has one process and has always been right, which is why
+     *     the XCover counted down and the Linux boxes did not.
+     *  ★ GATED ON BEING A CHILD, not on a tunnel existing. A child is spawned by the front door
+     *    and only the door talks to it over loopback, so that is the trust boundary — and the
+     *    door already extends exactly this trust, so nothing new is exposed. A standalone server
+     *    (no --radio-serial) keeps the safe default of believing nobody.
+     *  ▶ Residual, unchanged by this: anything else with local access could forge the header on a
+     *    loopback connection. That is the same exposure the front door already accepts, and is
+     *    the trustedProxies item from the 2026-09-10 audit rather than something added here. */
+    if (!o.radioSerial.empty()) {
+        LocalSdrShim::setTunnelLoopbackTrust(true);
+        std::printf("  radio child: X-Forwarded-For from the front door is believed\n");
+    }
+
     /* ★★★ THE CONVERTER, ASSERTED AT START LIKE THE REST — and unconditionally, unlike the values
      *   above it. Those are "leave the radio's own default alone" settings, where 0 means "say
      *   nothing"; this one describes what is BOLTED TO THE AERIAL, and 0 is a real answer meaning
