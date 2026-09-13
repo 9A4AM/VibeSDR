@@ -9526,7 +9526,35 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     caller ever bumps it without touching status, the prop will not update and the
           //     tune will be silently dropped — bump state, not just the ref, if that day comes.
           userTuneSeq={userTuneSeq.current}
-          onBytes={(n: number) => { audioBytes.current += n; }}
+          /* ★★★ AND THIS IS WHERE "THE AUDIO IS FLOWING" ACTUALLY COMES FROM ON A VIBESERVER.
+           *
+           *  The DAB "tuning in" line clears when audio is heard, and it read `lastAudioAtRef` /
+           *  `audioRunStartRef` — which were written in EXACTLY ONE PLACE: inside the `VibeSignal`
+           *  listener. VibeSignal is emitted only while parsing a ka9q/radiod STATUS PACKET
+           *  (basebandPower and noiseDensity, at fixed byte offsets). A VibeServer never sends one,
+           *  so on a VibeServer those refs stayed at ZERO for ever and the test could never pass —
+           *  under the old arithmetic OR the corrected one. Stuart, on build 273 which contains
+           *  that correction: "still got the dab decoder run clean issue in the app, it ran clean
+           *  at about 3-4 seconds as usual ... still counting away too."
+           *
+           *  ★★★ I FIXED THE ARITHMETIC AND LEFT THE DATA SOURCE. The earlier change was right and
+           *      necessary — requiring a run that BEGAN after the press is unsatisfiable when the
+           *      audio never breaks — but it was not sufficient, because the numbers it compared
+           *      were never written at all on this backend. Both halves are needed: a test that
+           *      asks "is audio arriving NOW", and a source that actually says.
+           *
+           *  ★★ BYTES ARE THE BACKEND-AGNOSTIC TRUTH. This callback fires for every audio frame
+           *     that crosses the link on every backend — it is already counted here for the link
+           *     meter — so tracking the run here works for VibeServer, UberSDR and local hardware
+           *     alike, instead of for whichever one happens to send a status packet.
+           *  ★ The 400 ms gap rule is copied from the VibeSignal site deliberately, not reinvented:
+           *    one definition of "a new run", written twice, would drift. */
+          onBytes={(n: number) => {
+            audioBytes.current += n;
+            const now = Date.now();
+            if (now - lastAudioAtRef.current > 400) audioRunStartRef.current = now;
+            lastAudioAtRef.current = now;
+          }}
           raw={rawAudio && rawAudioPolicy === 'choice'}
         />
       ) : null}
