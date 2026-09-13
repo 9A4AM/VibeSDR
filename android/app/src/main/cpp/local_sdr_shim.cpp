@@ -14465,7 +14465,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               } else {
                   stale = audioClient;                   // one listener at a time: today's behaviour
                   audioClient = sock;
-              } }
+              }
+              /* ★★★ AND NOW SAY SO, OR THIS LISTENER IS NEVER FED. The dspLoop decides whether to
+               *  run the audio chain from `s_listenersCached` — and that is a CACHE, written in
+               *  exactly one place: specListenerCountLocked(). The SPECTRUM connect path calls it
+               *  (see firstOfSession below); this one never did. So an audio socket that arrived
+               *  while the chain was idled was registered correctly, counted correctly by anyone
+               *  who asked, and STILL got silence, because nobody asked.
+               *
+               *  ★★★ MEASURED on the x86 box, 2026-09-13, RSP1A at 648 kHz: an audio socket on its
+               *      own sat open for 20 s and received ZERO frames (135 B, the greeting). The
+               *      instant a spectrum socket opened on the same session the server logged "a
+               *      listener arrived — restarting the audio chain" and audio began 100 ms later,
+               *      at 50 frames/s. Ten seconds of proven silence, ended by a socket that carries
+               *      no audio at all.
+               *
+               *  ★★ WHY IT MATTERS BEYOND THE ODD CASE: it turns any momentary loss of the
+               *     spectrum socket into PERMANENT silence. The audio socket reconnects on its own
+               *     (the worker retries every 3 s) and is then never fed, so the listener hears
+               *     nothing until they reload the page — which is exactly the fault reported as
+               *     "audio just gives up" (Stuart, 2026-09-13: "that is a mission critical bug we
+               *     cannot have audio just giving up").
+               *
+               *  ★ It costs one count on a connect, and it is the SAME call the spectrum path
+               *    already makes — one definition of "somebody is listening", asked from both
+               *    doors instead of one. See AGENTS.md, "ONE RULE, TWO READERS". */
+              specListenerCountLocked(); }
             // ★★★ THE ARRIVING LISTENER DOES NOT GET TO RE-CUT EVERYBODY ELSE'S STREAM. On the
             //     shared dial there is ONE encode fanned out to all of them, so a joiner storing
             //     its own codec and resetting the encoder would change what the people already
