@@ -7,6 +7,47 @@ Source: https://github.com/Stuey3D/VibeSDR
 
 ## Unreleased
 
+### Fixed — audio that gave up, and a spectrum stuck at 2 frames a second (server 5.5.0)
+
+Two faults of the same shape, found hours apart in the same file, and each one left a listener
+with a receiver that looked broken.
+
+**Audio could stop for good.** An audio socket that arrived while the audio chain was idled was
+registered correctly, counted correctly by anything that asked — and never fed, because nothing
+asked. Measured on a live RSP1A: twenty seconds open, zero frames, 135 bytes. The moment a second
+socket joined, audio began 100 ms later at 50 frames a second. In practice this turned any
+momentary loss of the spectrum socket into permanent silence, because the audio socket reconnects
+on its own every three seconds and was then never fed again until the page was reloaded.
+
+**The spectrum ran at the idle floor with somebody watching.** The engine rate was recomputed
+before the arriving listener had been registered, so it counted nobody and took its 2 fps idle
+floor. One listener alone got a fifteenth of the frames; two listeners got the correct rate. The
+browser hid this completely, because it asks for a frame rate shortly after connecting — only a
+client that never asks was exposed.
+
+When something is idled for want of listeners, the ARRIVAL is the event that has to undo it.
+Both paths handled departure correctly and neither handled arrival.
+
+### Fixed — the SDRplay gain readout could freeze, and the gain loop steered by it
+
+With the radio's IF AGC enabled but not firing, the gain figures the API reports froze at whatever
+they last said, and the RF loop — which steers by exactly that number — read the stale value as
+"too much gain" and shed six LNA rungs. The receiver went to minimum gain while every reading on
+screen agreed with it, because the LNA readout reports what was commanded rather than what the
+radio did. Now: a gain write invalidates the AGC's last word until it answers, an RF step that
+fails to move the reduction stops the loop rather than repeating, and a frozen gain API is
+reported so the operator can reset it — never reset automatically, because the freeze is often
+inaudible and the reset costs every listener a moment of audio.
+
+### Fixed — a settings save could strand the server, with the radio still serving
+
+Saving settings restarts the server. Two separate faults meant it could fail to come back while
+its radios carried on perfectly: the guard that force-exits a hung shutdown hung in its own
+`fflush`, and the tunnel helper inherited the listening socket, so the port stayed held by a
+process that speaks no HTTP. Both are invisible on a LAN and only appear when the server is
+configured through a tunnel.
+
+
 ### Added — Web-888 receivers, which could not be connected to at all
 
 A **Web-888** is a KiwiSDR-compatible receiver, and VibeSDR could not talk to one on either
