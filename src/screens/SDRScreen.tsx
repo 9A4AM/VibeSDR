@@ -2780,6 +2780,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
+  /** ★ showVtsNotice is declared far below (it needs the VTS state), but the socket callbacks are
+   *  wired up here — the same scope problem its own note describes. Forward through a ref, as
+   *  zoomByRef and onFilterBothRef already do, rather than hoisting VTS state up the file. */
+  const showVtsNoticeRef = useRef<((msg: string, ms: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
 
@@ -3058,6 +3062,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const rspIfAgcRef = useRef(true); rspIfAgcRef.current = rspIfAgc;
   const [rspRfNotch, setRspRfNotch] = useState(false);
   const [rspDabNotch, setRspDabNotch] = useState(false);
+  /* ★★★ THE REST OF WHAT rspstat HAS ALWAYS CARRIED. The server sends seventeen fields; this
+   *  screen read five, so the panel could not know who owned the notches, how many LNA states the
+   *  CURRENT BAND has, what the AGC target is, or that the gain API had frozen. See onRspStat. */
+  const [rspAutoNotch, setRspAutoNotch] = useState(false);
+  const [rspUserNotch, setRspUserNotch] = useState(true);
+  const [rspRfAgc,    setRspRfAgc]    = useState(true);
+  const [rspAgcSet,   setRspAgcSet]   = useState(-30);
+  const [rspLnaN,     setRspLnaN]     = useState(0);
+  const [rspGainStuck, setRspGainStuck] = useState(false);
   /* ★★★ HackRF One live state. Mirrors what we last SENT, like the HF+ above — the shim has no
    *   read-back for these and the radio is single-occupant, so our own last write is the truth.
    * ★★★ AND EVERY ONE OF THEM STARTS AT ZERO/OFF, DELIBERATELY. Stuart: "the hackrf MUST DEFAULT
@@ -4300,11 +4313,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRspLna(r.lna);
         // Under AGC the IF reduction is the AGC's to move — follow the radio, do not fight it.
         if (rspIfAgcRef.current) setRspIfGr(r.ifgr);
+        /* ★ The live front-end state the panel needs to draw itself honestly: who owns the
+         *  notches, how many LNA states THIS BAND has, the AGC's target, and whether the gain
+         *  API has frozen. All of it was already on the wire. */
+        setRspRfNotch(r.rfNotch); setRspDabNotch(r.dabNotch);
+        setRspAutoNotch(r.autoNotch); setRspUserNotch(r.userNotch);
+        setRspRfAgc(r.rfAgc); setRspAgcSet(r.agcSet);
+        setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
       },
       // ★★ THE OWNER'S NOTICE. Kept in state rather than shown as a toast: it explains something
       //    ONGOING — an aerial being worked on — so it must stay on screen while it is true, not
       //    flash past while the listener is looking at the waterfall.
       onNotice: (text: string) => { if (!destroyed.current) setOwnerNotice(text || ''); },
+      /* ★★★ A REFUSAL, IN THE SERVER'S OWN WORDS — the thing that makes a locked control
+       *  explicable instead of dead. Stuart, 2026-09-13: "there are things the app leaves in a
+       *  settings menu that get locked out by a server owner and then the controls just appear
+       *  dead." The server has always said why ("the notches are on automatic — …"); nothing here
+       *  read it, because `notice` carries the owner's standing message in `text` and a refusal in
+       *  `why`, and only `text` was handled.
+       *  ★★ THROUGH THE VTS, NOT A NEW POPUP, and not the owner's notice slot. The bar already
+       *     scrolls a long line and takes itself away, which is what an explanation needs — and
+       *     the owner's slot holds something somebody posted deliberately. Stuart set this rule
+       *     for the gain message: "we can also move the 0 Gain message we added last night to the
+       *     VTS too so we arent inventing new popups." */
+      onRefused: (why: string) => {
+        if (!destroyed.current) showVtsNoticeRef.current?.(why, 7000);
+      },
       // ── ★★ THE SHARED DIAL AND ITS CHAT ──────────────────────────────────────────
       onDial: (d) => {
         if (destroyed.current) return;
@@ -6657,12 +6691,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Nothing is lost by waiting: RDS updates continuously, so the station name lands on the next
    *   change once the notice has had its turn. */
   const vtsNoticeUntil = useRef(0);
+  /** ★ Published for the socket callbacks wired far above — see showVtsNoticeRef. */
   const showVtsNotice = useCallback((msg: string, ms: number) => {
     vtsNoticeUntil.current = Date.now() + ms;
     vtsKey.current++;
     setVtsNotif({ key: vtsKey.current, name: msg, kind: 'notice', ms });
     return vtsKey.current;      // ★ so a caller can withdraw exactly its own notice later
   }, []);
+  // ★ Publish it for the socket callbacks, which are wired before this exists — see the ref.
+  showVtsNoticeRef.current = showVtsNotice;
 
   /* ★ The gain-at-minimum warning, in the bar. `showGainMinWarning` already encodes the whole
    *  policy — once per connection, and gone the instant the gain moves — so this only forwards
@@ -9186,6 +9223,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspIfGr={(v) => { setRspIfGr(v); (client.current as any)?.rspControl?.({ ifgr: v }); }}
           rspIfAgc={rspIfAgc}
           onRspIfAgc={(v) => { setRspIfAgc(v); (client.current as any)?.rspControl?.({ ifagc: v }); }}
+          rspAutoNotch={rspAutoNotch}
+          rspUserNotch={rspUserNotch}
+          rspRfAgc={rspRfAgc}
+          /* ★ Through rspControl like every sibling, and with the server's own key names
+           *  (`rfagc`, `agcset` — lower case). I first wrote these as a hand-built message with
+           *  camelCase keys, which the server would have parsed as nothing at all: a control that
+           *  looks wired and silently does nothing, which is the exact fault this pass is for. */
+          onRspRfAgc={(v) => { setRspRfAgc(v); (client.current as any)?.rspControl?.({ rfagc: v }); }}
+          rspAgcSet={rspAgcSet}
+          onRspAgcSet={(v) => { setRspAgcSet(v); (client.current as any)?.rspControl?.({ agcset: v }); }}
+          rspLnaN={rspLnaN}
+          rspGainStuck={rspGainStuck}
+          onRspAgcRestart={() => { setRspGainStuck(false); (client.current as any)?.rspAgcRestart?.(); }}
           rspRfNotch={rspRfNotch}
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
           rspDabNotch={rspDabNotch}

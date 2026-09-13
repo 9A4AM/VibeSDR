@@ -338,7 +338,26 @@ export interface SDRCallbacks {
    *  from the spectrum the way a dongle's would have to be. `settling` covers the moment after a
    *  gain change when the reading is not yet meaningful. */
   onRspStat?: (s: { sysGain: number; lna: number; ifgr: number;
-                    overload: boolean; settling: boolean }) => void;
+                    overload: boolean; settling: boolean;
+                    /** Which notches are ON right now. */
+                    rfNotch: boolean; dabNotch: boolean;
+                    /** ★ WHO OWNS THEM. `autoNotch` = the server is choosing them from the tuned
+                     *  frequency and will refuse a listener's; `userNotch` = listeners are allowed
+                     *  to. A control the server will refuse must not be drawn as live. */
+                    autoNotch: boolean; userNotch: boolean;
+                    /** ★ The RF AGC (our LNA loop) and the IF AGC's target level, dBFS. */
+                    rfAgc: boolean; agcSet: number;
+                    /** ★ Our own measurement of the ADC, not the API's — live even when the
+                     *  API's event path has frozen. */
+                    adcPeak: number; adcClip: number;
+                    /** ★ LNA states available AT THIS FREQUENCY (per band, not per model).
+                     *  0 = not reported; fall back to the capability. */
+                    lnaN: number;
+                    /** ★ The chip is (re)initialising — readings are not yet meaningful. */
+                    agcInit: boolean; agcReinit: boolean;
+                    /** ★ The SDRplay gain API has frozen: every figure above is stale and a reset
+                     *  is available. See the gain-API chip. */
+                    gainStuck: boolean }) => void;
   /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
    *  `refused` fires when a protected control was rejected — the honest moment to say why. */
   onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean; superseded?: boolean }) => void;
@@ -382,6 +401,9 @@ export interface SDRCallbacks {
   /** ★ The owner's notice to listeners ("antenna maintenance in progress"), pushed when it is
    *  posted or cleared. '' = nothing to show. */
   onNotice?: (text: string) => void;
+  /** ★ The server REFUSED something we asked for, in its own words. Distinct from the owner's
+   *  standing notice and must not displace it — see the 'notice' case. */
+  onRefused?: (why: string) => void;
   /** ★ The receiver's own terms, read from POST /connection at connect (see _checkConnection).
    *  idleSecs 0 = NO idle limit (a valid value, not a missing one); daily* −1 = unlimited. */
   onIdlePolicy?: (p: IdlePolicy) => void;
@@ -1091,12 +1113,21 @@ export abstract class SdrWsClient {
   }
 
   /** SDRplay RSP controls. Same shape — only the keys present are applied. */
+  /** ★ Ask the server to reset a FROZEN SDRplay gain API. Queued on the radio thread there, and
+   *  gated like the gain controls — see rsp_agc_restart. Never automatic: the freeze is often
+   *  inaudible and the reset costs everyone a moment of audio. */
+  rspAgcRestart() { this.sendSpectrum({ type: 'rsp_agc_restart' }); }
+
   rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
+                  /** ★ OUR RF loop (the LNA), distinct from the radio's own IF AGC. Wire key is
+                   *  `rfagc`, lower case, like its siblings — the server reads exactly that. */
+                  rfagc?: boolean;
                   rfNotch?: boolean; dabNotch?: boolean }) {
     const m: Record<string, unknown> = { type: 'rsp_control' };
     if (o.lna      !== undefined) m.lna      = o.lna;
     if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
     if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
+    if (o.rfagc    !== undefined) m.rfagc    = o.rfagc ? 1 : 0;
     if (o.agcset   !== undefined) m.agcset   = o.agcset;
     if (o.rfNotch  !== undefined) m.rfNotch  = o.rfNotch ? 1 : 0;
     if (o.dabNotch !== undefined) m.dabNotch = o.dabNotch ? 1 : 0;
@@ -2156,6 +2187,17 @@ export abstract class SdrWsClient {
       return;
     }
     if (msg.type === 'notice') {
+      /* ★★★ ONE TYPE, TWO MESSAGES, AND THE REFUSAL WAS BEING THROWN AWAY.
+       *  `text` is the owner's STANDING notice (persistent, posted from the setup page); `why` is
+       *  a REFUSAL of something this listener just tried (transient). Only `text` was read, so
+       *  every refusal became the empty string: "the notches are on automatic — …", "the operator
+       *  has reserved the notch filters". The server explained itself and we discarded it — which
+       *  is precisely why a locked control reads as a DEAD control (Stuart, 2026-09-13: "the
+       *  controls just appear dead").
+       *  ★★ They must not share a slot: a refusal routed into the owner's notice would clobber a
+       *     message somebody deliberately posted, and leave it clobbered. */
+      const why = typeof msg.why === 'string' ? msg.why : '';
+      if (why) { this.callbacks.onRefused?.(why); return; }
       this.callbacks.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
       return;
     }
@@ -2213,11 +2255,46 @@ export abstract class SdrWsClient {
     }
     if (msg.type === 'rspstat') {
       this.callbacks.onRspStat?.({
-        sysGain:  Number(msg.sysGain) || 0,
+        /* ★ −999, not 0, for "not reported". Now that the panel prints zero and NEGATIVE gains as
+         *  real readings (they are — the RSP's LNA states are attenuators at medium wave), a
+         *  missing field defaulting to 0 would draw a confident "0.0 dB" for a value nobody sent.
+         *  −999 is the server's own sentinel for "cannot read it". */
+        sysGain:  Number.isFinite(Number(msg.sysGain)) ? Number(msg.sysGain) : -999,
         lna:      Number(msg.lna) || 0,
         ifgr:     Number(msg.ifgr) || 0,
         overload: Number(msg.overload) === 1,
         settling: Number(msg.settling) === 1,
+        /* ★★★ THE TWELVE FIELDS THE SERVER HAS ALWAYS SENT AND THIS CLIENT NEVER READ.
+         *  rspstat carries seventeen; the web client uses all of them and the app used five.
+         *  Each of the ones added here drives a control that was otherwise wrong or dead:
+         *
+         *  · autoNotch/userNotch — WHO OWNS THE NOTCHES. With automatic notching on, the server
+         *    REFUSES a listener's notch and says so; without this the panel drew them live, the
+         *    tap did nothing, and (before the refusal fix) nothing explained it. The dead control
+         *    Stuart reported.
+         *  · lnaN — HOW MANY LNA STATES EXIST AT THIS FREQUENCY. The count is per BAND, not per
+         *    model: an RSP1A has seven on medium wave and ten higher up. Sizing the slider from
+         *    the model's capability maps its top third onto states the radio clamps away — the
+         *    exact bug the web client already fixed, still present here.
+         *  · rfAgc/agcSet — the RF AGC and its target, both new controls (2026-09-13).
+         *  · adcPeak/adcClip — the level every gain decision turns on.
+         *  · gainStuck — the SDRplay gain API has frozen; offer the reset.
+         *  · agcInit/agcReinit — the chip is (re)initialising, so readings are not yet meaningful.
+         *  ★ Defaults chosen so a server that has not sent a field yet behaves as before rather
+         *    than as "off": lnaN 0 means "fall back to the capability", the notch owners default
+         *    to NOT owning, and gainStuck defaults to false. */
+        rfNotch:   Number(msg.rfNotch) === 1,
+        dabNotch:  Number(msg.dabNotch) === 1,
+        autoNotch: Number(msg.autoNotch) === 1,
+        userNotch: Number(msg.userNotch) === 1,
+        rfAgc:     Number(msg.rfAgc) === 1,
+        agcSet:    Number.isFinite(Number(msg.agcSet)) ? Number(msg.agcSet) : -30,
+        adcPeak:   Number.isFinite(Number(msg.adcPeak)) ? Number(msg.adcPeak) : 0,
+        adcClip:   Number(msg.adcClip) || 0,
+        lnaN:      Number(msg.lnaN) || 0,
+        agcInit:   Number(msg.agcInit) === 1,
+        agcReinit: Number(msg.agcReinit) === 1,
+        gainStuck: Number(msg.gainStuck) === 1,
       });
       return;
     }

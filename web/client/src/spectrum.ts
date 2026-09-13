@@ -254,6 +254,9 @@ export interface SpectrumCallbacks {
   onDevice?: (present: boolean, reason?: string) => void;
   /** The owner's notice to listeners, pushed when it is posted or cleared ('' = nothing). */
   onNotice?: (text: string) => void;
+  /** ★ The server REFUSED something this listener asked for, in its own words — a different
+   *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
+  onRefused?: (why: string) => void;
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
   /** ★★ lockedRate is an UP-TO CEILING (offer rates at or below it). lockedCentre is a real
@@ -805,6 +808,29 @@ export class SpectrumClient {
         this.cb.onSessionWarning?.(Number(msg.secs) || 0);
         break;
       case 'notice':
+        /* ★★★ ONE TYPE, TWO COMPLETELY DIFFERENT MESSAGES — AND ONE OF THEM WAS BEING DROPPED.
+         *
+         *  `text` is the OWNER'S STANDING NOTICE to listeners: persistent, posted and cleared
+         *  from the setup page, and it owns its slot until withdrawn.
+         *  `why` is a REFUSAL of something this listener just tried: transient, and about an
+         *  action rather than about the receiver.
+         *
+         *  Only `text` was ever read. So every refusal the server sends arrived here and was
+         *  turned into the empty string — "the notches are on automatic — …", "the operator has
+         *  reserved the notch filters", "the operator has fixed this …". The server explained
+         *  itself and the client discarded the explanation, which is exactly why a locked control
+         *  reads as a DEAD control: you press it, nothing happens, and nothing says why.
+         *  Stuart, 2026-09-13: "there are things the app leaves in a settings menu that get locked
+         *  out by a server owner and then the controls just appear dead."
+         *
+         *  ★★ AND THEY MUST NOT SHARE A SLOT. Routing a refusal into the owner's notice would
+         *     clobber a standing message that somebody deliberately posted, and leave it clobbered.
+         *     A refusal goes to the transient channel — which this file already does for the raw-IQ
+         *     refusal (`showPill(\`Raw IQ out: ${m.why}\`)`), so the pattern was here all along and
+         *     this one case never used it.
+         *  ★ Same shape as the `needs_codec` message in audio.ts, which was also sent, also
+         *    ignored, and also left the only evidence being a control that appeared not to work. */
+        if (typeof msg.why === 'string' && msg.why) { this.cb.onRefused?.(msg.why); break; }
         // ★ The owner's message to listeners, pushed the moment it is posted or cleared.
         this.cb.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
         break;

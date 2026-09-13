@@ -894,20 +894,64 @@ struct HardwareSheet: View {
           stepCell(title: "LNA GAIN", value: "\(radio.rspLna)/\(max(0, radio.lnaStates - 1))",
                    dec: { radio.setRspLna(radio.rspLna - 1) },
                    inc: { radio.setRspLna(radio.rspLna + 1) })
+          /* ★★★ THE GAIN API HAS FROZEN — SAY SO, AND OFFER THE RESET. The figures above stop
+           *  being readings when this is set: they sit at whatever the API last reported. Tapped,
+           *  never automatic, because the freeze is frequently INAUDIBLE (it froze on Stuart's
+           *  RSP1A and left the signal perfectly clean) and the reset costs everyone listening a
+           *  moment of audio. Same words as the phone and the web client, so an owner who has
+           *  seen it once recognises it anywhere. */
+          if radio.rspGainStuck {
+            Button { radio.rspAgcRestart() } label: {
+              Text("GAIN API FAILURE — TAP TO RESET")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+          }
           onOff("IF AGC", on: radio.rspIfAgc) { radio.setRspIfAgc(!radio.rspIfAgc) }
+          /* ★★★ AND THE RF AGC, WHICH JR HAD NO IDEA EXISTED. Our own loop: it watches where the
+           *  radio's IF AGC settles and steps the LNA to keep it in its comfortable range.
+           *  ★ Next to the IF one, exactly as on the phone and the web client, because an owner
+           *    reading "IF AGC: ON" reasonably assumes that is the whole of the automatic gain —
+           *    and then cannot explain why the LNA is moving too. */
+          onOff("RF AGC", on: radio.rspRfAgc) { radio.setRspRfAgc(!radio.rspRfAgc) }
           // Manual IF gain reduction is the AGC's to own while it is on — dimmed, not
           // hidden: it is still the right control, just not yours at that moment.
           stepCell(title: "IF GAIN REDUCTION", value: "\(radio.rspIfGr) dB",
                    dec: { radio.setRspIfGr(radio.rspIfGr - 1) },
                    inc: { radio.setRspIfGr(radio.rspIfGr + 1) })
             .opacity(radio.rspIfAgc ? 0.35 : 1).disabled(radio.rspIfAgc)
-          // ★ The two broadcast notches. Offered ONLY where the model advertises them —
-          //   not every RSP has both, and a control that cannot work is worse than absent.
+          /* ★ THE AGC'S TARGET LEVEL, and it is a TARGET rather than a limit: −60 aims for a quiet
+           *  output and so applies LESS gain, −20 aims loud and applies more. Easy to get
+           *  backwards, and it has been. Only while the IF AGC is on — with it off there is no
+           *  loop for a target to aim. */
+          if radio.rspIfAgc {
+            stepCell(title: "AGC TARGET", value: "\(radio.rspAgcSet) dBfs",
+                     dec: { radio.setRspAgcSet(radio.rspAgcSet - 2) },
+                     inc: { radio.setRspAgcSet(radio.rspAgcSet + 2) })
+          }
+          /* ★ The two broadcast notches. Offered ONLY where the model advertises them —
+           *  not every RSP has both, and a control that cannot work is worse than absent.
+           *  ★★★ AND ONLY WHERE THEY ARE OURS TO MOVE. With automatic notching on, the SERVER
+           *      chooses them from the tuned frequency and REFUSES a listener's request — so a
+           *      live toggle here did nothing, sprang back, and explained nothing. Dimmed rather
+           *      than hidden, matching IF GAIN REDUCTION directly above: the STATE is still worth
+           *      seeing, it simply is not yours at that moment. Stuart, 2026-09-13: "the controls
+           *      just appear dead." */
+          let notchesOurs = radio.adminOk || (!radio.rspAutoNotch && radio.rspUserNotch)
           if radio.radioHasRfNotch {
             onOff("FM/MW NOTCH", on: radio.rspRfNotch) { radio.setRspRfNotch(!radio.rspRfNotch) }
+              .opacity(notchesOurs ? 1 : 0.35).disabled(!notchesOurs)
           }
           if radio.radioHasDabNotch {
             onOff("DAB NOTCH", on: radio.rspDabNotch) { radio.setRspDabNotch(!radio.rspDabNotch) }
+              .opacity(notchesOurs ? 1 : 0.35).disabled(!notchesOurs)
+          }
+          if !notchesOurs {
+            Text("Notches are automatic on this receiver")
+              .font(.system(size: 11, design: .monospaced))
+              .foregroundStyle(.secondary)
           }
         }
         /* ★★★ HACKRF ONE — THREE MANUAL STAGES, NO AGC, AND THE PANEL SAYS EXPERIMENTAL nowhere

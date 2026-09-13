@@ -152,6 +152,19 @@ export interface LocalHardwarePanelProps {
   rspIfGr?: number;      onRspIfGr?: (db: number) => void;
   rspIfAgc?: boolean;    onRspIfAgc?: (on: boolean) => void;
   rspAgcSet?: number;    onRspAgcSet?: (dbfs: number) => void;
+  /** ★ The RF AGC — our own LNA loop, steering from where the radio's IF AGC settles. Sits NEXT
+   *  TO the IF one because an owner reading "IF AGC: AUTO" reasonably assumes that is all of it. */
+  rspRfAgc?: boolean;    onRspRfAgc?: (on: boolean) => void;
+  /** ★★ WHO OWNS THE NOTCHES. `rspAutoNotch` = the server chooses them from the tuned frequency
+   *  and will REFUSE a listener's; `rspUserNotch` = listeners may set them. Without these the
+   *  panel drew live switches the server would refuse — the dead control Stuart reported. */
+  rspAutoNotch?: boolean; rspUserNotch?: boolean;
+  /** ★★ LNA states available AT THIS FREQUENCY. Per BAND, not per model — an RSP1A has seven on
+   *  medium wave and ten higher up — so sizing from `radio.lnaStates` maps the top of the range
+   *  onto states the radio clamps away. 0 = not reported yet; fall back to the capability. */
+  rspLnaN?: number;
+  /** ★ The SDRplay gain API has frozen: every figure here is stale, and a reset is offered. */
+  rspGainStuck?: boolean; onRspAgcRestart?: () => void;
   rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
   rspDabNotch?: boolean; onRspDabNotch?: (on: boolean) => void;
   rspBiasT?: boolean;    onRspBiasT?: (on: boolean) => void;
@@ -260,6 +273,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const capT = p.gainCapTenthDb ?? -1;
   /* ★ The owner's figure IS this slider's floor — both are a reduction in dB. Held inside what the
    *  radio reports it can do, so a stale or silly figure cannot push the control off its own scale. */
+  /* ★★★ THE TOP LNA STATE AT THIS FREQUENCY, not the model's maximum.
+   *  The count is per BAND: an RSP1A offers seven states on medium wave and ten higher up, per the
+   *  API's own per-band tables. Sizing from `radio.lnaStates` (a per-MODEL capability) put the top
+   *  third of the range onto states the radio silently clamps away, which gives the stepper a dead
+   *  zone indistinguishable from a rail. Only the server knows which band the radio is in, so only
+   *  the server may say — it sends `lnaN` on every rspstat.
+   *  ★ Fall back to the capability when it has not arrived yet, so nothing regresses on an older
+   *    server or in the first moments after connecting. */
+  const lnaTop = Math.max(0, ((p.rspLnaN && p.rspLnaN > 0) ? p.rspLnaN : (p.radio?.lnaStates ?? 10)) - 1);
   const ifGrFloor = (p.ifGrFloorDb ?? -1) >= 0
     ? Math.max(p.radio?.ifGrMin ?? 20, Math.min(p.radio?.ifGrMax ?? 59, p.ifGrFloorDb ?? 20))
     : (p.radio?.ifGrMin ?? 20);
@@ -327,6 +349,14 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   are not offers that would spring back — the messages are accepted. This is the client
    *   catching up with a permission the server already grants. */
   const isAdmin      = !!p.adminOk;
+  /* ★★★ MAY THIS LISTENER TOUCH THE NOTCHES AT ALL? Automatic notching means the SERVER chooses
+   *  them from the tuned frequency, and it refuses a listener's request outright ("the notches are
+   *  on automatic — …"). A switch the server will refuse must not be drawn as live: that is the
+   *  dead control Stuart reported, and it is the same rule as "never offer a control whose every
+   *  use is a no-op" (AGENTS.md).
+   *  ★ An ADMIN may still set them — the refusal is aimed at listeners — so admin wins here, as it
+   *    does for every other gate in this panel. */
+  const notchesOurs = isAdmin || (!p.rspAutoNotch && p.rspUserNotch !== false);
   const canGain      = isAdmin || (!p.gainLocked && (!p.agcLocked || p.radio?.driver === 'hackrf'));
   const canRate      = isAdmin || !(p.lockedRate && p.lockedRate > 0);
   /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
@@ -628,15 +658,37 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   Ported from the web client's rspCtls, which is the reference: the two clients
                   should offer the same radio the same things. */}
               <Text style={styles.section}>GAIN — {p.radio?.model || 'SDRplay RSP'}</Text>
+              {/* ★★★ THE FIGURES BELOW HAVE STOPPED BEING READINGS. The server sets `gainStuck`
+                  when its own gain writes stop landing, which freezes every API-sourced number
+                  here at whatever it last said. Offered as a TAP, never done automatically: the
+                  freeze is often inaudible (it froze on Stuart's RSP1A and left the signal
+                  perfectly clean), and the reset breaks everyone's audio for a moment.
+                  ★ Mirrors the web client's chip — same words, same rule, so an owner who has
+                    seen one recognises the other. */}
+              {p.rspGainStuck && (
+                <TouchableOpacity style={styles.adminBtn} onPress={() => p.onRspAgcRestart?.()}>
+                  <Text style={styles.adminBtnTxt}>
+                    SDRPLAY GAIN API FAILURE — TAP TO RESET (MAY CAUSE AN AUDIO DROP)
+                  </Text>
+                </TouchableOpacity>
+              )}
               {/* ★★ WHAT THE RADIO IS DOING, not what the sliders were last set to. The API
                   computes total system gain itself, and under AGC the IF reduction is the AGC's
                   to move — so a slider reading would be a lie while this is the truth. */}
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>System gain</Text>
                 <Text style={[styles.stepVal, p.rspOverload ? { color: '#ff8a7d' } : null]}>
+                  {/* ★★★ ZERO — AND NEGATIVE — IS A READING, NOT A MISSING READING. This tested
+                      `> 0` and drew a dash otherwise. On an RSP at medium wave the LNA states are
+                      ATTENUATORS, so a total system gain of 0.4 dB, or well below zero, is the
+                      honest truth about the front end. Measured on Stuart's RSP1A at 648 kHz,
+                      2026-09-13: −13.6 dB, which this panel would have shown as "—" while the web
+                      client printed the number. The web client fixed exactly this; the app kept it.
+                      ★ −999 is the server's "cannot read it" sentinel — the ONLY value that is a
+                        dash. See systemGainDb() in sdrplay_source.cpp. */}
                   {p.rspOverload ? 'OVERLOAD'
                     : p.rspSettling ? 'settling…'
-                    : (p.rspSysGain ?? 0) > 0 ? `${(p.rspSysGain ?? 0).toFixed(1)} dB` : '—'}
+                    : (p.rspSysGain ?? -999) > -998 ? `${(p.rspSysGain ?? 0).toFixed(1)} dB` : '—'}
                 </Text>
               </View>
               {/* ★ The radio raises OVERLOAD itself when its ADC clips — no inference from the
@@ -653,10 +705,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   onPress={() => p.onRspLna?.(Math.max(0, (p.rspLna ?? 0) - 1))}>
                   <Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
                 <Text style={styles.stepVal}>
-                  {(p.rspLna ?? 0)} / {Math.max(0, (p.radio?.lnaStates ?? 10) - 1)}
+                  {(p.rspLna ?? 0)} / {Math.max(0, lnaTop)}
                 </Text>
                 <TouchableOpacity style={styles.stepBtn}
-                  onPress={() => p.onRspLna?.(Math.min((p.radio?.lnaStates ?? 10) - 1, (p.rspLna ?? 0) + 1))}>
+                  onPress={() => p.onRspLna?.(Math.min(lnaTop, (p.rspLna ?? 0) + 1))}>
                   <Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
               </View>
               <Text style={styles.note}>0 = most RF gain. Higher states attenuate the front end.</Text>
@@ -666,6 +718,50 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Switch value={p.rspIfAgc !== false} onValueChange={(v) => p.onRspIfAgc?.(v)}
                   trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspIfAgc !== false ? C.gold : '#ccc'} />
               </View>
+
+              {/* ★★★ AND THE RF AGC, WHICH THIS PANEL HAD NO IDEA EXISTED. It is our own loop: it
+                  watches where the radio's IF AGC settles and steps the LNA to keep it in its
+                  comfortable range.
+                  ★ It belongs NEXT TO the IF one, exactly as in the web client, because an owner
+                    reading "IF AGC: AUTO" reasonably assumes that is the whole of the automatic
+                    gain — and then cannot explain why the RF gain is moving too. */}
+              {p.onRspRfAgc && (
+                <>
+                  <View style={styles.toggleRow}>
+                    <Text style={styles.toggleLabel}>RF AGC</Text>
+                    <Switch value={p.rspRfAgc !== false} onValueChange={(v) => p.onRspRfAgc?.(v)}
+                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfAgc !== false ? C.gold : '#ccc'} />
+                  </View>
+                  <Text style={styles.note}>
+                    Steps the LNA from where the radio's own IF AGC settles, so the front end sits
+                    as high as the IF can support.
+                  </Text>
+                </>
+              )}
+
+              {/* ★★★ THE AGC TARGET — declared in this panel's props since it was written and
+                  RENDERED NOWHERE. `rspAgcSet`/`onRspAgcSet` were used zero times in the body:
+                  written and never read, so the control existed in the contract and not on screen.
+                  ★ It is a TARGET, not a limit: −60 aims for a quiet output and so applies LESS
+                    gain, −20 aims loud and applies more. Easy to get backwards — it has been.
+                  ★ The server MOVES it on its own (DAB drops it to −40 for OFDM headroom), so the
+                    value shown is the live one from rspstat, never a remembered slider position. */}
+              {p.onRspAgcSet && p.rspIfAgc !== false && (
+                <>
+                  <Text style={styles.section}>AGC TARGET</Text>
+                  <View style={styles.stepperRow}>
+                    <Slider style={{ flex: 1 }}
+                            minimumValue={-72} maximumValue={-10} step={1}
+                            value={Math.max(-72, Math.min(-10, p.rspAgcSet ?? -30))}
+                            onSlidingComplete={(v: number) => p.onRspAgcSet?.(Math.round(v))}
+                            minimumTrackTintColor={C.gold} maximumTrackTintColor="#555" thumbTintColor={C.gold} />
+                    <Text style={styles.stepVal}>{p.rspAgcSet ?? -30} dBfs</Text>
+                  </View>
+                  <Text style={styles.note}>
+                    What the IF AGC aims the signal level at. Lower = quieter output and less gain.
+                  </Text>
+                </>
+              )}
 
               {/* ★ Hidden, not greyed, while the AGC owns it — a disabled slider still reads as
                   an offer, and the same rule removed the HF+'s rate picker. */}
@@ -690,21 +786,42 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
 
               {(p.radio?.rfNotch || p.radio?.dabNotch || p.radio?.biasT) && (
                 <>
-                  <Text style={styles.section}>FILTERS</Text>
+                  <Text style={styles.section}>
+                    FILTERS{!notchesOurs ? ' · AUTO' : ''}
+                  </Text>
+                  {/* ★★★ WHO OWNS THESE, AND SAY SO. With automatic notching on, the SERVER picks
+                      the notches from the tuned frequency and REFUSES a listener's request — "the
+                      notches are on automatic — …". This panel used to draw them as live switches
+                      anyway: you flipped one, the radio ignored it, the switch sprang back, and
+                      nothing explained why. Stuart, 2026-09-13: "the controls just appear dead."
+                      ★ Disabled and dimmed rather than HIDDEN, following the web client: "a
+                        listener who cannot find bias-T concludes the app lacks it; one who sees it
+                        greyed with a reason understands the operator made a choice." The state is
+                        still worth showing — what the notches ARE doing is useful even when they
+                        are not yours to move.
+                      ★ Still live for an admin: the refusal is aimed at listeners. */}
+                  {!notchesOurs && (
+                    <Text style={styles.note}>
+                      Automatic — this receiver chooses its notches from the tuned frequency. You
+                      can see what they are set to, but only the operator can change them.
+                    </Text>
+                  )}
                   {p.radio?.rfNotch && (
-                    <View style={styles.toggleRow}>
+                    <View style={[styles.toggleRow, notchesOurs ? null : { opacity: 0.45 }]}>
                       {/* ★★ RF, not FM: the RSP's broadcast notch covers MW AND FM (the call has
                           always been setRfNotch). Labelling it FM told anyone with MW breakthrough
                           there was nothing here for them. */}
                       <Text style={styles.toggleLabel}>RF notch (MW/FM)</Text>
-                      <Switch value={!!p.rspRfNotch} onValueChange={(v) => p.onRspRfNotch?.(v)}
+                      <Switch value={!!p.rspRfNotch} disabled={!notchesOurs}
+                        onValueChange={(v) => p.onRspRfNotch?.(v)}
                         trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfNotch ? C.gold : '#ccc'} />
                     </View>
                   )}
                   {p.radio?.dabNotch && (
-                    <View style={styles.toggleRow}>
+                    <View style={[styles.toggleRow, notchesOurs ? null : { opacity: 0.45 }]}>
                       <Text style={styles.toggleLabel}>DAB notch</Text>
-                      <Switch value={!!p.rspDabNotch} onValueChange={(v) => p.onRspDabNotch?.(v)}
+                      <Switch value={!!p.rspDabNotch} disabled={!notchesOurs}
+                        onValueChange={(v) => p.onRspDabNotch?.(v)}
                         trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspDabNotch ? C.gold : '#ccc'} />
                     </View>
                   )}

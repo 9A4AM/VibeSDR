@@ -395,7 +395,19 @@ final class UberClient: ObservableObject {
   @Published var radioModel = ""               // e.g. "RSPdx", "Airspy HF+ Discovery"
   @Published var radioHasBiasT = true
   // Per-radio gain capability, straight from the server's advert.
-  @Published var lnaStates = 0                 // SDRplay: number of LNA states
+  @Published var lnaStates = 0                 // SDRplay: LNA states AT THIS FREQUENCY (see rspstat)
+  /** ★ Automatic notching: the SERVER picks the notches from the tuned frequency and refuses a
+   *  listener's. A toggle it will refuse must not be offered as live. */
+  @Published var rspAutoNotch = false
+  /** ★ Whether listeners are allowed the notches at all (the owner's choice). */
+  @Published var rspUserNotch = true
+  /** ★ OUR RF loop — steps the LNA from where the radio's own IF AGC settles. */
+  @Published var rspRfAgc = false
+  /** ★ What the IF AGC aims the level at, dBFS. The SERVER moves this on its own (DAB drops it to
+   *  −40 for OFDM headroom), so it is live state, never a remembered control position. */
+  @Published var rspAgcSet = -30
+  /** ★ The SDRplay gain API has frozen: every gain figure is stale and a reset is available. */
+  @Published var rspGainStuck = false
   @Published var ifGrMin = 20                  // SDRplay: IF gain-reduction range, dB
   @Published var ifGrMax = 59
   @Published var attSteps = 0                  // Airspy HF+: attenuator positions (9 = 0..8)
@@ -1072,6 +1084,16 @@ final class UberClient: ObservableObject {
   ///   arrangement KiwiClient's `onRelay` uses for `topWfSpeed`, and for the same reason: the
   ///   constrained path deserves a lower frame rate, and only SpikeLink knows which path is live.
   nonisolated(unsafe) var onRelay = false
+
+  /// ★ OUR RF loop on/off, and the IF AGC's target. Wire keys are the server's own — `rfagc` and
+  ///   `agcset`, lower case — the same spelling its siblings use in rsp_control.
+  func setRspRfAgc(_ on: Bool) { rspRfAgc = on; rspSend(["rfagc": on ? 1 : 0]) }
+  func setRspAgcSet(_ dbfs: Int) {
+    let v = max(-72, min(-10, dbfs)); rspAgcSet = v; rspSend(["agcset": v])
+  }
+  /// ★ Ask the server to reset a frozen SDRplay gain API. Never automatic — the freeze is often
+  ///   inaudible, and the reset costs everyone listening a moment of audio.
+  func rspAgcRestart() { rspGainStuck = false; specSock.send(json: ["type": "rsp_agc_restart"]) }
 
   /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
@@ -2306,10 +2328,50 @@ final class UberClient: ObservableObject {
       status = "taken over by the owner"
       return
     }
+    /* ★★★ THE SERVER'S REFUSALS, WHICH JR NEVER PARSED AT ALL.
+     *
+     *  `notice` carries two different things: `text` is the owner's STANDING message to
+     *  listeners, and `why` is a REFUSAL of something this watch just asked for — "the notches
+     *  are on automatic — …", "the operator has reserved the notch filters", "the operator has
+     *  fixed this …". Jr handled neither, so a control an owner had locked simply did nothing and
+     *  said nothing. Stuart, 2026-09-13: "the controls just appear dead."
+     *
+     *  ★★ INTO `status`, WHICH IS JR'S TRANSIENT LINE — no new UI, and the same slot the takeover
+     *     and admin refusals above already use. The owner's standing `text` is deliberately NOT
+     *     shown here: it is persistent by nature and the watch has no slot that can hold it
+     *     without displacing the tuning readout. Refusals are what a listener needs at the moment
+     *     they press something.
+     *  ★ Same omission as the phone's, where `notice` WAS handled but only `text` was read. One
+     *     rule, three readers, and the refusal half was missing in every one. */
+    if type == "notice" {
+      if let why = j["why"] as? String, !why.isEmpty { status = why }
+      return
+    }
     if type == "rspstat" {
+      /* ★★★ HOW MANY LNA STATES EXIST **AT THIS FREQUENCY** — and it is not what hwinfo said.
+       *  `lnaStates` arrives from hwinfo as a per-MODEL capability, but the count is per BAND: an
+       *  RSP1A offers seven states on medium wave and ten higher up, per the API's own tables. So
+       *  the stepper's range covered states the radio silently clamps away, AND the displayed
+       *  figure was wrong, because rspLna is computed by subtracting from this very number. Only
+       *  the server knows which band the radio is in, so only the server may say — it sends
+       *  `lnaN` on every rspstat, and the web client has used it for weeks.
+       *  ★ Guarded on > 0 so an older server, or the moment before the first stat arrives, keeps
+       *    the capability value rather than collapsing the range to nothing. */
+      if let n = (j["lnaN"] as? NSNumber)?.intValue, n > 0 { lnaStates = n }
       sysGainDb = (j["sysGain"] as? NSNumber)?.doubleValue ?? sysGainDb
       rspLna    = max(0, lnaStates - 1) - ((j["lna"] as? NSNumber)?.intValue ?? 0)
       rspIfGr   = (j["ifgr"] as? NSNumber)?.intValue ?? rspIfGr
+      /* ★★★ AND THE REST OF WHAT THE SERVER HAS ALWAYS SENT. rspstat carries seventeen fields;
+       *  Jr read five. Each of these drives something that was wrong or missing:
+       *  · autoNotch/userNotch — WHO OWNS THE NOTCHES. With automatic notching on the server
+       *    refuses a listener's notch outright, so a live toggle here was a dead control.
+       *  · rfAgc/agcSet — our RF loop and the IF AGC's target, neither of which Jr knew existed.
+       *  · gainStuck — the SDRplay gain API has frozen; every figure above is stale. */
+      rspAutoNotch = ((j["autoNotch"] as? NSNumber)?.intValue ?? 0) != 0
+      rspUserNotch = ((j["userNotch"] as? NSNumber)?.intValue ?? 1) != 0
+      rspRfAgc     = ((j["rfAgc"] as? NSNumber)?.intValue ?? 0) != 0
+      rspAgcSet    = (j["agcSet"] as? NSNumber)?.intValue ?? rspAgcSet
+      rspGainStuck = ((j["gainStuck"] as? NSNumber)?.intValue ?? 0) != 0
       rspOverload = ((j["overload"] as? NSNumber)?.intValue ?? 0) != 0
       radioSettling = ((j["settling"] as? NSNumber)?.intValue ?? 0) != 0
       return
