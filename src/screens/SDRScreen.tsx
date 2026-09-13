@@ -804,6 +804,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sessionLimitMins: number =
     route.params.sessionLimitMins ?? sessionLimitForUrl(baseUrl) ?? 0;
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
+  /* ★★★ WHAT THE RECEIVER ITSELF SAYS ABOUT ITS LIMIT AND ITS CAPACITY.
+   *  `sessionLimitMins` above comes from the route param or the DIRECTORY — which is why an
+   *  UberSDR gets a countdown and a VibeServer does not: a VibeServer reached directly is in no
+   *  directory, so there was no limit to count down. But it PUBLISHES one. `fetchOccupancy` has
+   *  always parsed `limitMin` and `maxUsers` out of vibeserver.json and the screen used neither:
+   *  fetched and discarded. Stuart, 2026-09-13: "this receiver is yours for 30 minutes when
+   *  opening it, that is fine, but the clock is missing." */
+  const [occLimitMin, setOccLimitMin] = useState(0);
+  const [occMaxUsers, setOccMaxUsers] = useState(0);
   /** Counting down to handing a shared receiver back — null when not idle. */
   const [idleWarnLeftMs, setIdleWarnLeftMs] = useState<number | null>(null);
   /** The RECEIVER's own idle limit in seconds, 0 = it declares none. From POST /connection. */
@@ -4887,9 +4896,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     route params, which know nothing about who you turned out to be.
   useEffect(() => {
     if (adminOk) return;
-    if (!connected || !sessionLimitMins || sessionEndsAt) return;
-    setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
-  }, [connected, sessionLimitMins, sessionEndsAt, adminOk]);
+    /* ★ THE RECEIVER'S OWN LIMIT COUNTS TOO. The directory figure wins where it exists (it is the
+     *  operator's published promise for a listed server), and a VibeServer's self-declared
+     *  `limitMin` is what makes the clock appear on one reached directly — which is every
+     *  VibeServer on a LAN, and the case Stuart was looking at. */
+    const mins = sessionLimitMins || occLimitMin;
+    if (!connected || !mins || sessionEndsAt) return;
+    setSessionEndsAt(Date.now() + mins * 60_000);
+  }, [connected, sessionLimitMins, occLimitMin, sessionEndsAt, adminOk]);
 
   /** ★★★ IS THE LIMIT A DEADLINE OR A GUARANTEE? Asked of the RADIO we actually connected to
    *  (`connectBase`), not the front door — on a multi-radio server the door has no limit of its own
@@ -4909,6 +4923,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         //   listenerCount below. From occupancy, so it works on an EXCLUSIVE receiver too, where
         //   there is no dial state to read it from.
         if (Number.isFinite(Number(o.listeners))) setOccListeners(Number(o.listeners));
+        // ★ The two figures this poll has always carried and nobody read — see occLimitMin.
+        if (Number.isFinite(Number(o.limitMin)))  setOccLimitMin(Number(o.limitMin));
+        if (Number.isFinite(Number(o.maxUsers)))  setOccMaxUsers(Number(o.maxUsers));
         /* ★★★ TELL THE LISTENER WHAT THE LIMIT MEANS, ONCE, BEFORE IT MATTERS. The web client has
          *     said this since soft limits existed and the app never did — so on the same receiver
          *     a browser explained itself and the app did not (Stuart: "this message about the soft
@@ -8664,8 +8681,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                  + (sessionLeftMs != null && !adminOk ? 52 : 0),
             right: Math.max(12, insets.right + 8),
           }]}>
+            {/* ★★ "OF N" IS THE HALF THAT MAKES THE NUMBER MEAN ANYTHING. "2 listening" says
+                   nothing about whether there is room; "2 listening of 10" does — and it is what
+                   the web client has always shown. maxUsers was already being parsed here and
+                   thrown away. Only when the receiver takes more than one: on an exclusive radio
+                   "1 listening of 1" is noise. */}
             <Text style={styles.rxListenersTxt}>
-              {n === 1 ? '1 listening' : `${n} listening`}
+              {occMaxUsers > 1 ? `${n} listening of ${occMaxUsers}`
+                               : (n === 1 ? '1 listening' : `${n} listening`)}
             </Text>
           </View>
         );

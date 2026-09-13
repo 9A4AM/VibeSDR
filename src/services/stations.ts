@@ -126,12 +126,47 @@ export interface ReceiverInfo {
 }
 
 export async function fetchReceiverInfo(baseUrl: string): Promise<ReceiverInfo | null> {
+  const base = baseUrl.replace(/\/+$/, '');
   try {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/description`);
+    const res = await fetch(`${base}/api/description`);
+    if (res.ok) {
+      const d = await res.json() as { receiver?: ReceiverInfo; version?: string };
+      if (d?.receiver || d?.version) return { ...(d.receiver ?? {}), serverVersion: d.version };
+    }
+  } catch {
+    // fall through to /location
+  }
+  /* ★★★ A VIBESERVER DOES NOT SERVE /api/description — THAT IS AN UBERSDR ENDPOINT.
+   *
+   *  It answers 404, this returned null, and the whole station-ID overlay stayed empty: no
+   *  receiver name, no location, on a server that publishes both. Stuart, comparing the app with
+   *  the browser on the SAME receiver, 2026-09-13: "none of the server info shows, we already show
+   *  the server info for UberSDR."
+   *
+   *  ★★ /location IS WHAT THE WEB CLIENT READS, and it has been there all along — `loadServerLocation`
+   *     fetches exactly this and draws name-on-top, location-under-it. Measured on the live RSP1A:
+   *         { "name": "SDRplay RSP1A", "lat": 52.3125, "lon": -0.875, "grid": "IO92nh" }
+   *     which is precisely the three lines the browser shows top-right and the app showed none of.
+   *  ★ Tried SECOND, not first: where /api/description exists it is richer (callsign, antenna
+   *    prose, country) and it is the endpoint every UberSDR answers. This is a fallback, so no
+   *    existing server changes behaviour.
+   *  ★ `grid` goes in as the location line when there is no prose, formatted as the web client
+   *    formats it — coordinates then locator — because on a VibeServer that is all there is, and a
+   *    locator is the one thing a DX listener actually wants. */
+  try {
+    const res = await fetch(`${base}/location`);
     if (!res.ok) return null;
-    const d = await res.json() as { receiver?: ReceiverInfo; version?: string };
-    if (!d?.receiver && !d?.version) return null;
-    return { ...(d.receiver ?? {}), serverVersion: d.version };
+    const j = await res.json() as
+      { name?: string; label?: string; country?: string; grid?: string; lat?: number; lon?: number };
+    const name = (j?.name ?? '').trim();
+    const place = (j?.label ?? '').trim() || (j?.country ?? '').trim();
+    const coords = (typeof j?.lat === 'number' && typeof j?.lon === 'number')
+      ? `${j.lat.toFixed(2)}, ${j.lon.toFixed(2)}` : '';
+    const grid = (j?.grid ?? '').trim();
+    const location = [place || coords, place && coords ? coords : '', grid]
+      .filter(Boolean).join(' · ');
+    if (!name && !location) return null;
+    return { name, location };
   } catch {
     return null;
   }
