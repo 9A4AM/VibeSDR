@@ -2851,6 +2851,19 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                  "and every further step would be taken on evidence that cannot change. Holding RF "
                  "gain at state %d.", mean, deadSteps, sdrp->currentLnaState());
         }
+        // ★★★ A FROZEN READOUT BLINDS THE LOOP AS COMPLETELY AS A REJECTED WRITE, so it must
+        //     offer the same remedy. This branch used to hold silently and tell NOBODY: the
+        //     chip is raised only where the writes fail to land, and that left the radio
+        //     parked wherever the freeze caught it with no way out but a retune. On 96.6 it
+        //     caught it at MAXIMUM LNA — front-end intermod, overload flashing, the pilot
+        //     unable to lock, and no amount of gain adjustment helping, because the loop was
+        //     steering on a number that could not change (Stuart, 2026-09-13).
+        // ★★ THE HARM GATE STILL APPLIES DOWNSTREAM. rspstat only reports gainStuck when the
+        //    signal is actually saturated or starved, so a freeze on a clean, well-placed
+        //    signal stays silent — which is the DAB case that was deliberately not warned
+        //    about. Raising it here decides that the API is unreliable; whether that is worth
+        //    interrupting the listener for is still decided by the evidence.
+        g_rspApiStuck.store(true, std::memory_order_relaxed);
         outMs = 0; outDir = 0;
         return;
     }
