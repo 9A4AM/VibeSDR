@@ -3382,8 +3382,23 @@ $("saveRadioBtn").onclick = async () => {
                           {method:"POST", body: JSON.stringify(collect())});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      list[curRadio].configured = false;
-      $("saveErr").textContent = j.error || ("Save failed (" + r.status + ").");
+      /* ★★★ AN UNREACHABLE SERVER IS NOT A REJECTED SAVE — and here it did REAL DAMAGE, not just
+       *   wrong wording: `configured = false` rolled back this page's view of a radio the server
+       *   had ALREADY WRITTEN. Over a tunnel the proxy answers for an origin it cannot reach
+       *   (Cloudflare 404/503), so a momentary outage un-configured a radio that was saved
+       *   perfectly well, and the page said "Save failed (404)" while the server log said
+       *   "config saved by ..." (Stuart, 2026-09-13 — reported as a save bug for days).
+       * ★★ Only an answer carrying OUR OWN error body is a rejection. Everything else means we
+       *   could not reach it, and the right response is to leave the state alone and say so. */
+      const proxyOutage = !j.error && (r.status === 404 || r.status === 502
+                                       || r.status === 503 || r.status === 504);
+      if (!proxyOutage) list[curRadio].configured = false;
+      $("saveErr").textContent = j.error
+        ? j.error
+        : proxyOutage
+          ? ("Could not reach the server (" + r.status + ") — it may still have saved. "
+             + "Wait a moment and reload this page to check.")
+          : ("Save failed (" + r.status + ").");
       $("barMsg").textContent = "";
     } else {
       $("barMsg").textContent = "Saved. Restart the server below to put it on air.";
@@ -3430,7 +3445,23 @@ $("saveBtn").onclick = async () => {
                           {method:"POST", body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      $("saveErr").textContent = j.error || ("Save failed (" + r.status + ").");
+      /* ★★★ "SAVE FAILED" IS THE WRONG WORD FOR AN UNREACHABLE SERVER, and it has sent us
+       *   hunting a save bug for days. Over a tunnel the proxy answers for an origin it cannot
+       *   reach — Cloudflare returns 404 or 503 — so the page reported "Save failed (404)" about
+       *   a change the server had ALREADY WRITTEN: its log says "config saved by ..." at the
+       *   very moment the browser was told it had failed (Stuart, 2026-09-13).
+       * ★★ A 4xx/5xx FROM A PROXY IS NOT A REJECTION BY THE SERVER. Only an answer carrying our
+       *   own error body is that. Everything else is "we could not reach it", which is a
+       *   different thing to tell somebody: one means try again differently, the other means
+       *   wait and reload. */
+      const proxyOutage = !j.error && (r.status === 404 || r.status === 502
+                                       || r.status === 503 || r.status === 504);
+      $("saveErr").textContent = j.error
+        ? j.error
+        : proxyOutage
+          ? ("Could not reach the server (" + r.status + ") — it may still have saved. "
+             + "Wait a moment and reload this page to check.")
+          : ("Save failed (" + r.status + ").");
       $("barMsg").textContent = "";
       $("saveBtn").disabled = false;
       return;

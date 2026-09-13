@@ -445,6 +445,20 @@ void RxPipeline::rebuildAudio() {
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
             nb_.configure(chFs_, 0.020, 4.0f, 8.0 / std::max(1.0, chFs_)); nbRate_ = 0.0f;   // 8 samples, as before
+            /* ★★★ THE DEVIATION PEAK-HOLD MUST NOT COUNT THE TUNE-IN TRANSIENT. A retune makes
+             *   the discriminator produce a genuinely enormous excursion — the PLL slews, the IF
+             *   filter rings, the AGC steps — so the hold caught it and then decayed at its own
+             *   6 s rate, reading "110 kHz" on BBC Radio 1 and settling to 69. That is a real
+             *   output, but it is not the STATION's deviation, and attributing it to the station
+             *   is what made the readout look broken.
+             * ★★ Stuart diagnosed it from the DECAY PATTERN — "peaked at over 100, slowly
+             *   decayed, now hanging around 69" — while I had already written the measurement
+             *   off as wrong on the strength of that same peak. The settled figures were right
+             *   all along: R1 68-69, Heart 73-74, BBC Northampton 69.
+             * ★ Cleared here AND held off briefly below, because the transient outlasts the
+             *   reconfigure itself. */
+            mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxDevSettle_ = 0.0;
+            mpxLp1_ = mpxLp2_ = mpxLp3_ = 0.0f;
             ceq_.configure(9); ceqOut_.configure(chFs_);
             ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
             shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
@@ -1086,6 +1100,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 if (eyeHpA_ <= 0.0f && chFs_ > 0.0)
                     eyeHpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 15000.0 / chFs_));
                 if ((int)eyeHp_.size() < nc) eyeHp_.resize((size_t)nc);
+                // ★ Same reasoning as the biquads: a one-pole that goes non-finite stays there.
+                if (!std::isfinite(eyeHp1_) || !std::isfinite(eyeHp2_) || !std::isfinite(eyeHp3_))
+                    eyeHp1_ = eyeHp2_ = eyeHp3_ = 0.0f;
                 for (int i = 0; i < nc; ++i) {
                     const float x = demodBuf_[i];
                     eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
@@ -1111,17 +1128,52 @@ void RxPipeline::feed(const cf32* iq, int n) {
                  *  high-passed copy precisely BECAUSE the audio belongs in it.
                  * ★ A slower decay than the eye's scale: this is a peak-hold, and the point of a
                  *  deviation monitor is that a brief excursion is not missed between glances. */
+                // ★ Band-limit to where the composite actually lives before taking a peak —
+                //   see the note on mpxLpA_. Without this the reading counts noise as deviation.
+                if (!std::isfinite(mpxLp1_) || !std::isfinite(mpxLp2_) || !std::isfinite(mpxLp3_))
+                    mpxLp1_ = mpxLp2_ = mpxLp3_ = 0.0f;
+                if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevHold_))
+                    { mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; }
+                if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
+                if (mpxLpA_ <= 0.0f && chFs_ > 0.0)
+                    mpxLpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 110000.0 / chFs_));
                 float blockPk = 0.0f;
                 for (int i = 0; i < nc; ++i) {
-                    const float a = std::fabs(demodBuf_[i]);
+                    mpxLp1_ += mpxLpA_ * (demodBuf_[i] - mpxLp1_);
+                    mpxLp2_ += mpxLpA_ * (mpxLp1_ - mpxLp2_);
+                    mpxLp3_ += mpxLpA_ * (mpxLp2_ - mpxLp3_);
+                    const float a = std::fabs(mpxLp3_);
                     if (a > blockPk) blockPk = a;
                 }
                 // ★ Attack is instant, decay is timed — see the note on mpxDevSm_.
                 const double dt = (chFs_ > 0.0) ? (double)nc / chFs_ : 0.0;
+                // ★★ IGNORE THE FIRST 1.5 s AFTER A RETUNE — see the note at the reconfigure.
+                //    The excursion is real output but it belongs to the tune, not the station.
+                if (mpxDevSettle_ < 1.5) { mpxDevSettle_ += dt; blockPk = 0.0f;
+                                           mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; }
                 const float kSm   = (float)std::exp(-dt / 1.5);   // the panel's clock
                 const float kHold = (float)std::exp(-dt / 6.0);   // the tick lingers
-                mpxDevSm_   = (blockPk > mpxDevSm_)   ? blockPk : mpxDevSm_   * kSm;
-                mpxDevHold_ = (blockPk > mpxDevHold_) ? blockPk : mpxDevHold_ * kHold;
+                /* ★★★ THE BAR IS AVERAGED, NOT PEAK-HELD. It had INSTANT ATTACK with a 1.5 s
+                 *   decay, which is not averaging at all: one noisy sample threw it to the top
+                 *   and it walked back down, so on a weak signal it bounced continuously
+                 *   (Stuart, 2026-09-13: "its the weaker signals it is struggling on ... if it
+                 *   isn't already set then average it the same as the other measurements").
+                 *   Every other reading on this panel is smoothed in BOTH directions over
+                 *   ~1.5 s, which is exactly why they sit still — [[panel_readouts_need_one_clock]].
+                 * ★★ THE TICK KEEPS FAST ATTACK AND SLOW DECAY, because that IS a peak hold and
+                 *   catching the excursion is its entire job. Two different instruments on one
+                 *   bar: a smoothed level, and a maximum that remembers. */
+                const float aSm = 1.0f - kSm;
+                mpxDevSm_  += aSm * (blockPk - mpxDevSm_);
+                /* ★★ THE HOLD TRACKS THE AVERAGED VALUE, NOT THE RAW BLOCK PEAK. A peak-hold
+                 *  meter holds the maximum of THE THING THE BAR SHOWS — same quantity, different
+                 *  ballistics — which is why the tick normally sits just above the bar and drifts
+                 *  down. Holding the raw per-block maximum instead made it a different
+                 *  measurement entirely, so on a noisy signal it sat far away from the bar and
+                 *  the gap reported NOISE rather than programme dynamics (Stuart, 2026-09-13:
+                 *  "massively away from the bar ... if it was a peak hold meter it would be a lot
+                 *  closer"). */
+                mpxDevHold_ = (mpxDevSm_ > mpxDevHold_) ? mpxDevSm_ : mpxDevHold_ * kHold;
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
                 // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
                 //    channel rate, which is the most expensive thing that was in this loop and

@@ -2588,6 +2588,9 @@ let rdsFreq = -1;
 // learned station and the FM-DX dial are all keyed on. Storing it inside the name meant
 // throwing away a confirmed identity for want of a label (Stuart, 2026-07-26).
 let rdsPi = -1;
+/** ★ Whether the deviation readout is currently answering — latched, with hysteresis, so a
+ *  station sitting near the S/N threshold does not make it blink. See the note at its use. */
+let devGateOpen = false;
 let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
 let rdsSig = -99;   // 57 kHz level vs pilot, dB
 let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
@@ -8660,18 +8663,74 @@ function drawMpxEye() {
      *   and forgot the value being ABSENT.
      * ★★ AND A SANITY CEILING. Nothing legitimate exceeds ~100 kHz here, so a figure above that
      *   is evidence the input is noise rather than a station, whatever the S/N says. */
-    const usable = md > 0.1 && snr >= 20 && md <= 100;
+    /* ★★ NO CLIFF AT 100. Treating "over 100" as unusable dropped the bar to EMPTY and then
+     *  back to full as the value crossed it, so it flickered 0-to-max at the boundary rather
+     *  than simply reading high (Stuart, 2026-09-13). A reading that is too high is information;
+     *  an empty bar is not. It is clamped and labelled instead. */
+    /* ★★★ GATED ON A GENUINE PILOT LOCK, NOT ON A SIGNAL-TO-NOISE THRESHOLD.
+     *   Stuart: "is there any way of discarding the readings on the weaker stations? So only
+     *   show it if a genuine pilot lock has been obtained?" — and that is a far better test.
+     *   A locked pilot PROVES the composite is being recovered coherently; S/N is a continuous
+     *   number that flaps around whatever threshold you choose, which is why this readout kept
+     *   flickering in and out at its edge.
+     * ★★ LOCK ALONE IS NOT ENOUGH. 97.2 MHz reported "pilot 4.5 kHz · low · LOCKED" at 7 dB MPX
+     *   S/N, so the PLL can hold onto something poor. A pilot that is locked AND at a credible
+     *   level — near the 6.75 kHz the standard specifies — is evidence the whole composite is
+     *   intact, which is what this measurement depends on.
+     * ★ The S/N floor stays as a backstop, but the pilot is now the primary condition. */
+    /* ▶ PILOT GATE REMOVED — it was too aggressive. Requiring pilot >= 5 kHz rejected BBC R1 at
+     *   4.1 kHz "low · locked", which is a perfectly genuine lock, and the readout vanished on
+     *   stations worth measuring (Stuart, 2026-09-13). The idea is still right — a lock proves
+     *   the composite is recovered — but the LEVEL threshold was the wrong way to qualify it.
+     *   Left off entirely for now so the averaging can be judged on its own. */
+    /* ★★★ HYSTERESIS, BECAUSE ONE THRESHOLD ON A WANDERING MEASUREMENT IS A FLAP.
+     *   A hard gate at 20 dB made the readout appear and vanish on every station sitting near
+     *   it — Horizon at 19 dB, NLive at 18, Flex at 24 dipping below — as the S/N wandered a
+     *   point either way. Stuart: "sitting at what appears to be a normal deviation but then
+     *   bouncing to not measurable" (2026-09-13).
+     * ★★ THIS IS THE THIRD TIME THIS FAULT HAS BEEN BUILT IN THIS CODEBASE. CEQ flapped across
+     *   a single 6 % multipath threshold and wrecked stereo and RDS; the RSP's RF AGC hunted
+     *   because its window was narrower than one LNA step. Both are written up, and I made the
+     *   same mistake again. ENTER at 24 dB, LEAVE at 18 — two thresholds that cannot meet.
+     * ★ Latched per page rather than per frame, so it survives the gap between rdsx messages. */
+    /* ★★ LOW THRESHOLDS, BECAUSE THE GATE NO LONGER CONTROLS VISIBILITY. Once the readout
+     *  started DIMMING rather than vanishing, the gate stopped deciding whether you see a
+     *  number and started deciding only how much to trust it — so there is little cost in
+     *  letting a weak signal through with an "unreliable" tag, and a real cost in withholding a
+     *  figure somebody could sanity-check for themselves (Stuart, 2026-09-14: "why have a gate
+     *  on it at all? Maybe 10 dB").
+     *  ★ Some floor is still needed: at 6 dB MPX S/N the reading was 88 kHz, which is noise. */
+    const snrIn = 10, snrOut = 8;
+    if (snr >= snrIn) devGateOpen = true;
+    else if (snr > 0 && snr < snrOut) devGateOpen = false;
+    const usable = md > 0.1 && devGateOpen;
+    const overRange = md > 100;
     if (dv) {
-      if (!usable) { dv.textContent = 'deviation — not measurable'; dv.className = ''; }
+      /* ★★★ A READOUT MUST NOT DISAPPEAR. Stuart: "can't have a readout that disappears" — and
+       *   he is right: a row that vanishes reads as a broken feature, and it takes the panel's
+       *   layout with it. So the NUMBER IS ALWAYS SHOWN; what changes is how much weight it is
+       *   given. Below the S/N gate it is dimmed and labelled "low S/N", which says "here is the
+       *   figure, do not lean on it" rather than refusing to answer at all. */
+      if (!usable) {
+        dv.textContent = md > 0.1
+          ? `deviation ${md.toFixed(0)} kHz · low S/N, unreliable`
+          : 'deviation — no signal';
+        dv.className = 'dim';
+      }
       else {
         // 75 kHz is the legal peak. A little over is common on heavily processed stations; well
         // over is a fault worth seeing.
         // ★ The TEXT quotes the HOLD, because the question a deviation monitor answers is "did
         //   it go over", not "where is it this instant" — the bar already shows the latter.
-        const pk = Math.max(md, rdsExt?.mpxHold ?? 0);
-        const verdict = pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal';
-        dv.textContent = `deviation ${pk.toFixed(0)} kHz peak · ${verdict}`;
-        dv.className = pk > 82 ? 'bad' : pk > 75 ? 'ok' : 'good';
+        // ★ The TEXT quotes the smoothed level, not the hold: the hold is a transient catcher
+        //   and quoting it made every brief excursion look like the station's steady deviation.
+        //   The tick on the bar still shows where the maximum reached.
+        const pk = md;
+        const verdict = overRange ? 'implausible — not a real FM figure'
+                      : pk > 82 ? 'OVERMODULATED'
+                      : pk > 75 ? 'over the limit' : 'nominal';
+        dv.textContent = `deviation ${pk.toFixed(0)} kHz · ${verdict}`;
+        dv.className = (overRange || pk > 82) ? 'bad' : pk > 75 ? 'ok' : 'good';
       }
     }
     /* 0..100 kHz across the bar, so the 75 kHz limit sits three quarters along and
@@ -8687,9 +8746,11 @@ function drawMpxEye() {
      *   deviation monitor answers is "did it go over the limit", not "where is it this
      *   instant". So the bar is the slow peak-hold and the tick marks the same maximum, and the
      *   readout stops twitching syllable by syllable. */
-    const pkv  = Math.max(md, rdsExt?.mpxHold ?? 0);
-    const pct  = usable ? Math.max(0, Math.min(100, pkv)) : 0;
-    const hpct = pct;
+    // ★ The bar is drawn either way — dimmed by the CSS when the reading is not trusted.
+    const pct  = Math.max(0, Math.min(100, md));                       // averaged level
+    const hpct = Math.max(0, Math.min(100, rdsExt?.mpxHold ?? 0));     // the maximum it reached
+    const bar  = document.getElementById('rdsMpxBar');
+    if (bar) bar.classList.toggle('dim', !usable);
     if (fill) fill.style.width = `${pct}%`;
     if (hold) { hold.style.left = `${hpct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
   }

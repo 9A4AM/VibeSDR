@@ -2876,19 +2876,19 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                  "and every further step would be taken on evidence that cannot change. Holding RF "
                  "gain at state %d.", mean, deadSteps, sdrp->currentLnaState());
         }
-        // ★★★ A FROZEN READOUT BLINDS THE LOOP AS COMPLETELY AS A REJECTED WRITE, so it must
-        //     offer the same remedy. This branch used to hold silently and tell NOBODY: the
-        //     chip is raised only where the writes fail to land, and that left the radio
-        //     parked wherever the freeze caught it with no way out but a retune. On 96.6 it
-        //     caught it at MAXIMUM LNA — front-end intermod, overload flashing, the pilot
-        //     unable to lock, and no amount of gain adjustment helping, because the loop was
-        //     steering on a number that could not change (Stuart, 2026-09-13).
-        // ★★ THE HARM GATE STILL APPLIES DOWNSTREAM. rspstat only reports gainStuck when the
-        //    signal is actually saturated or starved, so a freeze on a clean, well-placed
-        //    signal stays silent — which is the DAB case that was deliberately not warned
-        //    about. Raising it here decides that the API is unreliable; whether that is worth
-        //    interrupting the listener for is still decided by the evidence.
-        g_rspApiStuck.store(true, std::memory_order_relaxed);
+        /* ★★★ REVERTED, SAME NIGHT, AND THE REASON MATTERS MORE THAN THE CHANGE.
+         *   This branch briefly raised g_rspApiStuck so a frozen readout would offer the same
+         *   tap-to-reset as a rejected write — the reasoning being that a loop steering on a
+         *   number which cannot change is blind either way. That reasoning still looks sound.
+         *   ★★ IT WAS WRONG IN PRACTICE. On a perfectly healthy radio — pilot locked, 32 dB MPX
+         *   S/N, 67 dB SNR, audio fine — the warning FLICKERED on and off, because the harm gate
+         *   it depends on flickers on a strong signal (Stuart, 2026-09-13: "SDRPlay API failure
+         *   is flickering on and off"). A warning that comes and goes on a working receiver is
+         *   worse than no warning at all: it teaches people to ignore the one that matters.
+         *   ★ So HOLD stays LOG-ONLY, as it was designed. The chip is raised only where our
+         *   writes are demonstrably NOT LANDING, which is a fact rather than an inference.
+         *   ▶ If a frozen readout should ever warn, it needs its own hysteresis and its own
+         *   evidence — not a share of this one's. */
         outMs = 0; outDir = 0;
         return;
     }

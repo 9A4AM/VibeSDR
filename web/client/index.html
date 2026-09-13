@@ -2227,6 +2227,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsMpxDev.good { color: #7dff9a; }
 #rdsMpxDev.ok   { color: #ffd479; }
 #rdsMpxDev.bad  { color: #ff8a7d; }
+/* ★ Not trusted, but still shown — see the note in drawMpxEye(). Dimming says "do not lean on
+   this" without the row vanishing and taking the layout with it. */
+#rdsMpxDev.dim  { color: var(--text-dim); opacity: 0.65; }
+#rdsMpxBar.dim  { opacity: 0.35; }
 #rdsEyeVerdict.ok  { color: #ffd479; }
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
 /* ★★ The 40vh cap here is what the ADV RDS "taller" button was fighting: the panel grew and
@@ -3034,6 +3038,23 @@ select.btn { padding: 6px 8px; }
              missing: PILOT DEV and RDS DEV measure their own components, this measures the WHOLE
              composite including audio against the 75 kHz limit. Suggested by Saber, 2026-09-13,
              and it is exactly what the eye has been DRAWING all along as a flattened top. -->
+        <!-- ★★★ THE DEVIATION MONITOR IS HIDDEN UNTIL IT IS MEASURED PROPERLY. Saber's idea is a
+             good one and the plumbing is all here, but the FIGURE was wrong and I changed it
+             three times in fifteen minutes without once checking it against a signal of known
+             deviation — it read "106 kHz peak, OVERMODULATED" on a clean 59 dB station, and then
+             flickered 0-to-max as it crossed the sanity ceiling (Stuart, 2026-09-13).
+             ★★ A READOUT THAT IS WRONG IS WORSE THAN NO READOUT: it invites someone to conclude a
+             station is overmodulating when it is not. The server still computes and sends
+             mpxDev/mpxHold, so turning this back on is one line once the scaling is verified —
+             ▶ against a known reference, not by eye on live signals. -->
+        <!-- ★★ THE PEAK HOLD MUST NOT COUNT THE TUNE-IN TRANSIENT. Reading "110 kHz then slowly
+             decaying to 69" is not a wrong measurement — it is a peak-hold catching the retune
+             (PLL slewing, IF filter ringing, AGC stepping) and decaying at its own 6 s rate.
+             Stuart spotted that from the DECAY PATTERN when I had already written the whole
+             thing off as broken; the settled figures — R1 68-69, Heart 73-74, Northampton 69 —
+             are right for BBC versus processed commercial (2026-09-13).
+             ★ And it stays VISIBLE while it is being calibrated: "how do I calibrate it if I
+             cannot see it". Hiding the instrument someone is testing with is no help. -->
         <div id="rdsMpxBar"><i id="rdsMpxFill"></i><b id="rdsMpxHold"></b><u id="rdsMpxLimit"></u></div>
         <div id="rdsMpxDev">—</div>
         <div id="rdsConstCap">constellation</div>

@@ -2278,6 +2278,15 @@ private:
      *  ★★ mpxDevSm_ rises INSTANTLY to a new peak and falls with a ~1.5 s time constant — the
      *  same clock as pilotDev, rdsDev and the eye, so the whole panel can be read together
      *  [[panel_readouts_need_one_clock]]. mpxDevHold_ falls far slower (~6 s) and is the tick. */
+    /** ★★★ AND IT MUST BE BAND-LIMITED FIRST. Taking the peak of the raw demodulator output
+     *  across the WHOLE channel counts everything above the composite — noise and filter ringing
+     *  — as deviation, which inflates it badly: Heart 96.6 at 59 dB SNR and 32 dB MPX S/N read
+     *  "106 kHz peak, OVERMODULATED" when nothing legitimate can exceed 75 (Stuart, 2026-09-13).
+     *  The PILOT reads correctly at the same moment because it is measured COHERENTLY and
+     *  ignores noise; a broadband peak cannot. Three cascaded one-poles at 110 kHz keep the
+     *  composite and drop what is above it. */
+    float mpxLpA_ = 0.0f, mpxLp1_ = 0.0f, mpxLp2_ = 0.0f, mpxLp3_ = 0.0f;
+    double                     mpxDevSettle_ = 0.0;  // seconds since retune; the transient is not the station
     float                      mpxDevSm_ = 0.0f;     // the bar — see RdsExt::mpxDevKHz
     float                      mpxDevHold_ = 0.0f;   // the tick — see RdsExt::mpxDevHoldKHz
 
@@ -2303,6 +2312,16 @@ private:
         inline float step(float x) {
             const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
             x2 = x1; x1 = x; y2 = y1; y1 = y;
+            /* ★★★ NaN IN AN IIR IS PERMANENT. These are high-Q resonators (14 and 9, cascaded),
+             *   and rapid retuning slams a step into them — big enough to overflow to inf, which
+             *   becomes NaN, and NaN then propagates through the state FOR EVER. The filter
+             *   never recovers, so the eye stayed blank and the deviation stayed at zero long
+             *   after the signal was fine again (Stuart, 2026-09-14: "caused the eye to crash
+             *   with rapid tuning").
+             * ★★ The rest of this file already guards its filters this way — see the isfinite
+             *   checks in NoiseBlanker and ImpulseBlanker. Mine did not, which is the whole bug:
+             *   a state that can never clear itself needs a way out. */
+            if (!std::isfinite(y)) { x1 = x2 = y1 = y2 = 0.0f; return 0.0f; }
             return y;
         }
     };
