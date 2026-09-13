@@ -7,6 +7,23 @@ Source: https://github.com/Stuey3D/VibeSDR
 
 ## Unreleased
 
+### Fixed — the "initialising" indicator went out too early (server 5.5.1)
+
+The chip that says a receiver's automatic gain is still setting itself up was driven by a flag
+covering only the first stage — a six-step kick lasting a few seconds. What follows it is what a
+listener actually watches: a settling period, a check that the radio's own AGC is alive, a single
+coarse gain placement that momentarily removes **every** signal from the display, and then the
+first ordinary correction. The indicator disappeared before all of that, so the receiver looked
+ready while the picture was still rearranging itself — including one moment where it goes
+completely flat.
+
+It now stays up for the whole cycle and goes when the gain has genuinely settled. Nothing about the
+gain control itself has changed: the flag is reported, never acted on.
+
+The web client's chip now reads **INITIALISING AGC** rather than SETTLING, and the phone app —
+which had no indicator on its main screen at all — scrolls the same message in its status bar.
+
+
 ### Fixed — audio that gave up, and a spectrum stuck at 2 frames a second (server 5.5.0)
 
 Two faults of the same shape, found hours apart in the same file, and each one left a listener
