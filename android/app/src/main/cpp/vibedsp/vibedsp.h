@@ -696,6 +696,7 @@ public:
         w_[(size_t)(n_ / 2)] = cf32{1.0f, 0.0f}; // pass-through until it learns otherwise
         hist_.assign((size_t)n_, cf32{0.0f, 0.0f});
         pos_ = 0;
+        p_ = 0.0f; pSeeded_ = false;             // the level is re-learned, never assumed
     }
     void reset() { configure(n_); }
     /** Adapt and filter in place. `mu` is the step size — small, because this runs at the channel
@@ -711,11 +712,38 @@ public:
                 y = cf32{ y.real() + w_[(size_t)k].real() * u.real() - w_[(size_t)k].imag() * u.imag(),
                           y.imag() + w_[(size_t)k].real() * u.imag() + w_[(size_t)k].imag() * u.real() };
             }
-            // ★ CMA error: drive |y|^2 toward 1. For a constant-envelope carrier the dispersion
-            //   constant IS the modulus, so there is nothing to estimate.
+            // ★★★ THE DISPERSION CONSTANT IS THE MEASURED INPUT POWER, NOT 1.
+            //     It used to read `e = p - 1.0f`, with a comment saying that for a
+            //     constant-envelope carrier the dispersion constant IS the modulus so there is
+            //     nothing to estimate. True — and the modulus is NOT 1. Samples reach here
+            //     scaled so that ADC full scale is 1.0, and the AGC parks a station near
+            //     -26 dBFS, so the real modulus is about 0.05. Driving |y| to 1 asked the taps
+            //     for 20x of GAIN, which is not equalisation at all.
+            // ★★★ AND THE STEP MUST BE NORMALISED BY IT. The update is proportional to
+            //     e * y * conj(u), which scales as the FOURTH power of amplitude — so a step
+            //     size tuned at one level is wrong by orders of magnitude at another. Dividing
+            //     by p_^2 makes convergence amplitude-invariant, which is what mu = 2e-4 always
+            //     assumed it was.
+            // ★★★ MEASURED, 2-ray echo of 0.45 at 3 samples, envelope ripple in = 0.293:
+            //         amplitude   before this fix   after
+            //           1.000         0.016         0.017
+            //           0.250         0.041         0.017
+            //           0.050         0.854         0.017     <- THREE TIMES WORSE THAN NOTHING
+            //           0.015         0.428         0.017     <- worse than nothing
+            //     So on an RTL running near full scale it worked, and on an RSP at -26 dBFS it
+            //     AMPLIFIED the very distortion it exists to remove. "The CEQ we built and
+            //     tested on RTL-SDR's is damaging here" (Stuart, 2026-09-12) — this is the
+            //     mechanism, and it is the same fault shape as the noise blanker's k = 4.0:
+            //     a constant that was only ever true on the radio it was tuned on.
+            // ★★ IT ALSO STOPS BEING AN AGC. Targeting the input level means the output leaves
+            //    at the level it arrived, so the taps sit at pass-through (energy ~1) and the
+            //    runaway guard below is meaningful again rather than a level detector.
+            const float pin = z[i].real() * z[i].real() + z[i].imag() * z[i].imag();
+            if (!pSeeded_) { p_ = pin; pSeeded_ = true; }
+            p_ += 1.0e-4f * (pin - p_);
             const float p = y.real() * y.real() + y.imag() * y.imag();
-            const float e = p - 1.0f;
-            const float g = mu * e;
+            const float e = p - p_;
+            const float g = mu * e / (p_ * p_ + 1.0e-20f);
             for (int k = 0; k < n_; ++k) {
                 const cf32& u = hist_[(size_t)((pos_ - k + n_ * 2) % n_)];
                 // w -= mu * e * y * conj(u)
@@ -746,6 +774,8 @@ public:
     }
 private:
     int n_ = 9, pos_ = 0;
+    float p_ = 0.0f;                 // running input power — the dispersion constant
+    bool  pSeeded_ = false;
     std::vector<cf32> w_, hist_;
 };
 
