@@ -63,7 +63,7 @@ export class UberSDRAdapter implements SDRBackend {
      *  server would leave the next 30 MHz one believing it could tune to 60. */
     // Local hardware tunes far beyond UberSDR's HF cap.
     this.caps = { ...(local ? LOCAL_CAPS : UBERSDR_CAPS) };
-    if (!local) void this.learnTuningRange(baseUrl);
+    if (!local) { void this.learnTuningRange(baseUrl); void this.learnExtensions(baseUrl); }
     if (local) {
       this.client.minHz = LOCAL_CAPS.freqRange[0];
       this.client.maxHz = LOCAL_CAPS.freqRange[1];
@@ -120,6 +120,29 @@ export class UberSDRAdapter implements SDRBackend {
        *     session — grep before reaching for a plausible one. */
     } catch {
       // A receiver that will not say keeps 10 kHz - 30 MHz, per their documented contract.
+    }
+  }
+
+  /** ★★★ ASK WHAT THIS RECEIVER RUNS. `/api/extensions` answers
+   *  `{ available: [{ slug, displayName }], default: … }` — confirmed live on a public receiver,
+   *  which listed: clock, cw-spots, digital-spots, drm, dx-cluster, flexcontrol, freedv, fsk, ft8,
+   *  midi-control, morse, navtex, olivia, qrss, radio-sync, soundmodem, sstv, stats, wefax,
+   *  whisper.
+   *  ★ Failure stays silent and the UI keeps offering everything: not being able to ask is not
+   *    evidence that a decoder is absent, and hiding the lot on a fetch error would be a far worse
+   *    outcome than the dead control this replaces. */
+  private async learnExtensions(baseUrl: string): Promise<void> {
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/extensions`);
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = Array.isArray(j?.available) ? j.available : Array.isArray(j) ? j : [];
+      const slugs = list
+        .map((x: any) => (typeof x === 'string' ? x : x?.slug))
+        .filter((x: any): x is string => typeof x === 'string' && !!x);
+      if (slugs.length) this.cb.onExtensions?.(slugs);
+    } catch {
+      // Could not ask — the UI keeps offering everything, as before.
     }
   }
 

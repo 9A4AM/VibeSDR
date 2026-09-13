@@ -1577,6 +1577,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
   const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
+  /** ★★★ THE EXTENSION SLUGS THIS RECEIVER PUBLISHES, or null for "never asked / could not ask".
+   *  null must keep the old behaviour — offer everything — because a failed fetch is not evidence
+   *  a decoder is missing. See onExtensions. */
+  const [srvExtensions, setSrvExtensions] = useState<string[] | null>(null);
   /* ★★★ OWRX'S MAGIC KEY — the operator's password for the controls they have locked.
    *  Confirmed against owrx/connection.py: it rides as `params.key` on `selectprofile` (a LOCKED
    *  profile is refused without it) and on `setfrequency` (centre-frequency changes). A GitHub
@@ -4252,6 +4256,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
+      // ★ What this receiver actually runs — see srvExtensions.
+      onExtensions: (slugs: string[]) => { if (!destroyed.current) setSrvExtensions(slugs); },
       /* ★ OWRX explaining itself — most usefully "This profile is locked, keeping current
        *  profile.", which it sends while snapping the picker back. Through the VTS, the same
        *  channel as the VibeServer refusals, so every backend's refusals land in one place. */
@@ -9230,6 +9236,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         decoderControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' && (!isLandscape || isTablet) ? {
           decMode: selDecoder, decOn: activeDecoder !== null && activeDecoder === selDecoder, isLocal,
           onDecToggle, rttySettings, onRttySettings, wefaxLpm, onWefaxLpm,
+          /* ★ What this receiver actually runs. null = we could not ask, and the row then offers
+           *  everything exactly as it always did — see srvExtensions. */
+          serverExtensions: srvExtensions,
           timeStation: timeStationPref,
           onTimeStation: (v: string) => {
             setTimeStationPref(v);

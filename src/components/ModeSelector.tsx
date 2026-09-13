@@ -173,6 +173,11 @@ interface ModeSelectorProps {
      *  DAB fully rather than restore the box" — which is correct for THIS button; it is the
      *  decoder box's own X that was conflating the window with the mode. */
     dabAvail?: boolean; dabOn?: boolean; onDab?: () => void;
+    /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
+     *  A decoder the server does not run is a DEAD CONTROL — it presses, and nothing happens. So
+     *  the row is filtered to what is actually there. null offers everything, because a failed
+     *  fetch is not evidence of absence. */
+    serverExtensions?: string[] | null;
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
     /** '' / 'auto' = choose from the tuned frequency. Anything else forces that station. */
     timeStation?: string; onTimeStation?: (s: string) => void;
@@ -428,7 +433,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {/* ★ TIME reads the standard time signals — MSF, DCF77, WWV/WWVH, WWVB, RWM. It
                   picks the station from the frequency you are on, so there is nothing to choose
                   here beyond turning it on. */}
-              {(['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).map(k => {
+              {/* ★★★ ONLY WHAT THIS RECEIVER RUNS. The names are UberSDR's, so the mapping sits
+                     here at the point of use: our `rtty` is their `fsk`, our `time` is their
+                     `clock`, and the rest match. A server without wefax no longer offers a WEFAX
+                     button that does nothing (AGENTS.md — never offer a control whose every use is
+                     a no-op).
+                  ★ An unknown list (null, or a receiver that would not answer) offers them ALL,
+                    which is exactly today's behaviour — not being able to ask must never look the
+                    same as "the server hasn't got it". */}
+              {(['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
+                const ext = decoderControls.serverExtensions;
+                if (!ext || !ext.length) return true;
+                const slug = k === 'rtty' ? 'fsk' : k === 'time' ? 'clock' : k;
+                return ext.includes(slug);
+              }).map(k => {
                 const active = decoderControls.decMode === k && decoderControls.decOn;
                 const selected = decoderControls.decMode === k && !decoderControls.decOn;
                 return (

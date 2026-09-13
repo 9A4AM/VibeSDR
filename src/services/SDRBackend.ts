@@ -322,6 +322,17 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  ★ Not onError — that path is for terminal CONNECTION failures and retries the socket. A
    *    refusal is neither: the receiver is working and is telling you about the thing you asked. */
   onLogMessage?: (text: string) => void;
+  /** ★★★ WHAT THIS SERVER ACTUALLY HAS — the slugs from UberSDR's `/api/extensions`.
+   *
+   *  We never asked. The decoder row is a hardcoded list, so we simultaneously offered decoders a
+   *  receiver does not run (press it, nothing happens — a dead control) and hid ones it does.
+   *  Stuart, 2026-09-13: "we need to ask what the server have and present viewers and options for
+   *  whatever we can."
+   *  ★ The names are THEIRS, so the mapping lives at the point of use: our `rtty` is their `fsk`,
+   *    our `time` is their `clock`. Everything else matches.
+   *  ★ Empty or never-called means "could not ask" — and that must keep today's behaviour rather
+   *    than hiding every decoder, so the UI treats an unknown list as "offer them all". */
+  onExtensions?: (slugs: string[]) => void;
   /** OWRX: an inbound chat message (server broadcasts incl. our own echo). */
   onChatMessage?: (name: string, text: string, color?: string) => void;
   /** OWRX: whether the server has chat enabled (config `allow_chat`). */
