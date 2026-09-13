@@ -2177,6 +2177,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: var(--text-dim); font-size: 10px; letter-spacing: 0.5px;
   text-transform: uppercase; margin-top: 3px;
 }
+/* ★ Reads like the constellation's verdict, because it is doing the same job. */
+#rdsEyeVerdict {
+  font-size: 11px; letter-spacing: 0.3px; margin-top: 2px;
+  font-family: var(--mono, monospace); color: var(--text-dim);
+}
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
 /* ★★ The 40vh cap here is what the ADV RDS "taller" button was fighting: the panel grew and
    its PARENT clipped it, landing exactly on the spectrum/waterfall divide and looking like
@@ -2971,7 +2976,14 @@ select.btn { padding: 6px 8px; }
              one. This is where overmodulation shows up as a flattened top — the one fault the
              spectrum and the constellation both hide (Stuart, 2026-09-13). -->
         <canvas id="rdsEyeMpx" width="180" height="76"></canvas>
-        <div id="rdsEyeCap">composite eye · above 15 kHz · <span id="rdsEyeDev">—</span></div>
+        <!-- ★★ IT HAS TO EXPLAIN ITSELF. "composite eye · above 15 kHz · ±4 kHz" is three pieces
+             of jargon and a number whose meaning is not obvious even once you know what it is
+             (Stuart, 2026-09-13: "can we improve the reading of that a bit so that others will
+             understand it too"). Same treatment as the constellation's verdict: name the plot,
+             say plainly what has been taken out of it, and then say what you are LOOKING at
+             rather than only how far the axis goes. -->
+        <div id="rdsEyeCap">composite eye · audio removed</div>
+        <div id="rdsEyeVerdict">—</div>
         <div id="rdsConstCap">constellation</div>
         <!-- ★ A plain-English verdict, because the plot expects you to already know how to
              read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the

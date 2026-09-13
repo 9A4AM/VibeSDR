@@ -8562,9 +8562,9 @@ function drawMpxEye() {
   g.fillRect(0, 0, W, H);
   const eye = rdsExt?.eye ?? '';
   const ew = rdsExt?.eyeW ?? 0, eh = rdsExt?.eyeH ?? 0;
-  const dev = $('rdsEyeDev');
+  const vd = $('rdsEyeVerdict');
   if (!eye || ew <= 0 || eh <= 0 || eye.length < ew * eh) {
-    if (dev) dev.textContent = '—';
+    if (vd) vd.textContent = '—';
     return;
   }
   // The zero line, and the boundary between the two pilot cycles — the only two references
@@ -8585,11 +8585,26 @@ function drawMpxEye() {
       g.fillRect(x * cw, y * ch, Math.ceil(cw), Math.ceil(ch));
     }
   }
-  // ★ SAY WHAT FULL SCALE IS. The plot autoscales — a quiet passage genuinely shrinks the
-  //   composite, and without this the display would look identical at every level.
-  if (dev) {
+  /* ★★ SAY WHAT YOU ARE LOOKING AT, THEN THE SCALE — not the scale alone.
+   *  The plot autoscales, so without a figure it would look identical at every level; but a bare
+   *  "±14 kHz" tells you how far the axis goes and nothing about whether that is good, which is
+   *  the question anyone actually has (Stuart, 2026-09-13). So: a plain-English reading of what
+   *  is up there, then the scale, in the same style as the constellation's verdict below it.
+   *  ★ DELIBERATELY NOT PRESENTED AS A CALIBRATED DEVIATION. The 15 kHz high-pass passes 38 kHz
+   *    at about 93 % but the 19 kHz pilot at only about 48 %, so this figure UNDER-READS when the
+   *    pilot dominates. PILOT DEV and RDS DEV beside it are the accurate numbers; this is the
+   *    plot's scale, and the wording says so rather than implying a measurement.
+   *  ★ A LOW READING IS NOT A FAULT. Mono speech, or a blend that has pulled the stereo in,
+   *    legitimately reads low — so the words say which, and never "weak" or "bad". */
+  if (vd) {
     const d = rdsExt?.eyeDev ?? 0;
-    dev.textContent = d > 0.1 ? `±${d.toFixed(0)} kHz` : '—';
+    let what: string;
+    if (d < 3)       what = 'little above the audio — mono, or fully blended';
+    else if (d < 10) what = 'pilot dominates · little stereo';
+    else if (d < 25) what = 'pilot, stereo and RDS';
+    else if (d < 50) what = 'strong stereo';
+    else             what = 'very strong · near full deviation';
+    vd.textContent = d > 0.1 ? `${what} · scale ±${d.toFixed(0)} kHz` : '—';
   }
 }
 
