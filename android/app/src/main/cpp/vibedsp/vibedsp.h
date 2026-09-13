@@ -427,6 +427,10 @@ private:
     double rate_ = 0.0, tau_ = 0.020;
     float k2_ = 16.0f, avgP_ = 0.0f; bool seeded_ = false;
     int maxRun_ = 8, run_ = 0;
+    // ★ Stood down after a run longer than maxRun_, and re-armed only by a sample genuinely
+    //   below the threshold. Without this the escape sample reset run_ and the blanker held
+    //   8 samples in every 9 for ever — see blankOne() in iqclean.cpp.
+    bool armed_ = true;
     cf32 last_{0.0f, 0.0f};
     long long blanked_ = 0, seen_ = 0;
     std::vector<float> p_;

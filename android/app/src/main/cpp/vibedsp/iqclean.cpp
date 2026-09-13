@@ -255,7 +255,7 @@ void ImpulseBlanker::configure(double rate, double tauSec, float k, double maxRu
 }
 
 void ImpulseBlanker::reset() {
-    avgP_ = 0.0f; seeded_ = false; run_ = 0; last_ = cf32{0.0f, 0.0f};
+    avgP_ = 0.0f; seeded_ = false; run_ = 0; armed_ = true; last_ = cf32{0.0f, 0.0f};
     blanked_ = 0; seen_ = 0;
 }
 
@@ -321,7 +321,7 @@ void ImpulseBlanker::process(cf32* z, int n) {
         const float32x4_t vthr = vdupq_n_f32(thr);
         for (; k + 4 <= n; k += 4) {
             uint32x4_t hit = vcgtq_f32(vld1q_f32(p + k), vthr);
-            if (vmaxvq_u32(hit) == 0) { last_ = z[k + 3]; run_ = 0; continue; }
+            if (vmaxvq_u32(hit) == 0) { last_ = z[k + 3]; run_ = 0; armed_ = true; continue; }
             for (int t = 0; t < 4; ++t) blankOne(z, k + t, p[k + t] > thr);
         }
     }
@@ -330,7 +330,7 @@ void ImpulseBlanker::process(cf32* z, int n) {
         const __m128 vthr = _mm_set1_ps(thr);
         for (; k + 4 <= n; k += 4) {
             const int mask = _mm_movemask_ps(_mm_cmpgt_ps(_mm_loadu_ps(p + k), vthr));
-            if (!mask) { last_ = z[k + 3]; run_ = 0; continue; }
+            if (!mask) { last_ = z[k + 3]; run_ = 0; armed_ = true; continue; }
             for (int t = 0; t < 4; ++t) blankOne(z, k + t, (mask >> t) & 1);
         }
     }
@@ -344,12 +344,41 @@ void ImpulseBlanker::process(cf32* z, int n) {
         const float a = (float)std::min(1.0, (double)keptN / (tau_ * rate_));
         avgP_ += a * (m - avgP_);
         if (!std::isfinite(avgP_) || avgP_ <= 0.0f) { avgP_ = m; }
+    } else {
+        // ★★★ NOTHING WAS BELOW THE THRESHOLD — AND THAT IS NOT IMPULSE NOISE.
+        //     The reference is deliberately fed only from kept samples so the loudest
+        //     interference cannot define "normal" (see the note above). That is right for
+        //     impulses and WRONG for a level STEP: when every sample is above the threshold,
+        //     keptN is zero, the update is skipped, and the one mechanism that could raise
+        //     the threshold is switched off — permanently. Seed the reference low on a weak
+        //     station, tune to a strong local, and the blanker latches at full duty for ever
+        //     while every weaker station stays clean. That is precisely what 104.2 and 96.6
+        //     did while their neighbours were untouched (Stuart, 2026-09-13).
+        // ★★ An impulse is BRIEF by definition, so it cannot occupy a whole block. A block
+        //    with no sub-threshold sample in it is a new signal level, and re-seeding from
+        //    the block mean is the only reading available that is not the stale one.
+        double s = 0.0;
+        for (int t = 0; t < n; ++t) s += p[t];
+        const float m = (float)(s / (double)n);
+        if (std::isfinite(m) && m > 0.0f) avgP_ = m;
     }
 }
 
 inline void ImpulseBlanker::blankOne(cf32* z, int i, bool hit) {
-    if (hit && run_ < maxRun_) { z[i] = last_; ++run_; ++blanked_; }
-    else { run_ = 0; last_ = z[i]; }
+    // ★★★ A RUN LIMIT THAT RESETS ON ITS OWN ESCAPE SAMPLE BLANKS 8 IN EVERY 9.
+    //     This used to read `else { run_ = 0; ... }`, so the sample let through at the limit
+    //     immediately re-armed the counter and the next one blanked again: eight held, one
+    //     passed, for ever. The panel reported exactly 88.9 % on a 69 dB signal and every
+    //     downstream reading collapsed — no pilot, no RDS lock, no measurable multipath on
+    //     BBC Northampton 104.2 (Stuart, 2026-09-13). The class comment above promises this
+    //     path "fails safe rather than silent"; it failed safe for one sample in nine.
+    // ★★ So the limit now STANDS THE BLANKER DOWN until a sample lands genuinely below the
+    //    threshold. A long run means this is the signal, a fade or the AGC moving — none of
+    //    which are impulses — and the only honest response is to stop blanking and wait.
+    if (!hit) { run_ = 0; armed_ = true; last_ = z[i]; return; }
+    if (armed_ && run_ < maxRun_) { z[i] = last_; ++run_; ++blanked_; return; }
+    armed_ = false;
+    last_ = z[i];
 }
 
 float ImpulseBlanker::rate() {
