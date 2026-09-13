@@ -145,6 +145,13 @@ export interface RdsExt {
   ceqWhy: number;
   xy: number[];          // interleaved x,y as signed bytes (x100)
   mpx: number[];         // MPX spectrum, dB per bin, DC..100 kHz
+  /** The composite eye: eyeW*eyeH intensities, row 0 = top (+peak), one printable character
+   *  per cell at base 33 (see the note where it is built). eyeDev is the kHz deviation that
+   *  full scale currently represents, because the plot autoscales. */
+  eye: string;
+  eyeW: number;
+  eyeH: number;
+  eyeDev: number;
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -1068,6 +1075,10 @@ export class SpectrumClient {
           ceqWhy: Number(msg.ceqWhy ?? 3),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
+          eye: typeof msg.eye === 'string' ? msg.eye : '',
+          eyeW: Number(msg.eyeW ?? 0),
+          eyeH: Number(msg.eyeH ?? 0),
+          eyeDev: Number(msg.eyeDev ?? 0),
         });
         break;
       case 'sig':

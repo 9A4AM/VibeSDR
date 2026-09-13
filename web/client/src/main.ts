@@ -1686,7 +1686,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         }
       } else grpPrev = { tot: x.gtot, at: now };
       rdsExt = x;
-      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
+      if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
     },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
@@ -7793,7 +7793,7 @@ function showDecBox(what: string) {
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
   $('decText').classList.toggle('off', image || isSpots || isRds);
-  if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); }
+  if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
   // PREV/SAVE buttons entirely for text/spot decoders.
@@ -8529,6 +8529,59 @@ function drawEye() {
     const px = (i / (n - 1)) * (W - 2) + 1;
     const py = mid - x * k;
     g.fillRect(px, py, 1.5, 1.5);
+  }
+}
+
+/** ★★ THE COMPOSITE EYE — the MPX in TIME, the view the pira.cz oscillograms show.
+ *
+ *  ★★★ THE TRIGGER IS THE PILOT PLL, not an edge detector. A scope has to find something to
+ *      trigger on and its trigger jitters; we already track the 19 kHz pilot coherently, so
+ *      every sweep is aligned by construction and the picture is sharper than the instrument
+ *      the idea came from. Two pilot cycles wide, so the 57 kHz RDS braids three times across
+ *      each of them.
+ *
+ *  ★ WHAT IT ADDS over the spectrum and the constellation beside it: composite PEAK behaviour.
+ *  Overmodulation and clipping flatten the tops here and are invisible in both of the others.
+ *
+ *  The grid arrives already accumulated with persistence, one printable character per cell.
+ */
+function drawMpxEye() {
+  const c = $<HTMLCanvasElement>('rdsEyeMpx');
+  const g = c.getContext('2d');
+  if (!g) return;
+  const W = c.width, H = c.height;
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  const eye = rdsExt?.eye ?? '';
+  const ew = rdsExt?.eyeW ?? 0, eh = rdsExt?.eyeH ?? 0;
+  const dev = $('rdsEyeDev');
+  if (!eye || ew <= 0 || eh <= 0 || eye.length < ew * eh) {
+    if (dev) dev.textContent = '—';
+    return;
+  }
+  // The zero line, and the boundary between the two pilot cycles — the only two references
+  // that mean anything on a composite, and both are exact rather than estimated.
+  g.strokeStyle = 'rgba(255,160,60,0.30)';
+  g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+  g.strokeStyle = 'rgba(255,160,60,0.18)';
+  g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
+  const cw = W / ew, ch = H / eh;
+  for (let y = 0; y < eh; y++) {
+    for (let x = 0; x < ew; x++) {
+      const v = eye.charCodeAt(y * ew + x) - 33;   // 0..63, base 33 — see the server note
+      if (v <= 0) continue;
+      // Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
+      // faint outliers are the whole point of a persistence display.
+      const a = Math.pow(v / 63, 0.45);
+      g.fillStyle = `rgba(125,255,154,${(0.06 + 0.94 * a).toFixed(3)})`;
+      g.fillRect(x * cw, y * ch, Math.ceil(cw), Math.ceil(ch));
+    }
+  }
+  // ★ SAY WHAT FULL SCALE IS. The plot autoscales — a quiet passage genuinely shrinks the
+  //   composite, and without this the display would look identical at every level.
+  if (dev) {
+    const d = rdsExt?.eyeDev ?? 0;
+    dev.textContent = d > 0.1 ? `±${d.toFixed(0)} kHz` : '—';
   }
 }
 
