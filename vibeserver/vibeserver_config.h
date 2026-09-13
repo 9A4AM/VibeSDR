@@ -212,6 +212,8 @@ struct Config {
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
+    bool autoDirectSampling = false;             // see RadioConfig
+    double directSamplingBelowHz = 24e6;         // see RadioConfig
     /** ★ DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. Opt-in: on a
      *  weak device the slower rate is the REAL ceiling and a borrow it cannot sustain is worse
      *  than no DAB at all (Stuart, on the XCover at 1.2 MS/s). See g_dabRateBoost in the shim. */
@@ -443,6 +445,26 @@ struct RadioConfig {
     int    nbWide = 1;             // ★ wide impulse blanker: 0 off, 1 auto (below 30 MHz), 2 on
     std::string blockedModes;      // per radio — see Config::blockedModes
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
+    /** ★★★ AUTOMATIC DIRECT SAMPLING FOR HF — switch the Q branch in below a crossover and back
+     *  out above it, so a V3-era dongle covers HF without the listener knowing the trick exists.
+     *
+     *  ★★ OFF BY DEFAULT, AND IT MUST STAY THAT WAY. Three independent reasons:
+     *   1. It changes the radio for EVERYONE listening, like gain and the filters.
+     *   2. WE CANNOT DETECT WHETHER THE HF HARDWARE IS THERE. The V3 feeds the Q branch through
+     *      a filter and transformer; a bare clone has no HF path at all and will enter direct
+     *      sampling and hear almost nothing. Defaulting this on would turn a working receiver
+     *      into an apparently dead one below the crossover.
+     *   3. On an RTL-SDR Blog V4 it is actively wrong — see the warning the setup page shows.
+     *  ★ The V4 has a built-in upconverter (an SA612 at 28.8 MHz into the R828D's triplexed HF
+     *    input), so HF already arrives through the tuner WITH gain control. Enabling this there
+     *    would bypass the very thing making its HF good. We warn and never lock: an R828D does
+     *    not PROVE a V4 — ordinary DVB-T dongles use it too — so refusing would act on an
+     *    inference as if it were a fact (Stuart, 2026-09-13). */
+    bool   autoDirectSampling = false;
+    /** The crossover, in true RF Hz. The R820T/R828D tuner bottoms out around 24 MHz and V3-era
+     *  direct sampling is usable from roughly 500 kHz to there, so 24 MHz is the default — but
+     *  clone input filters vary, so it is settable rather than baked in. */
+    double directSamplingBelowHz = 24e6;
 
     /** ★★★ DOES THE LANDING PAGE'S SPECTROGRAM — AND THE BAND CONDITIONS — COME FROM THIS RADIO?
      *

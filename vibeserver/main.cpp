@@ -2469,6 +2469,13 @@ int main(int argc, char** argv) {
     LocalSdrShim::instance().setConverter(g_runtimeConfig.converterOffsetHz,
                                           g_runtimeConfig.converterInputLoHz,
                                           g_runtimeConfig.converterInputHiHz);
+    // ★ Set unconditionally, for the same reason the converter is: this is what makes turning it
+    //   OFF take effect, and what puts a dongle left in direct sampling back on its tuner.
+    LocalSdrShim::instance().setAutoDirectSampling(g_runtimeConfig.autoDirectSampling,
+                                                   g_runtimeConfig.directSamplingBelowHz);
+    if (g_runtimeConfig.autoDirectSampling)
+        std::printf("  automatic direct sampling: below %.3f MHz the tuner is bypassed "
+                    "(no gain control there)\n", g_runtimeConfig.directSamplingBelowHz / 1e6);
     if (g_runtimeConfig.converterOffsetHz != 0)
         std::printf("  converter: LO %.3f MHz — listeners see true RF, the tuner is offset\n",
                     g_runtimeConfig.converterOffsetHz / 1e6);

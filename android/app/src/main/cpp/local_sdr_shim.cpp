@@ -2600,6 +2600,18 @@ static std::atomic<bool> g_rspApiStuck{false};
 /** ★ A listener has tapped the chip. Performed on the radio thread, never where it arrives. */
 static std::atomic<bool> g_rspAgcRestartReq{false};
 
+/* ── AUTOMATIC DIRECT SAMPLING FOR HF (RTL only) ─────────────────────────────────────────────
+ * ★★ An owner setting, OFF by default — see RadioConfig::autoDirectSampling for why it must stay
+ *    that way. Below the crossover the Q branch is switched in; above it, the tuner comes back.
+ * ★★★ THE SWITCH HAPPENS ON THE TUNER THREAD, THE ANNOUNCEMENT DOES NOT. Broadcasting from
+ *     there would take clientMtx while devMtx is held, which is the lock order this file has
+ *     already been bitten by. So the crossing only sets a flag and onSpectrum() — which runs for
+ *     every radio and already talks to clients — sends it. Same shape as the AGC restart queue. */
+static std::atomic<bool>   g_autoDs{false};
+static std::atomic<double> g_dsBelowHz{24e6};
+static std::atomic<int>    g_dsNow{-1};        // the mode actually applied: -1 unknown, 0 off, 2 Q
+static std::atomic<int>    g_dsAnnounce{0};    // 0 nothing, 1 entered DS, 2 left DS
+
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
  *   forward for a global is how a file grows an ordering dependency nobody can see. */
 static constexpr int kGrLowPub = 30, kGrHighPub = 50;   // ★ the working window, for logs elsewhere
@@ -7120,6 +7132,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
     void onSpectrum(const float* db, int bins) {
+        // ★ The crossover cannot announce itself from the tuner thread — see g_dsAnnounce.
+        drainDirectSamplingAnnounce();
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
         for (int i = 0; i < bins; i++) fftAccum[i] += db[i];
         if (++accumCount < FFT_AVG) return;
@@ -9559,6 +9573,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendNoticeNow() {
         const std::string body = "{\"type\":\"notice\",\"text\":\""
                                + vibeadmin::esc(g_vsNotice.current()) + "\"}";
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
+    }
+
+    /** ★★ SAY WHAT JUST CHANGED UNDER THE LISTENER'S FEET. Crossing the direct-sampling
+     *  boundary bypasses the tuner — gain control stops meaning anything and the noise floor
+     *  moves — and an unexplained change like that reads as a fault in the receiver rather than
+     *  as the mode switch it is. Sent as a plain `notice`, which every client already renders
+     *  (a pill on the web, the scrolling bar in the app), so it needs no new message type on
+     *  either side. */
+    void drainDirectSamplingAnnounce() {
+        const int a = g_dsAnnounce.exchange(0, std::memory_order_relaxed);
+        if (!a) return;
+        const std::string body = std::string("{\"type\":\"notice\",\"text\":\"")
+            + (a == 1
+               ? "Switching to direct sampling mode for HF \xe2\x80\x94 the tuner is bypassed "
+                 "below this point, so gain control is not available."
+               : "Switching back to quadrature sampling \xe2\x80\x94 gain control is restored.")
+            + "\"}";
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
     }
 
@@ -13051,6 +13083,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "]"
+                          // ★ What the dongle calls itself, so the setup page can warn that a
+                          //   Blog V4 does not want automatic direct sampling — see deviceModel().
+                          + ",\"model\":\"" + LocalSdrShim::instance().deviceModel() + "\""
                           // ★ The tuner's IF filter, so the page can show what is set.
                           //   0 = librtlsdr's automatic choice. RTL only; the RSP and the
                           //   HF+ have no equivalent knob, and drawing one that cannot act
@@ -18589,6 +18624,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (hz) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) {
+                        /* ★★ THE CROSSOVER, BEFORE THE FREQUENCY. Direct sampling changes what
+                         *  the centre frequency even means to the hardware, so switching after
+                         *  the tune would spend one write in the wrong mode. */
+                        if (g_autoDs.load(std::memory_order_relaxed)) {
+                            const double below = g_dsBelowHz.load(std::memory_order_relaxed);
+                            const int want = ((double)hz < below) ? 2 : 0;   // 2 = Q branch
+                            if (want != g_dsNow.load(std::memory_order_relaxed)) {
+                                const int rc = rtlsdr_set_direct_sampling(dev, want);
+                                if (rc == 0) {
+                                    const int was = g_dsNow.exchange(want, std::memory_order_relaxed);
+                                    LOGI("auto direct sampling: %s at %.3f MHz (crossover %.3f MHz)",
+                                         want ? "ON (Q branch, tuner bypassed)" : "OFF (tuner)",
+                                         hz / 1e6, below / 1e6);
+                                    // ★ Only announce a real CHANGE, never the first placement:
+                                    //   a listener arriving on HF has not crossed anything.
+                                    if (was >= 0) g_dsAnnounce.store(want ? 1 : 2,
+                                                                     std::memory_order_relaxed);
+                                } else {
+                                    LOGI("auto direct sampling: set(%d) REFUSED rc=%d — leaving as is",
+                                         want, rc);
+                                }
+                            }
+                        }
                         const int frc = rtlsdr_set_center_freq(dev, hz);
                         hwWrLastHz = hz;
                         if (frc != 0)
@@ -23647,6 +23705,39 @@ void LocalSdrShim::setDirectSampling(int mode) {
     if (!p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
 }
+std::string LocalSdrShim::deviceModel() const {
+    if (!p) return "";
+    if (p->useSdrplay() && p->sdrp) return p->sdrp->model();
+    // ★ Same source and same reasoning as the `radio.model` field further down: the USB strings
+    //   carry what is written on the box, and librtlsdr's own name is "Generic RTL2832U OEM" for
+    //   every dongle ever made — which is exactly why it cannot be used to tell a V4 apart.
+    if (p->usbIndex >= 0) {
+        char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
+        if (rtlsdr_get_device_usb_strings((uint32_t)p->usbIndex, mfr, prd, ser) == 0 && prd[0]) {
+            std::string n = std::string(mfr[0] ? mfr : "") + (mfr[0] ? " " : "") + prd;
+            for (auto& c : n) if (c == '"' || c == '\\') c = ' ';
+            return n;
+        }
+    }
+    return "";
+}
+
+void LocalSdrShim::setAutoDirectSampling(bool on, double belowHz) {
+    // ★ A sane floor on the crossover: 0 would mean "never", and a figure above the tuner's own
+    //   lower limit would strand the dongle in direct sampling where the tuner works perfectly.
+    if (!(belowHz > 0.0) || belowHz > 60e6) belowHz = 24e6;
+    g_autoDs.store(on, std::memory_order_relaxed);
+    g_dsBelowHz.store(belowHz, std::memory_order_relaxed);
+    // ★★ TURNING IT OFF MUST PUT THE RADIO BACK. Otherwise a dongle left in direct sampling by a
+    //    previous setting stays deaf above the crossover with nothing on screen to explain why.
+    if (!on && g_dsNow.load(std::memory_order_relaxed) == 2) {
+        setDirectSampling(0);
+        g_dsNow.store(0, std::memory_order_relaxed);
+    }
+    if (!on) g_dsNow.store(-1, std::memory_order_relaxed);
+    LOGI("auto direct sampling: %s (crossover %.3f MHz)", on ? "on" : "off", belowHz / 1e6);
+}
+
 // ★ Each of these records the choice in g_dsp FIRST and only then touches the live radio, so
 // the value is remembered even when there is no radio to apply it to yet. applyDesiredDsp()
 // replays the record onto every newly built Impl.

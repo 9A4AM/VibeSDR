@@ -696,6 +696,13 @@ public:
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC
     void setDirectSampling(int mode);     // 0=off, 1=I, 2=Q (not needed on Blog V4)
+    /** ★ Automatic direct sampling for HF — see RadioConfig::autoDirectSampling. Set every time
+     *  the config is applied, like setConverter(), so turning it OFF takes effect too. */
+    void setAutoDirectSampling(bool on, double belowHz);
+    /** ★ What the hardware calls ITSELF — the USB descriptor ("RTLSDRBlog Blog V4L"), not
+     *  librtlsdr's generic tuner name. The setup page needs it to spot a V4, whose internal
+     *  up-converter makes automatic direct sampling the wrong choice. Empty if unknown. */
+    std::string deviceModel() const;
     void setSampleRate(double rate);
     /** ★ True when the serving radio is an Airspy HF+, whose sample rate is PINNED at open —
      *  changing it on a live stream is a path no other SDR client takes and ours could leave the

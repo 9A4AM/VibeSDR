@@ -419,6 +419,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
+    B("autoDirectSampling", r.autoDirectSampling); N("directSamplingBelowHz", r.directSamplingBelowHz);
     N("converterOffsetHz", r.converterOffsetHz);
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
@@ -465,6 +466,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
+    B("autoDirectSampling", r.autoDirectSampling); N("directSamplingBelowHz", r.directSamplingBelowHz);
     N("converterOffsetHz", r.converterOffsetHz);
     N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
@@ -534,6 +536,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
+    r.autoDirectSampling = one.autoDirectSampling;
+    r.directSamplingBelowHz = one.directSamplingBelowHz;
     r.converterOffsetHz = one.converterOffsetHz;
     r.converterInputLoHz = one.converterInputLoHz; r.converterInputHiHz = one.converterInputHiHz;
     r.port = one.port;
@@ -855,6 +859,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rtlAgc      = r.rtlAgc;
     c.biasT = r.biasT;
     c.ppm = r.ppm; c.ppb = r.ppb; c.directSampling = r.directSampling;
+    c.autoDirectSampling = r.autoDirectSampling;
+    c.directSamplingBelowHz = r.directSamplingBelowHz;
     c.converterOffsetHz = r.converterOffsetHz;
     c.converterInputLoHz = r.converterInputLoHz; c.converterInputHiHz = r.converterInputHiHz;
     c.port = r.port;

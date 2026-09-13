@@ -992,6 +992,39 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            <br><strong>An RTL-SDR Blog V4 needs none of this</strong> — its up-converter is
            internal and it already reports true frequencies.</p>
       </div>
+      <!-- ★★★ AUTOMATIC DIRECT SAMPLING — next to the converter because both answer the SAME
+           question: how does this radio reach HF? An owner who sets one without seeing the other
+           is exactly who ends up with both (Stuart, 2026-09-13).
+           ★★ OFF BY DEFAULT and it must stay so: it changes the radio for everyone, we cannot
+              detect whether the HF hardware is even fitted, and on a V4 it is actively harmful.
+           ★★★ WARN, NEVER LOCK. Neither warning below disables anything or blocks a save —
+                "there could be some real random reason a user may want both options set". -->
+      <div id="hwAutoDs" style="margin-top:10px">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="autoDs" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Automatic Direct Sampling for HF</span></label>
+        <label style="margin-top:6px"><span class="lbl">Switch below (MHz)</span>
+          <input type="number" id="autoDsBelow" step="0.1" placeholder="24"></label>
+        <p id="autoDsV4" class="why hide" style="border-left:3px solid var(--amber);padding-left:8px">
+           <strong>This looks like an RTL-SDR Blog V4.</strong> It has its own up-converter, so it
+           already hears HF through the tuner <em>with</em> gain control. Direct sampling would
+           bypass that and make HF worse, not better. You can still switch it on if you have a
+           reason to.</p>
+        <p id="autoDsClash" class="why hide" style="border-left:3px solid #ff8a7d;color:#ff8a7d;padding-left:8px">
+           <strong>Configuration mismatch.</strong> A converter is fitted <em>and</em> automatic
+           direct sampling is on. Those are two different ways to reach HF and they will fight:
+           the converter moves HF up to where the tuner works, and this switches the tuner off.
+           Saving is still allowed.</p>
+        <p class="why">For dongles that reach HF by <em>direct sampling</em> — the RTL-SDR Blog V3,
+           the Nooelec NESDR SMArt v5 and similar. Below the crossover the tuner is bypassed and
+           the signal is taken straight off the ADC; above it, the tuner comes back. Listeners are
+           told when it switches.
+           <br><strong>The tuner is what provides gain</strong>, so while direct sampling is active
+           there is no gain control at all. That is the hardware, not a limitation we added.
+           <br>Leave this off unless you know your dongle has an HF input. A plain clone will
+           happily switch over and hear almost nothing, because there is no HF path to the ADC.
+           24 MHz is the usual crossover — the tuner cannot go below roughly there.</p>
+      </div>
       <!-- ★★★ WHAT THE LANDING PAGE MEASURES FROM. Offered only to a radio with a FIXED window:
            a receiver a listener can retune contributes a smear with a hole in it every time
            somebody uses it, and a radio that releases when idle is letting go of the device at
@@ -2842,6 +2875,41 @@ function fill() {
     // ★ Light the preset that matches what was just loaded — see the note on syncPresets.
     if (window.__syncConvPresets) window.__syncConvPresets();
   }
+  /* ★★ AUTOMATIC DIRECT SAMPLING — load, then decide which warnings apply. Neither warning
+   *  disables the control or blocks a save; they only say what we can see. */
+  if ($("autoDs")) {
+    $("autoDs").checked = !!r.autoDirectSampling;
+    if ($("autoDsBelow"))
+      $("autoDsBelow").value = (r.directSamplingBelowHz ? r.directSamplingBelowHz : 24e6) / 1e6;
+    (function () {
+      /* ★★★ MATCH ON THE NAME WE ALREADY READ. RTL-SDR Blog sets the USB string descriptors
+       *   (manufacturer "RTLSDRBlog", product "Blog V4" / "Blog V4L"), which is why two dongles
+       *   with the SAME USB ID and the same librtlsdr device name still identify themselves.
+       *   "Blog V4" covers the V4 and the V4 Lite. The tuner type would be an inference; this
+       *   is what the hardware actually says about itself.
+       * ★★ A NESDR SMArt v5 must NOT match: it reaches HF BY direct sampling, so it is a radio
+       *   this setting HELPS. Only the V4 family has the internal up-converter. */
+      /* ★ The name comes from the HARDWARE probe (hw.model — the USB descriptor), not from the
+       *   radio's config: r.name is the label the owner typed, which says nothing about the
+       *   dongle. Falling back to the config would make this warning depend on what someone
+       *   called their receiver. */
+      var nm = String((typeof hw === "object" && hw && hw.model) || "");
+      var isV4 = /blog\s*v4/i.test(nm);
+      var v4 = $("autoDsV4"); if (v4) v4.classList.toggle("hide", !isV4);
+      function syncClash() {
+        var el = $("autoDsClash"); if (!el) return;
+        var lo = Math.abs(parseFloat(($("convLo") || {}).value || "0")) || 0;
+        var on = $("autoDs") && $("autoDs").checked;
+        el.classList.toggle("hide", !(lo > 0 && on));
+      }
+      if (!$("autoDs").__wired) {
+        $("autoDs").__wired = 1;
+        $("autoDs").addEventListener("change", syncClash);
+        if ($("convLo")) $("convLo").addEventListener("input", syncClash);
+      }
+      syncClash();
+    })();
+  }
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
   // ★ 300 s is the historical default, so a radio saved before this control existed
@@ -3063,6 +3131,14 @@ function collectRadio() {
     })(),
     converterInputLoHz: 0,
     converterInputHiHz: Math.round(parseFloat($("convHi") ? $("convHi").value || "0" : "0") * 1e6),
+
+    /* ★ Sent every time, like the converter above and for the same reason: this is the field
+     *   that lets an owner turn it OFF. Gated out when zero it could never be un-set. */
+    autoDirectSampling: !!($("autoDs") && $("autoDs").checked),
+    directSamplingBelowHz: (function () {
+      var mhz = parseFloat($("autoDsBelow") ? $("autoDsBelow").value || "0" : "0");
+      return (mhz > 0) ? Math.round(mhz * 1e6) : 24000000;
+    })(),
 
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.
