@@ -569,7 +569,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     const pilotSeen = (x?.pilotDev ?? 0) > 0.5;
     if (!locked && pilotSeen) return { t: 'pilot present but not locking — forms and collapses', c: C.warn };
     if (!locked)              return { t: 'no pilot — untriggered, so this is noise not a trace', c: C.bad };
-    if (snr > 0 && snr < 20)  return { t: 'buried in noise — level not measurable', c: C.bad };
+    // ★ Same latched gate as the meter below, so the two readouts in one box cannot contradict
+    //   each other on a station sitting near the threshold.
+    if (snr > 0 && !devGate.current) return { t: 'buried in noise — level not measurable', c: C.bad };
     let what: string;
     if (d < 3)       what = 'little above the audio — mono or blended';
     else if (d < 10) what = 'pilot dominates · little stereo';
@@ -584,10 +586,19 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  one the eye draws as a flattened top while nothing reports it. Averaged on the panel's
    *  clock; the number NEVER disappears, it dims and says so, because a row that vanishes reads
    *  as a broken feature (Stuart, 2026-09-13). */
+  /* ★★★ HYSTERESIS, SAME AS THE WEB METER — 10 dB in, 8 dB out. One threshold on a wandering
+   *  measurement is a flap: a station sitting on the line makes the label blink between trusted
+   *  and unreliable. This codebase has built that fault three times already (CEQ across one
+   *  multipath threshold, the RF AGC window narrower than one LNA step, and this readout), so
+   *  the two figures deliberately cannot meet.
+   *  ★ A ref rather than state: it must not trigger a re-render, only colour the next one. */
+  const devGate = useRef(false);
   const mpxDevInfo = useMemo(() => {
     const md = x?.mpxDev ?? 0;
     const snr = x?.mpxSnr ?? 0;
-    const ok = md > 0.1 && snr >= 10;
+    if (snr >= 10) devGate.current = true;
+    else if (snr > 0 && snr < 8) devGate.current = false;
+    const ok = md > 0.1 && devGate.current;
     if (!(md > 0.1)) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
     const pk = md;
     const t = ok
