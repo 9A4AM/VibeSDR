@@ -1079,11 +1079,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     if (a > eyePeak_) eyePeak_ = a;
                 }
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
-                const double kSpan = 2.0 * 2.0 * M_PI;        // two pilot cycles
+                // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
+                //    channel rate, which is the most expensive thing that was in this loop and
+                //    entirely avoidable: a fractional part is floor-and-subtract. Working in
+                //    TURNS (0..1) instead of radians removes the division too, leaves one
+                //    multiply and one floor per sample, and is straightforwardly vectorisable
+                //    if it ever needs to be (Stuart asked what it costs, 2026-09-13).
+                // bitClk = (cycle*2pi + phase)/16, so bitClk * 16/(4pi) is the position in
+                // two-pilot-cycle units; its fractional part is the sweep position.
+                const float kTurns = (float)(16.0 / (2.0 * 2.0 * M_PI));
                 for (int i = 0; i < nc; ++i) {
-                    double ph = std::fmod((double)bitClkBuf_[i] * 16.0, kSpan);
-                    if (ph < 0.0) ph += kSpan;
-                    int cx = (int)(ph * (double)kEyeW / kSpan);
+                    const float t = bitClkBuf_[i] * kTurns;
+                    const float frac = t - std::floor(t);     // 0..1 across two pilot cycles
+                    int cx = (int)(frac * (float)kEyeW);
                     if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
                     // Row 0 is the TOP, so +full scale is drawn at the top like a scope.
                     const float u = eyeHp_[i] * inv;          // -1..+1
