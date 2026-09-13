@@ -434,7 +434,20 @@ final class SpikeLink: ObservableObject {
       else if path.usesInterfaceType(.wifi) { tr = .wifi }
       else if path.usesInterfaceType(.cellular) { tr = .cellular }
       else { tr = .none }
-      Task { @MainActor in if self?.transport != tr { self?.transport = tr } }
+      Task { @MainActor in
+        guard let self, self.transport != tr else { return }
+        self.transport = tr
+        /* ★★★ AND TELL THE LIVE CLIENT, because the watch changes path MID-SESSION — that is the
+         *  normal case, not an edge one. Walk away from the phone and the relay gives way to the
+         *  watch's own wifi; walk back and it returns. A frame rate chosen once at connect would
+         *  be wrong for most of the session.
+         *  ★ VibeServer only: Kiwi's wf_speed is fixed during its handshake, and UberSDR is driven
+         *    by LinkManager's measured ladder rather than by which interface is carrying it. */
+        if let u = self.client as? UberClient, u.isVibe {
+          u.onRelay = (tr == .iphone)
+          u.applyVibeFrameRate()
+        }
+      }
     }
     pathMonitor.start(queue: pathQueue)
   }
@@ -562,6 +575,9 @@ final class SpikeLink: ObservableObject {
       // ADPCM audio). `host` is host:port; scheme from the url (https/wss → secure).
       let u = UberClient(waterfall: waterfall)
       u.isVibe = true
+      // ★ BEFORE start(), exactly as the Kiwi case above: the first fftRate goes out as soon as
+      //   the spectrum socket is ready, and it must already know which path it is on.
+      u.onRelay = (transport == .iphone)
       u.secure = url.hasPrefix("https") || url.hasPrefix("wss")
       u.host = host
       u.vibePin = pin

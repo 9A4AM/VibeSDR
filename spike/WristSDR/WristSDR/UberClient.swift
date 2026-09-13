@@ -1067,8 +1067,45 @@ final class UberClient: ObservableObject {
     specSock.send(json: ["type": "deemph", "tau": Double(tau) * 1e-6])
     saveVibeHw()
   }
+  /// ★ Reaching the server through the paired iPhone's Bluetooth relay? Set by SpikeLink before
+  ///   start() and kept current as the watch moves between the relay and its own wifi — the same
+  ///   arrangement KiwiClient's `onRelay` uses for `topWfSpeed`, and for the same reason: the
+  ///   constrained path deserves a lower frame rate, and only SpikeLink knows which path is live.
+  nonisolated(unsafe) var onRelay = false
+
   /// FFT frame rate — the primary adaptive-quality lever (the shim's `fftRate`).
   func setFftRate(_ fps: Int) { guard isVibe else { return }; specSock.send(json: ["type": "fftRate", "value": fps]) }
+
+  /// ★★★ THE RATE JR ACTUALLY WANTS — AND IT HAD NEVER ONCE ASKED FOR IT.
+  ///
+  /// `setFftRate` existed, was documented as "the primary adaptive-quality lever", and was CALLED
+  /// FROM NOWHERE. Its only occurrence in the app was its own definition. The comment on
+  /// `adaptiveRung` states that Jr's lower frame rate is "a DELIBERATE bins/fftRate choice" — the
+  /// `bins` half is sent on the URL, and the `fftRate` half was never wired up at all.
+  ///
+  /// ★★★ AND ASKING FOR NOTHING IS NOT THE SAME AS ASKING FOR THE DEFAULT. A VibeServer with one
+  ///     listener who never names a rate sat on its 2 fps IDLE FLOOR — measured on the live RSP1A:
+  ///     one silent client got 2.0 fps, and the instant a second client connected both jumped to
+  ///     15.0. So Jr was not merely un-optimised, it was getting a fifteenth of the frames, alone
+  ///     on a receiver. Stuart: "Jr seems to not be interpolating the VibeServer spectrum and seems
+  ///     to be extremely slow and not very detailed" — then, when it was measured, "I KNEW it was
+  ///     slower." The server end of that is fixed too, but Jr must still say what it wants.
+  ///
+  /// ★★ 5 fps ON THE PHONE RELAY, more on the watch's own radio. Stuart: "Jr takes 5FPS over the
+  ///    bluetooth connection, only increasing when on Wifi." The relay is the constrained path —
+  ///    `LinkManager` already records that 5 is the floor a USER may pin because "the interpolation
+  ///    can hide that" — while wifi and cellular have the headroom for the server's own default.
+  /// ★ Sent on every spectrum (re)connect and whenever the transport changes, because the watch
+  ///   moves between the relay and its own wifi while running — that is the normal case, not an
+  ///   edge one, and a rate chosen once at launch would be wrong for most of the session.
+  func applyVibeFrameRate() {
+    guard isVibe else { return }
+    let fps = onRelay ? 5 : 15
+    setFftRate(fps)
+    // ★ Seed the interpolator with the rate we just asked for rather than making it rediscover a
+    //   cadence we already know — the same courtesy the UberSDR ladder does in linkMgr's apply.
+    waterfall.setExpectedRowRate(Double(fps))
+  }
   /// Force mono — the ABR last resort (only meaningful on WFM).
   func setStereo(_ on: Bool) { guard isVibe else { return }; specSock.send(json: ["type": "stereo", "on": on]) }
 
@@ -1810,6 +1847,8 @@ final class UberClient: ObservableObject {
       Task { @MainActor in
         guard let self, self.specOpenSeq == seq else { return }
         self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
+        // ★★★ AND ASK FOR A FRAME RATE, WHICH JR NEVER DID.
+        self.applyVibeFrameRate()
         self.armSpectrumWatchdog()
       }
     }

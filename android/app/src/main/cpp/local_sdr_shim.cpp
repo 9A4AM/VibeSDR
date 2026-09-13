@@ -6019,6 +6019,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             };
             if (specClient && specClient->isOpen()) acc(specClient);
             for (auto& s : specExtra) if (s && s->isOpen()) acc(s);
+            /* ★★★ AND THE PER-CLIENT-DSP LISTENERS, WHO LIVE IN A THIRD LIST. On a LOCKED receiver
+             *  with room for several people, a listener's spectrum socket is held in clientDsp —
+             *  not in specClient or specExtra. Walking only those two means that on exactly the
+             *  receiver built to carry several listeners, NONE of them is counted: `want` is 0 and
+             *  the engine takes its 2 fps idle floor while every one of them is watching.
+             *  ★ Same omission as specListenerCountLocked had, in the same file: one definition of
+             *    "somebody is here", and a list that a later feature added without telling the
+             *    readers. Ask: who ELSE reads this? (AGENTS.md.) */
+            for (auto& kv : clientDsp) {
+                auto& c = kv.second;
+                if (c && c->spec && c->spec->isOpen()) acc(c->spec);
+            }
         }
         /* ★★★ NOBODY IS WATCHING: RUN THE ENGINE AT WHAT THE HOUSEKEEPING NEEDS, NOT THE BASE RATE.
          *
@@ -14629,10 +14641,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         // ★ And the same for the rate: a fresh listener starts on the server default, not on
         //   whatever the previous occupant of this socket address asked for.
+        /* ★★★ THE ERASE BELONGS HERE; THE RECOMPUTE DOES NOT, AND USED TO BE HERE TOO. At this
+         *     point the socket is not yet in specClient/specExtra, so a recompute here counts NO
+         *     listeners and drops the engine to its 2 fps idle floor. It now happens where the
+         *     listener is actually registered — see the note there. */
         if (!isAudio) {
-            { std::lock_guard<std::mutex> lk(clientMtx);
-              clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); }
-            recomputeEngineRate();
+            std::lock_guard<std::mutex> lk(clientMtx);
+            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get());
         }
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
@@ -14773,6 +14788,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   stale = specClient;
                   specClient = sock;
               } }
+            /* ★★★ AND ONLY NOW MAY THE ENGINE RATE BE RECOMPUTED — THE LISTENER HAS TO EXIST FIRST.
+             *
+             *  There is a recompute further up, where the arriving socket's stale per-client rate
+             *  is erased. It runs 140 lines BEFORE this block, so at that moment the socket is in
+             *  neither specClient nor specExtra — recomputeEngineRate()'s `acc` walks exactly those
+             *  two, finds nothing, and `want` is 0. The engine then takes the 2 fps IDLE FLOOR,
+             *  with a listener connected and watching.
+             *
+             *  ★★★ MEASURED on the live RSP1A, 2026-09-13:
+             *        A connects, never asks for a rate          2.0 fps
+             *        B connects (also silent) -> A jumps to    15.0 fps
+             *      B's connect recomputes at a moment when A IS registered, and both land on the
+             *      server default. One listener alone got a fifteenth of the frames; two got the
+             *      right rate. Stuart, on Jr: "I KNEW it was slower."
+             *
+             *  ★★★ THE BROWSER HID IT COMPLETELY, which is why it went unnoticed: it sends
+             *      `fftRate` shortly after connecting, and that path recomputes with the socket
+             *      long since registered. Only a client that never asks is exposed — and Jr never
+             *      asks, because setFftRate() is dead code there. Two faults, one symptom.
+             *
+             *  ★★ THIS IS THE SAME FAULT AS THE AUDIO CHAIN'S, FOUND THE SAME DAY. An arriving
+             *     listener was not counted, so an idle floor stayed applied: audio got silence,
+             *     the FFT engine got 2 fps. Two idle floors, two arrival paths, the same omission
+             *     in each. When something is idled for want of listeners, the ARRIVAL is the event
+             *     that must undo it — and it is the one easiest to forget, because departure is
+             *     where the bookkeeping feels like it belongs.
+             *
+             *  ★ The erase above stays where it is: it must clear the stale rate before anything
+             *    reads it. Only the recompute moves — it is the half that needs the listener. */
+            recomputeEngineRate();
             // ★★ THE CONNECTION LOG STARTS HERE — at the SPECTRUM socket, not the audio one.
             //    A slot is a spectrum listener; the audio socket is optional and arrives second,
             //    so logging both would double-count every ordinary browser.
