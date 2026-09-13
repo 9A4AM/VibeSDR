@@ -1492,7 +1492,19 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
       // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
       // main screen where it will actually be seen.
-      $('ovlChip').classList.toggle('set', overload);
+      /* ★★★ NOT DURING OUR OWN START-UP. The kick deliberately drives the gain to an end stop
+       *  and back, so the ADC genuinely clips while it runs — the overload is REAL, it is OURS,
+       *  and it is about to be undone by the loop that caused it. Showing it here put a red
+       *  OVERLOAD chip beside the blue INITIALISING one on every connect, which read as two
+       *  warnings and as a receiver in trouble. Stuart, 2026-09-13: "there are 2 initialising
+       *  chips a red and a blue one ... just odd that there is 2 of them."
+       *  ★★ AND THE ADVICE WAS WRONG, which is the real objection. This chip's tooltip says
+       *     "reduce RF gain, or switch a notch in" — exactly what a listener must NOT do while the
+       *     AGC is placing the gain itself.
+       *  ★ Only the MAIN-SCREEN chip is suppressed. `rspOverload` in the gain panel below keeps
+       *    showing it: an owner looking at the gain controls wants the unvarnished state, and that
+       *    is the one place where acting on it makes sense. */
+      $('ovlChip').classList.toggle('set', overload && Number(m.agcInit) !== 1);
       // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
       // dongle where it has to be guessed from the spectrum.
       $<HTMLElement>('rspOverload').hidden = !overload;
