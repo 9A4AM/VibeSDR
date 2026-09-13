@@ -292,6 +292,16 @@ export interface MenuSheetProps {
   onAvgFrames?:       (v: number) => void;
   specFloor?:         number;
   onSpecFloor?:       (v: number) => void;
+  /** ★★★ VISUAL GAIN — a display-only dB trim over the WHOLE readout: spectrum, S-meter, dBFS and
+   *  the squelch line together. Asked for in a GitHub discussion by a listener whose OWRX reads
+   *  "S9+ noise floor all the time", so nothing is distinguishable.
+   *  ★ It changes nothing that is measured: it lands on both sides of every squelch comparison so
+   *    the gate is invariant, SNR is a difference so it cancels, the threshold SENT to the server
+   *    has it taken back off, and the audio is server-side and untouched.
+   *  ★ Distinct from `Floor` directly above it, which shapes the waterfall's contrast mapping —
+   *    this moves the NUMBERS. Two controls that both say "dB" need telling apart, hence the hint. */
+  visualGain?:        number;
+  onVisualGain?:      (v: number) => void;
   specPeakScale?:     number;
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
@@ -734,7 +744,7 @@ function MenuSheetBody({
   specShow = true, onSpecShow,
   specSmoothing = 5, onSpecSmoothing,
   avgFrames = 1, onAvgFrames,
-  specFloor = 0, onSpecFloor,
+  specFloor = 0, onSpecFloor, visualGain = 0, onVisualGain,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
   frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll,
@@ -1233,6 +1243,24 @@ function MenuSheetBody({
                     minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
+                {/* ★ Below Floor, because they are easily confused and this is the one that moves
+                     the READINGS. ±20 dB in 1 dB steps, default 0 — Stuart's figures. */}
+                {!!onVisualGain && (
+                  <>
+                    <View style={styles.sliderWrap}>
+                      <Text style={styles.sliderLabel}>Visual Gain</Text>
+                      <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
+                        value={visualGain} onValueChange={onVisualGain}
+                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                      <Text style={styles.sliderVal}>{(visualGain > 0 ? '+' : '') + visualGain} dB</Text>
+                    </View>
+                    <Text style={styles.kbSkipNote}>
+                      Trims every level you SEE — spectrum, S-meter and squelch together — as if the
+                      radio's gain had moved. Nothing sent to the receiver changes: the squelch still
+                      triggers at the level you set, and the audio is unaffected.
+                    </Text>
+                  </>
+                )}
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Peak Scale</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}

@@ -1965,6 +1965,34 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [specSmoothing, setSpecSmoothing] = useState(5);
   const [avgFrames,     setAvgFrames]     = useState(0);       // averaging weight 0…0.9 (0 = off), OWRX-style
   const [specFloor,     setSpecFloor]     = useState(0);
+  /* ★★★ VISUAL GAIN — a display-only dB trim over the WHOLE readout, as SDR Console has.
+   *
+   *  From a GitHub discussion: a listener's OWRX reads "S9+ noise floor all the time", so every
+   *  signal sits off the top of the scale and nothing is distinguishable. Stuart's design, and his
+   *  words for what it must feel like: "it needs to act like I've turned the radio gain itself
+   *  down by 20db" — "-20db is minus 20db everywhere".
+   *
+   *  ★★★ SO IT IS APPLIED TO EVERY dB QUANTITY ON THE DISPLAY, INCLUDING THE SQUELCH — "the
+   *      squelch bar should be reading the same as the main SNR bar anyway". A trim that moved the
+   *      signal and left the squelch line behind would make the line point at the wrong level,
+   *      which is the class of lying readout this codebase keeps having to remove.
+   *
+   *  ★★★ AND IT CHANGES NOTHING THAT IS MEASURED — by arithmetic, not by care:
+   *        · it lands on BOTH SIDES of every squelch comparison, so the gate decision is invariant;
+   *        · SNR is a DIFFERENCE of two levels, so the offset cancels exactly — which is also
+   *          physically right, since turning real gain down moves signal and noise together;
+   *        · the AUDIO is decided server-side and is never touched. Stuart: "the only thing it
+   *          shouldnt adjust ... would be the audio that needs to stay at the same level."
+   *
+   *  ★ NEVER APPLIED BY MUTATING THE BIN ARRAY. The adapters hand us a REUSED buffer (WaterfallView
+   *    says so where it consumes it: "parent's reused buffers are safe" because it reads them
+   *    synchronously) — so adding the offset in place would accumulate it every frame, a drift of
+   *    20 dB per frame. It goes in at the points where a dB value becomes something VISIBLE. */
+  const [visualGain,    setVisualGain]    = useState(0);
+  /** ★ Read from the per-frame spectrum callback, whose closure is built once at connect — a
+   *  state value captured there would be frozen at whatever it was when the socket opened. */
+  const visualGainRef = useRef(0);
+  useEffect(() => { visualGainRef.current = visualGain; }, [visualGain]);
   const [specPeakScale, setSpecPeakScale] = useState(10);
   const [peakHold,      setPeakHold]      = useState(true);
   const [wfBrightness,  setWfBrightness]  = useState(0);
@@ -2472,6 +2500,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const bool = (k: string, set: (v: boolean) => void) => { const v = p[k]; if (typeof v === 'boolean') set(v); };
           num('dbMin', setDbMin);                 num('dbMax', setDbMax);
           num('specSmoothing', setSpecSmoothing); num('specFloor', setSpecFloor);
+          num('visualGain', setVisualGain);
           num('avgFrames', setAvgFrames);
           num('specPeakScale', setSpecPeakScale); num('wfBrightness', setWfBrightness);
           num('wfContrast', setWfContrast);       num('wfSharpness', setWfSharpness);
@@ -2497,7 +2526,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!prefsLoaded.current) return; // don't clobber the blob with defaults pre-load
     const json = JSON.stringify({
-      dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
+      dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames,
@@ -2510,7 +2539,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       requestSync();
     }, 500);
     return () => clearTimeout(t);
-  }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
+  }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames, baseUrl]);
@@ -4542,17 +4571,24 @@ export default function SDRScreen({ route, navigation }: Props) {
           // scales with zoom). Kiwi/local/OWRX keep their own level source.
           const chDbfs = (owrxDbm == null && !isKiwi && !isLocal && audioDbfsRef.current != null)
             ? audioDbfsRef.current : peak;
-          const levelDbm = owrxDbm ?? chDbfs;
+          /* ★★★ THE VISUAL TRIM GOES ON HERE, ONCE, AND THEN ON EVERY THRESHOLD BELOW.
+           *  `vg` shifts every dB quantity the user can SEE. Because it is added to both the level
+           *  and each squelch threshold, every comparison between them is unchanged — so the gate
+           *  below, and the audio, behave exactly as before. See visualGain. */
+          const vg = visualGainRef.current;
+          const levelDbm = (owrxDbm ?? chDbfs) + vg;
           // Bar source follows the meter mode: SNR uses the compression curve
           // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
           // absolute level mapping off the dBm level. OWRX's smeter dB spans
           // roughly −110 (noise) … −10 (strong), a different scale to UberSDR's
           // spectrum, so it gets its own linear mapping.
           const norm = owrxDbm != null
-            ? Math.max(0, Math.min(1, (owrxDbm + 110) / 100))
+            ? Math.max(0, Math.min(1, (owrxDbm + vg + 110) / 100))
             : signalModeRef.current === 'snr'
+              // ★ SNR is a DIFFERENCE, so the trim cancels in it exactly — and must, because
+              //   turning real gain down moves signal and noise together. Deliberately un-shifted.
               ? sigNorm(snrDb)
-              : Math.max(0, Math.min(1, (chDbfs + 130) / 90));
+              : Math.max(0, Math.min(1, (chDbfs + vg + 130) / 90));
           // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
           // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
           const sm = meterSmooth.current;
@@ -4586,18 +4622,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           let sqlN = sqlNormRef.current;
           if (owrxDbm != null) {
             // OWRX server squelch (dB on the smeter scale) → the same linear map the OWRX bar uses.
-            if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + 110) / 100));
+            // ★ Same trim as the bar above: the line must stay level with what it is gating.
+            if (owrxSquelchRef.current > -130) sqlN = Math.max(0, Math.min(1, (owrxSquelchRef.current + vg + 110) / 100));
           } else if (sqlN < 0 && !isKiwi && !isLocal
               && signalModeRef.current !== 'snr' && snrSquelchRef.current > -999) {
             // dBFS/S-meter mode: line sits at the (unconditionally tracked) noise floor + threshold.
             // /90 = dBFS bar scale.
-            sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + 130) / 90));
+            sqlN = Math.max(0, Math.min(1, (floorEmaRef.current + snrSquelchRef.current + vg + 130) / 90));
           }
           // IS THE GATE ACTUALLY CLOSED? Compare the quantity each backend's gate itself compares,
           // not the bar geometry: in S-meter/dBFS mode the bar is a smoothed dBFS fill while the
           // UberSDR gate compares raw SNR, so "fill below line" could redden while audio flowed —
           // and miss real mutes. undefined = can't say (OWRX gates server-side), draw by geometry.
-          const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? levelDbm < kiwiSqDbmRef.current : false)
+          /* ★★★ THE GATE IS COMPUTED ON RAW LEVELS, NOT TRIMMED ONES. Adding the trim to both
+           *  sides would give the identical answer, so this is the same result written the honest
+           *  way: whether the audio is actually muted is a fact about the receiver, and a display
+           *  slider must not be able to appear to change it. `levelDbm` now carries the trim, so
+           *  the raw value is reconstructed for the comparison. */
+          const rawLevelDbm = levelDbm - vg;
+          const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? rawLevelDbm < kiwiSqDbmRef.current : false)
             : isLocal          ? (hwSquelchRef.current > -100 ? chDbfs   < hwSquelchRef.current : false)
             : owrxDbm != null  ? undefined
             : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
@@ -6158,15 +6201,28 @@ export default function SDRScreen({ route, navigation }: Props) {
       return;
     }
     const c = Math.max(0, Math.min(1, x));
-    if (isKiwi)       onKiwiSquelch(c * 90 - 130);
-    else if (isLocal) onLocalSquelch(Math.max(-100, c * 90 - 130));
+    /* ★★★ THE TRIM COMES BACK OFF ON THE WAY OUT. Stuart: "the squelch should show a -20db
+     *  reading but be sending the correct 0db reading to the server for the squelch trigger."
+     *
+     *  The BAR the user is dragging on now reads trimmed, so the position `c` they chose means a
+     *  TRIMMED decibel. Every inversion below is of a display scale that the trim shifted, so the
+     *  trim has to be subtracted to recover the real threshold the receiver must gate on.
+     *  ★★★ WITHOUT THIS THE TRIM WOULD SILENTLY MOVE THE GATE. A listener who set the squelch and
+     *      then trimmed the display by -20 dB would have their gate shifted 20 dB with it — a
+     *      display control changing what the radio does, which is the one thing this must never be.
+     *  ★ The SNR branch is deliberately untouched: SNR is a difference and the trim cancels in it,
+     *    so its scale never moved and there is nothing to take back off. */
+    const vg = visualGainRef.current;
+    if (isKiwi)       onKiwiSquelch(c * 90 - 130 - vg);
+    else if (isLocal) onLocalSquelch(Math.max(-100, c * 90 - 130 - vg));
     else if (signalMode === 'snr') onSnrSquelch(sigDenorm(c));
     else {
-      // dBFS/S-meter mode: invert `(floor + threshold + 130) / 90`. Without a settled floor there
-      // is no honest answer, so leave the gate alone rather than jumping it somewhere arbitrary.
+      // dBFS/S-meter mode: invert `(floor + threshold + vg + 130) / 90`. Without a settled floor
+      // there is no honest answer, so leave the gate alone rather than jumping it somewhere
+      // arbitrary.
       const floor = floorEmaRef.current;
       if (floor <= -900) return;
-      onSnrSquelch(c * 90 - 130 - floor);
+      onSnrSquelch(c * 90 - 130 - vg - floor);
     }
   }, [isKiwi, isLocal, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
 
@@ -8075,8 +8131,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         tuneHz={status.frequency}
         filterLow={status.bandwidthLow}
         filterHigh={status.bandwidthHigh}
-        dbMin={dbMin}
-        dbMax={dbMax}
+        /* ★★★ THE VISUAL TRIM ON THE SPECTRUM — applied by shifting the RANGE, never by editing
+         *  the bins. The adapters hand us a reused buffer (see the note on visualGain), so an
+         *  in-place offset would accumulate every frame. Mapping through a range shifted by -vg is
+         *  the same arithmetic and cannot drift. `dbOffset` puts the trim back on the axis labels
+         *  so the signal moves against a fixed scale rather than the scale moving with it.
+         *  ★ In AUTO contrast the range tracks the data, so the PICTURE self-normalises and only
+         *    the numbers move — which is right, and the same as SDR Console: a visual gain is for
+         *    when you have pinned the range and things sit off the top or are too faint to see. */
+        dbMin={dbMin - visualGain}
+        dbMax={dbMax - visualGain}
+        dbOffset={visualGain}
         wfCoarse={wfCoarse}
         colormap={colormap}
         width={screenW}
@@ -8994,6 +9059,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         specSmoothing={specSmoothing}   onSpecSmoothing={setSpecSmoothing}
         avgFrames={avgFrames}           onAvgFrames={setAvgFrames}
         specFloor={specFloor}           onSpecFloor={setSpecFloor}
+        visualGain={visualGain}         onVisualGain={setVisualGain}
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}

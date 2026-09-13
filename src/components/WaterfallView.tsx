@@ -152,6 +152,16 @@ export interface WaterfallViewProps {
   filterLow?:  number;
   filterHigh?: number;
   /** Manual range — only used when wfCoarse='manual'. */
+  /** ★★★ THE VISUAL TRIM, ADDED BACK FOR THE AXIS LABELS ONLY.
+   *
+   *  The trim is applied by SHIFTING THE RANGE handed to the renderer — mapping a bin through
+   *  `(bin - (dbMin - vg)) / span` is arithmetically identical to shifting every bin by +vg, and
+   *  costs nothing per frame. But the labels are drawn from that same shifted range, so without
+   *  this they would move with it and the picture would appear unchanged: the signal and its scale
+   *  sliding together is exactly the illusion of doing nothing.
+   *  ★ So the labels add the trim back, and the signal moves against a FIXED axis — which is what
+   *    "incoming signal indicates -50db, visual gain -20db, signal now shows -70db" means. */
+  dbOffset?:   number;
   dbMin?:      number;
   dbMax?:      number;
   wfCoarse?:   'auto' | 'manual';
@@ -320,7 +330,7 @@ const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 function WaterfallView({
   frameSink, binCount, centerHz, bwHz, tuneHz,
   filterLow = -3000, filterHigh = 3000,
-  dbMin = -120, dbMax = -20, wfCoarse = 'auto',
+  dbMin = -120, dbMax = -20, dbOffset = 0, wfCoarse = 'auto',
   colormap = 'gqrx', width, height, bottomGuard = 0,
   ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
   onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
@@ -1535,11 +1545,11 @@ function WaterfallView({
       const frac = di / 4;
       out.push({
         y: wfTop - frac * specH,
-        label: Math.round(liveRange.dbMin + frac * range) + 'dB',
+        label: Math.round(liveRange.dbMin + dbOffset + frac * range) + 'dB',
       });
     }
     return out;
-  }, [specShow, specH, wfTop, liveRange]);
+  }, [specShow, specH, wfTop, liveRange, dbOffset]);
 
   // ── Needle + sideband geometry (v1.5) ───────────────────────────────────────
   const needle = useMemo(() => {
