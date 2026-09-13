@@ -8631,8 +8631,18 @@ function drawMpxEye() {
       else if (d < 25) what = 'pilot, stereo and RDS';
       else if (d < 50) what = 'strong stereo';
       else             what = 'very strong · near full deviation';
-      vd.textContent = d > 0.1 ? `${what} · scale ±${d.toFixed(0)} kHz` : '—';
-      vd.className = '';
+      /* ★★ AND SAY IF IT IS NOISY, because the level wording alone reads far too healthy.
+       *  106.0 GHR: pilot 6.2 kHz LOCKED, scale ±21 kHz — so "pilot, stereo and RDS" — while
+       *  throwing 87 % block errors at 22 dB MPX S/N, with the trace only just forming out of
+       *  the fuzz. Stuart: "you can see it trying to form." True and misleading together, which
+       *  is the worst kind of readout. The sharp-against-fuzzy contrast IS the S/N, so the
+       *  verdict should name it rather than leave the plot to be read by eye. */
+      const snr = rdsExt?.mpxSnr ?? 0;
+      const noise = (snr > 0 && snr < 20) ? ' · buried in noise'
+                  : (snr > 0 && snr < 28) ? ' · noisy'
+                  : '';
+      vd.textContent = d > 0.1 ? `${what}${noise} · scale ±${d.toFixed(0)} kHz` : '—';
+      vd.className = (snr > 0 && snr < 20) ? 'bad' : (snr > 0 && snr < 28) ? 'ok' : '';
     }
   }
 }
