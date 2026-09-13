@@ -8673,7 +8673,18 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ Live dial state first — it is per-message; the occupancy poll is the fallback and is
             what an EXCLUSIVE receiver has instead. Hidden when nobody has said, never guessed. */}
       {(() => {
-        const n = dialState?.listeners ?? occListeners;
+        /* ★★★ AND OWRX's COUNT BELONGS HERE TOO — IT WAS TRACKED ALL ALONG.
+         *  OwrxAdapter parses `clients` off the main socket and this screen already stores it as
+         *  `clientCount`; it was shown beside the PROFILE in the menu and nowhere else. Stuart,
+         *  2026-09-13: "OWRX should be tracked as we list it in Jr and the app next to the
+         *  profiles ... we just dont publish it in the spectrum."
+         *  ★ Priority is deliberate: the live dial state first (per-message, a shared VibeServer
+         *    dial), then the occupancy poll (what an exclusive receiver has instead), then OWRX's
+         *    own figure. `occListeners` is a plain number and 0 is not nullish, so it cannot be
+         *    chained with ?? — the > 0 test is what lets the fallback through.
+         *  ★ I had reported OWRX as "not tracked" in the audit. It is; my grep looked for
+         *    users/listeners/rx_chans and OWRX calls it `clients`. */
+        const n = dialState?.listeners ?? ((occListeners ?? 0) > 0 ? occListeners : clientCount);
         if (n == null || n <= 0) return null;
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
