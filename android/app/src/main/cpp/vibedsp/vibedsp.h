@@ -2251,7 +2251,21 @@ private:
      *  ★★ So the grids are RUN-LENGTH ENCODED instead of shrunk. An eye grid is mostly empty, so
      *  the zeros compress hard and the picture is paid for out of the empty space rather than out
      *  of its own detail. See the encoder in local_sdr_shim.cpp. */
-    static constexpr int kEyeW = 96, kEyeH = 48;
+    /** ★★★ THE GRID WIDTH IS SIZED TO THE CHANNEL RATE, because the eye is a HISTOGRAM and its
+     *  quality depends on how many samples land in one sweep. The x-axis spans two pilot cycles
+     *  — about 105 us — so a sweep contains chFs_/9500 samples: ~34 on a 320 kHz channel but
+     *  only ~21 on a 200 kHz one. With a fixed 96 columns most are empty on any given sweep and
+     *  fill only as the phase drifts, which on the narrower channel read as a faint band that
+     *  took an age to build. Stuart, on the Pi's V4 at 33 dB MPX S/N and 3 % multipath: "the eye
+     *  isnt doing much ... it seems to take ages to draw in" — emphatically not the signal, and
+     *  not CPU either (41 % of a core there, with no drops).
+     *  ★★ 96 WAS CHOSEN AGAINST THE RSP AND NEVER CHECKED ON A NARROWER CHANNEL. That is the
+     *  actual mistake, and it is the same shape as every other constant this file has been
+     *  bitten by: true in the one condition it was measured in.
+     *  ★ kEyeWMax bounds the allocation; eyeW_ is what is used and sent. The wire already
+     *  carries eyeW, so clients need no change — they size themselves from it already. */
+    static constexpr int kEyeWMax = 96, kEyeH = 48;
+    int eyeW_ = kEyeWMax;
     /** ★★★ THE EYE IS SPLIT INTO ITS THREE COHERENT COMPONENTS so the plot can be drawn in three
      *  colours ADDITIVELY — the same composite picture as before, with the colour saying what is
      *  making each part of it. Stuart, 2026-09-13: "so it looks the same as it does now, just made

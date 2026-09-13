@@ -1068,10 +1068,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    Three cycles would leave one sweep in sixteen starting at the wrong phase and
             //    smear the whole picture.
             if (wantRds && cb_.rdsExt) {
+                /* ★★ SIZE THE GRID TO WHAT THE CHANNEL CAN FILL — see the note on eyeW_.
+                 *  A sweep spans two pilot cycles, so it carries chFs_/9500 samples; asking for
+                 *  more columns than that leaves most of them empty on every sweep and the
+                 *  picture builds far too slowly. Aim for roughly TWO samples per column so each
+                 *  one is actually populated, bounded to something drawable. */
+                {
+                    int w = (chFs_ > 0.0) ? (int)(chFs_ / 9500.0 / 2.0) * 2 : kEyeWMax;
+                    if (w > kEyeWMax) w = kEyeWMax;
+                    if (w < 16) w = 16;
+                    if (w != eyeW_) { eyeW_ = w; for (auto& g : eyeAcc_) g.clear(); }
+                }
                 for (int b = 0; b < kEyeBands; ++b) {
-                    if ((int)eyeAcc_[b].size() != kEyeW * kEyeH) {
-                        eyeAcc_[b].assign((size_t)kEyeW * kEyeH, 0.0f);
-                        eyeOut_[b].assign((size_t)kEyeW * kEyeH, 0);
+                    if ((int)eyeAcc_[b].size() != eyeW_ * kEyeH) {
+                        eyeAcc_[b].assign((size_t)eyeW_ * kEyeH, 0.0f);
+                        eyeOut_[b].assign((size_t)eyeW_ * kEyeH, 0);
                     }
                 }
                 // ★★ The three resonators, designed once per rate. Q from what each component
@@ -1189,14 +1200,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 for (int i = 0; i < nc; ++i) {
                     const float t = bitClkBuf_[i] * kTurns;
                     const float frac = t - std::floor(t);     // 0..1 across two pilot cycles
-                    int cx = (int)(frac * (float)kEyeW);
-                    if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
+                    int cx = (int)(frac * (float)eyeW_);
+                    if (cx < 0) cx = 0; else if (cx >= eyeW_) cx = eyeW_ - 1;
                     for (int b = 0; b < kEyeBands; ++b) {
                         // Row 0 is the TOP, so +full scale is at the top like a scope.
                         const float u = eyeBandBuf_[b][i] * inv;   // -1..+1, shared scale
                         int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
                         if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
-                        eyeAcc_[b][(size_t)cy * kEyeW + cx] += 1.0f;
+                        eyeAcc_[b][(size_t)cy * eyeW_ + cx] += 1.0f;
                     }
                 }
                 /* ★★★ ONE NORMALISATION ACROSS ALL THREE, not one each. Scaling every band to
@@ -1416,7 +1427,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 const bool haveEye = !eyeOut_[0].empty();
                 for (int b = 0; b < kEyeBands; ++b)
                     x.eyeBand[b] = haveEye ? eyeOut_[b].data() : nullptr;
-                x.eyeW = haveEye ? kEyeW : 0;
+                x.eyeW = haveEye ? eyeW_ : 0;
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
                 x.mpxDevKHz     = mpxDevSm_   * 75.0f;
