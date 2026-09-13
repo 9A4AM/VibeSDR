@@ -1059,7 +1059,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     eyeOut_.assign((size_t)kEyeW * kEyeH, 0);
                 }
                 // Persistence: the grid fades rather than clearing, exactly as a phosphor does.
-                for (float& v : eyeAcc_) v *= 0.86f;
+                // Four-wide: 2048 cells every block is the same order of work as the fold.
+                {
+                    const size_t n = eyeAcc_.size();
+                    float* a = eyeAcc_.data();
+                    size_t q = 0;
+#if VIBE_NEON
+                    const float32x4_t vd = vdupq_n_f32(0.86f);
+                    for (; q + 4 <= n; q += 4) vst1q_f32(a + q, vmulq_f32(vld1q_f32(a + q), vd));
+#elif VIBE_SSE
+                    const __m128 vd = _mm_set1_ps(0.86f);
+                    for (; q + 4 <= n; q += 4)
+                        _mm_storeu_ps(a + q, _mm_mul_ps(_mm_loadu_ps(a + q), vd));
+#endif
+                    for (; q < n; ++q) a[q] *= 0.86f;
+                }
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
                 //   passage genuinely shrinks the composite, and a fixed full scale would hide
                 //   the structure instead of magnifying it (Stuart, 2026-09-13).
@@ -1074,33 +1088,128 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      eyeHp_[i] = h2 - eyeHp3_;
                 }
                 eyePeak_ *= 0.995f;
-                for (int i = 0; i < nc; ++i) {
-                    const float a = std::fabs(eyeHp_[i]);
-                    if (a > eyePeak_) eyePeak_ = a;
+                {
+                    const float* h = eyeHp_.data();
+                    int q = 0; float pk = eyePeak_;
+#if VIBE_NEON
+                    float32x4_t vpk = vdupq_n_f32(pk);
+                    for (; q + 4 <= nc; q += 4) vpk = vmaxq_f32(vpk, vabsq_f32(vld1q_f32(h + q)));
+                    pk = vmaxvq_f32(vpk);
+#elif VIBE_SSE
+                    // abs via andnot with the sign bit — SSE2 has no _mm_abs_ps.
+                    const __m128 sign = _mm_set1_ps(-0.0f);
+                    __m128 vpk = _mm_set1_ps(pk);
+                    for (; q + 4 <= nc; q += 4)
+                        vpk = _mm_max_ps(vpk, _mm_andnot_ps(sign, _mm_loadu_ps(h + q)));
+                    { alignas(16) float t4[4]; _mm_store_ps(t4, vpk);
+                      pk = std::max(std::max(t4[0], t4[1]), std::max(t4[2], t4[3])); }
+#endif
+                    for (; q < nc; ++q) { const float a = std::fabs(h[q]); if (a > pk) pk = a; }
+                    eyePeak_ = pk;
                 }
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
                 // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
-                //    channel rate, which is the most expensive thing that was in this loop and
-                //    entirely avoidable: a fractional part is floor-and-subtract. Working in
-                //    TURNS (0..1) instead of radians removes the division too, leaves one
-                //    multiply and one floor per sample, and is straightforwardly vectorisable
-                //    if it ever needs to be (Stuart asked what it costs, 2026-09-13).
+                //    channel rate, which was the most expensive thing in this loop and entirely
+                //    avoidable: a fractional part is floor-and-subtract. Working in TURNS (0..1)
+                //    rather than radians removes the division too.
                 // bitClk = (cycle*2pi + phase)/16, so bitClk * 16/(4pi) is the position in
-                // two-pilot-cycle units; its fractional part is the sweep position.
+                // two-pilot-cycle units and its fractional part is the sweep position.
+                //
+                // ★★★ TWO PASSES, BECAUSE A HISTOGRAM CANNOT BE VECTORISED. The arithmetic —
+                //     two multiplies, a truncate, a subtract and two clamps per sample — is
+                //     four-wide; the increment is a SCATTER, and four lanes can land in the
+                //     same cell, so it must stay scalar. Same shape as the blanker's two-pass
+                //     structure in iqclean.cpp: compute wide, act narrow. This is for the
+                //     XCover, which is the machine that decides it — the Lenovo would not
+                //     notice this loop either way (Stuart, 2026-09-13).
+                // ★★ TRUNCATION IS FLOOR HERE. bitClk is never negative (phase in [0,2pi),
+                //    cycle 0..15) and the row index is a non-negative scale of (1-u), so the
+                //    cheap convert-with-truncate is correct — which matters because SSE2 has no
+                //    floor instruction at all (_mm_floor_ps is SSE4.1) and this file must not
+                //    exclude an older machine.
                 const float kTurns = (float)(16.0 / (2.0 * 2.0 * M_PI));
-                for (int i = 0; i < nc; ++i) {
-                    const float t = bitClkBuf_[i] * kTurns;
-                    const float frac = t - std::floor(t);     // 0..1 across two pilot cycles
+                if ((int)eyeIdx_.size() < nc) eyeIdx_.resize((size_t)nc);
+                int ke = 0;
+#if VIBE_NEON
+                {
+                    const float32x4_t vTurns = vdupq_n_f32(kTurns);
+                    const float32x4_t vW     = vdupq_n_f32((float)kEyeW);
+                    const float32x4_t vInv   = vdupq_n_f32(inv);
+                    const float32x4_t vHalfH = vdupq_n_f32(0.5f * (float)kEyeH);
+                    const float32x4_t vOne   = vdupq_n_f32(1.0f);
+                    const int32x4_t   vWi    = vdupq_n_s32(kEyeW);
+                    const int32x4_t   vZero  = vdupq_n_s32(0);
+                    const int32x4_t   vWm1   = vdupq_n_s32(kEyeW - 1);
+                    const int32x4_t   vHm1   = vdupq_n_s32(kEyeH - 1);
+                    for (; ke + 4 <= nc; ke += 4) {
+                        const float32x4_t t = vmulq_f32(vld1q_f32(bitClkBuf_.data() + ke), vTurns);
+                        const float32x4_t frac = vsubq_f32(t, vcvtq_f32_s32(vcvtq_s32_f32(t)));
+                        int32x4_t cx = vcvtq_s32_f32(vmulq_f32(frac, vW));
+                        cx = vminq_s32(vmaxq_s32(cx, vZero), vWm1);
+                        const float32x4_t u = vmulq_f32(vld1q_f32(eyeHp_.data() + ke), vInv);
+                        int32x4_t cy = vcvtq_s32_f32(vmulq_f32(vsubq_f32(vOne, u), vHalfH));
+                        cy = vminq_s32(vmaxq_s32(cy, vZero), vHm1);
+                        vst1q_s32(eyeIdx_.data() + ke, vaddq_s32(vmulq_s32(cy, vWi), cx));
+                    }
+                }
+#elif VIBE_SSE
+                {
+                    const __m128 vTurns = _mm_set1_ps(kTurns);
+                    const __m128 vW     = _mm_set1_ps((float)kEyeW);
+                    const __m128 vInv   = _mm_set1_ps(inv);
+                    const __m128 vHalfH = _mm_set1_ps(0.5f * (float)kEyeH);
+                    const __m128 vOne   = _mm_set1_ps(1.0f);
+                    for (; ke + 4 <= nc; ke += 4) {
+                        const __m128 t = _mm_mul_ps(_mm_loadu_ps(bitClkBuf_.data() + ke), vTurns);
+                        const __m128 frac = _mm_sub_ps(t, _mm_cvtepi32_ps(_mm_cvttps_epi32(t)));
+                        __m128i cx = _mm_cvttps_epi32(_mm_mul_ps(frac, vW));
+                        const __m128 u = _mm_mul_ps(_mm_loadu_ps(eyeHp_.data() + ke), vInv);
+                        __m128i cy = _mm_cvttps_epi32(_mm_mul_ps(_mm_sub_ps(vOne, u), vHalfH));
+                        // ★ SSE2 has no _mm_min_epi32 (SSE4.1). Clamp in the float domain
+                        //   instead, where _mm_min_ps/_mm_max_ps have always existed.
+                        cx = _mm_cvttps_epi32(_mm_min_ps(_mm_max_ps(_mm_cvtepi32_ps(cx),
+                                 _mm_setzero_ps()), _mm_set1_ps((float)(kEyeW - 1))));
+                        cy = _mm_cvttps_epi32(_mm_min_ps(_mm_max_ps(_mm_cvtepi32_ps(cy),
+                                 _mm_setzero_ps()), _mm_set1_ps((float)(kEyeH - 1))));
+                        // cy * kEyeW + cx, in floats for the same reason (no _mm_mullo_epi32).
+                        const __m128 idx = _mm_add_ps(
+                            _mm_mul_ps(_mm_cvtepi32_ps(cy), _mm_set1_ps((float)kEyeW)),
+                            _mm_cvtepi32_ps(cx));
+                        _mm_storeu_si128((__m128i*)(eyeIdx_.data() + ke), _mm_cvttps_epi32(idx));
+                    }
+                }
+#endif
+                // ★ The scalar reference — the tail here, and the whole loop on a machine with
+                //   neither kernel or under VIBE_FORCE_SCALAR. Both vector paths above must
+                //   agree with it exactly.
+                for (; ke < nc; ++ke) {
+                    const float t = bitClkBuf_[ke] * kTurns;
+                    const float frac = t - (float)(int)t;     // t >= 0, so truncate == floor
                     int cx = (int)(frac * (float)kEyeW);
                     if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
                     // Row 0 is the TOP, so +full scale is drawn at the top like a scope.
-                    const float u = eyeHp_[i] * inv;          // -1..+1
+                    const float u = eyeHp_[ke] * inv;         // -1..+1
                     int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
                     if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
-                    eyeAcc_[(size_t)cy * kEyeW + cx] += 1.0f;
+                    eyeIdx_[ke] = cy * kEyeW + cx;
                 }
+                for (int i = 0; i < nc; ++i) eyeAcc_[(size_t)eyeIdx_[i]] += 1.0f;
                 float mx = 0.0f;
-                for (float v : eyeAcc_) if (v > mx) mx = v;
+                {
+                    const float* a = eyeAcc_.data(); const size_t n = eyeAcc_.size();
+                    size_t q = 0;
+#if VIBE_NEON
+                    float32x4_t vmx = vdupq_n_f32(0.0f);
+                    for (; q + 4 <= n; q += 4) vmx = vmaxq_f32(vmx, vld1q_f32(a + q));
+                    mx = vmaxvq_f32(vmx);
+#elif VIBE_SSE
+                    __m128 vmx = _mm_setzero_ps();
+                    for (; q + 4 <= n; q += 4) vmx = _mm_max_ps(vmx, _mm_loadu_ps(a + q));
+                    { alignas(16) float t4[4]; _mm_store_ps(t4, vmx);
+                      mx = std::max(std::max(t4[0], t4[1]), std::max(t4[2], t4[3])); }
+#endif
+                    for (; q < n; ++q) if (a[q] > mx) mx = a[q];
+                }
                 const float es = (mx > 1e-6f) ? (255.0f / mx) : 0.0f;
                 for (size_t j = 0; j < eyeAcc_.size(); ++j) {
                     const int v = (int)(eyeAcc_[j] * es);
