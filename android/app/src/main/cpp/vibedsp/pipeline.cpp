@@ -1063,9 +1063,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
                 //   passage genuinely shrinks the composite, and a fixed full scale would hide
                 //   the structure instead of magnifying it (Stuart, 2026-09-13).
+                // ── High-pass a COPY, above the audio (see the note on eyeHpA_) ──────────
+                if (eyeHpA_ <= 0.0f && chFs_ > 0.0)
+                    eyeHpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 15000.0 / chFs_));
+                if ((int)eyeHp_.size() < nc) eyeHp_.resize((size_t)nc);
+                for (int i = 0; i < nc; ++i) {
+                    const float x = demodBuf_[i];
+                    eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
+                    eyeHp2_ += eyeHpA_ * (h1 - eyeHp2_);      const float h2 = h1 - eyeHp2_;
+                    eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      eyeHp_[i] = h2 - eyeHp3_;
+                }
                 eyePeak_ *= 0.995f;
                 for (int i = 0; i < nc; ++i) {
-                    const float a = std::fabs(demodBuf_[i]);
+                    const float a = std::fabs(eyeHp_[i]);
                     if (a > eyePeak_) eyePeak_ = a;
                 }
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
@@ -1076,7 +1086,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     int cx = (int)(ph * (double)kEyeW / kSpan);
                     if (cx < 0) cx = 0; else if (cx >= kEyeW) cx = kEyeW - 1;
                     // Row 0 is the TOP, so +full scale is drawn at the top like a scope.
-                    const float u = demodBuf_[i] * inv;       // -1..+1
+                    const float u = eyeHp_[i] * inv;          // -1..+1
                     int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
                     if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
                     eyeAcc_[(size_t)cy * kEyeW + cx] += 1.0f;

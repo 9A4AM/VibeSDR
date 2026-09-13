@@ -2204,6 +2204,16 @@ private:
     std::vector<float>         eyeAcc_;     // intensity, decayed each block = persistence
     std::vector<unsigned char> eyeOut_;     // the same grid scaled to 0..255 for the wire
     float                      eyePeak_ = 0.0f;   // tracked composite peak, slow decay
+    // ★★★ THE EYE IS TAKEN ABOVE THE AUDIO. L+R has no fixed relationship to the pilot, so
+    //     folding the FULL composite onto the pilot phase smears the audio into a featureless
+    //     band and buries the three things that ARE coherent with the trigger — the 19 kHz
+    //     pilot, the 38 kHz L-R sidebands and 57 kHz RDS. Three cascaded one-pole high-passes
+    //     at 15 kHz leave the pilot at about half amplitude while cutting 5 kHz audio by 30x,
+    //     which is what turns the band back into a braid. DISPLAY ONLY: this filters a copy,
+    //     never demodBuf_, so audio and every other measurement are untouched.
+    float eyeHpA_ = 0.0f;                          // one-pole coefficient for the cascade
+    float eyeHp1_ = 0.0f, eyeHp2_ = 0.0f, eyeHp3_ = 0.0f;   // the three low-pass states
+    std::vector<float> eyeHp_;                     // the filtered COPY the eye is folded from
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};
