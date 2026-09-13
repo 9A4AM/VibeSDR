@@ -8652,22 +8652,46 @@ function drawMpxEye() {
     const hold = document.getElementById('rdsMpxHold');
     const md = rdsExt?.mpxDev ?? 0;
     const snr = rdsExt?.mpxSnr ?? 0;
-    const usable = md > 0.1 && !(snr > 0 && snr < 20);
+    /* ★★★ REFUSE ON UNKNOWN S/N, NOT JUST LOW S/N. The gate read !(snr > 0 && snr < 20), so a
+     *   signal with NO S/N figure at all — "no pilot to measure" reports 0 — sailed straight
+     *   through it. 105.4 MHz then printed "deviation 158 kHz peak · OVERMODULATED", which is
+     *   not a possible FM broadcast figure: it was measuring noise (Stuart, 2026-09-13). The
+     *   same mistake as the eye's, one condition further out — I gated on the value being LOW
+     *   and forgot the value being ABSENT.
+     * ★★ AND A SANITY CEILING. Nothing legitimate exceeds ~100 kHz here, so a figure above that
+     *   is evidence the input is noise rather than a station, whatever the S/N says. */
+    const usable = md > 0.1 && snr >= 20 && md <= 100;
     if (dv) {
       if (!usable) { dv.textContent = 'deviation — not measurable'; dv.className = ''; }
       else {
         // 75 kHz is the legal peak. A little over is common on heavily processed stations; well
         // over is a fault worth seeing.
-        const verdict = md > 82 ? 'OVERMODULATED' : md > 75 ? 'over the limit' : 'nominal';
-        dv.textContent = `deviation ${md.toFixed(0)} kHz peak · ${verdict}`;
-        dv.className = md > 82 ? 'bad' : md > 75 ? 'ok' : 'good';
+        // ★ The TEXT quotes the HOLD, because the question a deviation monitor answers is "did
+        //   it go over", not "where is it this instant" — the bar already shows the latter.
+        const pk = Math.max(md, rdsExt?.mpxHold ?? 0);
+        const verdict = pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal';
+        dv.textContent = `deviation ${pk.toFixed(0)} kHz peak · ${verdict}`;
+        dv.className = pk > 82 ? 'bad' : pk > 75 ? 'ok' : 'good';
       }
     }
-    // 0..100 kHz across the bar, so the 75 kHz limit sits three quarters along and
-    // overmodulation still has somewhere to go.
-    const pct = usable ? Math.max(0, Math.min(100, md)) : 0;
+    /* 0..100 kHz across the bar, so the 75 kHz limit sits three quarters along and
+     * overmodulation still has somewhere to go.
+     * ★★ THE BAR AND THE TICK ARE DIFFERENT NUMBERS. The bar follows the programme on the
+     *   panel's own ~1.5 s clock; the tick is a slow peak-hold that remembers the excursion for
+     *   several seconds. Driving both from one value made the tick yo-yo with the bar, which on
+     *   speech swung 39 to 74 kHz syllable by syllable and could not be read at all. */
+    /* ★★★ THE BAR SHOWS THE PEAK HOLD, NOT THE PROGRAMME LEVEL. Driven by the fast value it
+     *   behaved like a VU meter — Stuart: "it looks more like a VU meter responding to the audio
+     *   more than the signal right now" — and he is right that this is the wrong instrument.
+     *   Deviation DOES follow the audio, because that is what deviation is; but the question a
+     *   deviation monitor answers is "did it go over the limit", not "where is it this
+     *   instant". So the bar is the slow peak-hold and the tick marks the same maximum, and the
+     *   readout stops twitching syllable by syllable. */
+    const pkv  = Math.max(md, rdsExt?.mpxHold ?? 0);
+    const pct  = usable ? Math.max(0, Math.min(100, pkv)) : 0;
+    const hpct = pct;
     if (fill) fill.style.width = `${pct}%`;
-    if (hold) { hold.style.left = `${pct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
+    if (hold) { hold.style.left = `${hpct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
   }
 
   g.font = '7px ui-monospace, monospace';
@@ -8717,10 +8741,10 @@ function drawMpxEye() {
     const locked = !!rdsExt?.pilotLock;
     const pilotSeen = (rdsExt?.pilotDev ?? 0) > 0.5;
     if (!locked && pilotSeen) {
-      vd.textContent = 'pilot present but not locking — the trace forms and collapses';
+      vd.textContent = 'pilot present but not locking — forms and collapses';
       vd.className = 'ok';
     } else if (!locked) {
-      vd.textContent = 'no pilot — untriggered, so this is noise rather than a trace';
+      vd.textContent = 'no pilot — untriggered, so this is noise not a trace';
       vd.className = 'bad';
     } else if ((rdsExt?.mpxSnr ?? 0) > 0 && (rdsExt?.mpxSnr ?? 0) < 20) {
       /* ★★★ AT LOW S/N THE SCALE IS MEASURING NOISE, SO THE LEVEL WORDS ARE MEANINGLESS.
@@ -8736,7 +8760,9 @@ function drawMpxEye() {
       vd.className = 'bad';
     } else {
       let what: string;
-      if (d < 3)       what = 'little above the audio — mono, or fully blended';
+      // ★ Kept short on purpose: the box reserves space for the LONGEST reading, so a verbose
+      //   one costs blank space on every other station. "mono or blended" says the same thing.
+      if (d < 3)       what = 'little above the audio — mono or blended';
       else if (d < 10) what = 'pilot dominates · little stereo';
       else if (d < 25) what = 'pilot, stereo and RDS';
       else if (d < 50) what = 'strong stereo';

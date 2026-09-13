@@ -1111,11 +1111,17 @@ void RxPipeline::feed(const cf32* iq, int n) {
                  *  high-passed copy precisely BECAUSE the audio belongs in it.
                  * ★ A slower decay than the eye's scale: this is a peak-hold, and the point of a
                  *  deviation monitor is that a brief excursion is not missed between glances. */
-                mpxDevPeak_ *= 0.999f;
+                float blockPk = 0.0f;
                 for (int i = 0; i < nc; ++i) {
                     const float a = std::fabs(demodBuf_[i]);
-                    if (a > mpxDevPeak_) mpxDevPeak_ = a;
+                    if (a > blockPk) blockPk = a;
                 }
+                // ★ Attack is instant, decay is timed — see the note on mpxDevSm_.
+                const double dt = (chFs_ > 0.0) ? (double)nc / chFs_ : 0.0;
+                const float kSm   = (float)std::exp(-dt / 1.5);   // the panel's clock
+                const float kHold = (float)std::exp(-dt / 6.0);   // the tick lingers
+                mpxDevSm_   = (blockPk > mpxDevSm_)   ? blockPk : mpxDevSm_   * kSm;
+                mpxDevHold_ = (blockPk > mpxDevHold_) ? blockPk : mpxDevHold_ * kHold;
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
                 // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
                 //    channel rate, which is the most expensive thing that was in this loop and
@@ -1158,15 +1164,36 @@ void RxPipeline::feed(const cf32* iq, int n) {
                  *   display sampling itself at the wrong moment, not the signal coming and going. */
                 if (eyeMaint) {
                     eyeSince_ = 0.0;
+                        /* ★★★ SIZE STAYS SHARED, BRIGHTNESS DOES NOT — and the difference matters.
+                     *   A weak component was penalised TWICE: small, because the vertical scale
+                     *   is set by the strongest band, AND dim, because the intensity scale was
+                     *   too. So weak stereo vanished entirely — Stuart, hearing it come and go on
+                     *   air: "I'm not seeing the pink in the eye moving as I can hear the stereo
+                     *   kicking in and out ... it almost looks like it needs to crop in more when
+                     *   the signal is weak to see the weak stereo forming."
+                     * ★★ VERTICAL EXTENT still comes from the shared scale, so a weak component
+                     *   still LOOKS weak and the three remain comparable — that honesty is the
+                     *   whole reason the colours are worth having. Only the BRIGHTNESS is lifted
+                     *   per band, and only up to 4x, so a faint trace becomes visible without
+                     *   being flattered into looking healthy. A truly dead band has nothing to
+                     *   lift and stays dark.
+                     */
                     float mx = 0.0f;
                     for (int b = 0; b < kEyeBands; ++b)
                         for (float v : eyeAcc_[b]) if (v > mx) mx = v;
-                    const float es = (mx > 1e-6f) ? (255.0f / mx) : 0.0f;
-                    for (int b = 0; b < kEyeBands; ++b)
+                    if (mx <= 1e-6f) mx = 1.0f;
+                    for (int b = 0; b < kEyeBands; ++b) {
+                        float bmx = 0.0f;
+                        for (float v : eyeAcc_[b]) if (v > bmx) bmx = v;
+                        // Its own scale, but never more than 4x the shared one.
+                        const float es = (bmx > 1e-6f)
+                                       ? std::min(255.0f / bmx, 4.0f * 255.0f / mx)
+                                       : 0.0f;
                         for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
                         }
+                    }
                     /* ★★★ PERSISTENCE ON THE SAME CLOCK AS THE REST OF THE PANEL.
                      *   Fade AFTER publishing, so the next interval builds on a softened version
                      *   of what was just shown rather than on nothing.
@@ -1340,7 +1367,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eyeW = haveEye ? kEyeW : 0;
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
-                x.mpxDevKHz = mpxDevPeak_ * 75.0f;
+                x.mpxDevKHz     = mpxDevSm_   * 75.0f;
+                x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);
             }

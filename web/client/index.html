@@ -2178,9 +2178,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   text-transform: uppercase; margin-top: 3px;
 }
 /* ★ Reads like the constellation's verdict, because it is doing the same job. */
+/* ★★★ RESERVE THE SPACE FOR THE LONGEST READING, or the panel below it JUMPS every time the
+   wording changes — and on this panel the wording changes with the signal, so it bounced
+   constantly (Stuart, 2026-09-13: "the text for the eye is bouncing as its changing in length").
+   ★★ MEASURED, not guessed: the longest producible verdict is 64 characters
+   ("little above the audio — mono or blended · noisy · scale ±60 kHz"), which wraps to four
+   lines in a 180px column at this size. 4.6em holds four lines with the leading.
+   ★ The verdicts themselves were shortened in the same change, because reserving space for a
+   verbose one costs blank space on every other station. */
 #rdsEyeVerdict {
   font-size: 11px; letter-spacing: 0.3px; margin-top: 2px;
   font-family: var(--mono, monospace); color: var(--text-dim);
+  min-height: 4.6em; display: flex; align-items: center; justify-content: center;
 }
 #rdsEyeVerdict.bad { color: #ff8a7d; }
 /* ★★ THE DEVIATION MONITOR, AS A BAR — which is what a deviation monitor IS. A number alone
@@ -2208,9 +2217,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   position: absolute; top: -1px; bottom: -1px; left: 75%; width: 1px;
   background: rgba(255,255,255,0.55);
 }
+/* ★ Same reasoning, two lines: the longest is 38 characters
+   ("deviation 100 kHz peak · OVERMODULATED"). */
 #rdsMpxDev {
   font-size: 11px; letter-spacing: 0.3px; margin-top: 3px;
   font-family: var(--mono, monospace); color: var(--text-dim);
+  min-height: 2.4em; display: flex; align-items: center; justify-content: center;
 }
 #rdsMpxDev.good { color: #7dff9a; }
 #rdsMpxDev.ok   { color: #ffd479; }

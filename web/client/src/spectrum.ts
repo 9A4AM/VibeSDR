@@ -160,6 +160,8 @@ export interface RdsExt {
   eyeDev: number;
   /** Total peak deviation of the whole composite INCLUDING audio, kHz. 75 is the limit. */
   mpxDev: number;
+  /** The peak-hold tick — a much slower decay than mpxDev, so a brief excursion is still shown. */
+  mpxHold: number;
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -1090,6 +1092,7 @@ export class SpectrumClient {
           eyeH: Number(msg.eyeH ?? 0),
           eyeDev: Number(msg.eyeDev ?? 0),
           mpxDev: Number(msg.mpxDev ?? 0),
+          mpxHold: Number(msg.mpxHold ?? 0),
         });
         break;
       case 'sig':

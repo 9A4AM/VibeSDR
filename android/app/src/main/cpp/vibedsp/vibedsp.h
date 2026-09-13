@@ -1848,6 +1848,9 @@ public:
              *  nothing reported it. Peak-held with a slow decay so a transient is not missed
              *  between frames. */
             float mpxDevKHz;
+            /** ★ The PEAK HOLD — a much slower decay, so a brief excursion is still there when
+             *  you look up. The bar follows mpxDevKHz; this is the tick that remembers. */
+            float mpxDevHoldKHz;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
@@ -2267,7 +2270,16 @@ private:
      *  about twenty-five times the work required. This counts samples so the maintenance runs at
      *  ~12 Hz, comfortably ahead of the 6 Hz the frames actually go out at. */
     double                     eyeSince_ = 0.0;      // samples since the last grid maintenance
-    float                      mpxDevPeak_ = 0.0f;   // total composite peak — see RdsExt::mpxDevKHz
+    /** ★★★ FAST ATTACK, SLOW DECAY — a deviation meter, not a sample of whatever the last block
+     *  happened to contain. It first shipped with one value driving both the bar and the hold,
+     *  and on speech it swung between 39 and 74 kHz from syllable to syllable, which is
+     *  unreadable (Stuart, 2026-09-13: "going up and down like a yoyo ... looks like it needs
+     *  the same smoothing as the rest of the box").
+     *  ★★ mpxDevSm_ rises INSTANTLY to a new peak and falls with a ~1.5 s time constant — the
+     *  same clock as pilotDev, rdsDev and the eye, so the whole panel can be read together
+     *  [[panel_readouts_need_one_clock]]. mpxDevHold_ falls far slower (~6 s) and is the tick. */
+    float                      mpxDevSm_ = 0.0f;     // the bar — see RdsExt::mpxDevKHz
+    float                      mpxDevHold_ = 0.0f;   // the tick — see RdsExt::mpxDevHoldKHz
 
     /** ★★ A 2-POLE RESONATOR PER COMPONENT. A one-pole pair is far too broad — the bands are at
      *  19, 38 and 57 kHz and would leak into each other, which would defeat the whole point of
