@@ -449,8 +449,29 @@ export default function DabPanel(p: DabPanelProps) {
   }
   const decoderFlowing = pcm.current.runStart >= pickedAt && pcm.current.roseAt >= pickedAt + 400
     && pcm.current.roseAt - pcm.current.runStart >= 1000 && Date.now() - pcm.current.roseAt < 1500;
+  /* ★★★ AND THIS IS WHY THE APP NEVER SETTLED. Stuart, 2026-09-13: "its rare on the browser by
+   *     the way, but the app never seems to settle."
+   *
+   *  It demanded an audio run that BEGAN after the press — and a new run only begins after a gap
+   *  in the audio. On a same-multiplex service switch the app's native jitter buffer does not drop
+   *  out at all, so no gap occurs, so `runStart` stays OLDER than the press and this could never
+   *  become true. The line then sat there for ever, at 336 s on BBC Radio 1 with the audio
+   *  perfect: "the audio has been perfect and it settled after the usual 3-4 seconds."
+   *
+   *  ★★★ THE TEST REWARDED THE WORSE AUDIO PIPELINE. The browser usually stutters briefly on a
+   *      switch, and that accidental gap armed the condition; the app, whose audio is better, never
+   *      armed it. A receiver that played flawlessly was the one that looked broken — which is why
+   *      this read as an app bug rather than as a condition nothing could satisfy.
+   *
+   *  ★ Novelty is not this test's job: `decoderFlowing` above already proves the NEW service is
+   *    producing samples after the press (runStart >= pickedAt, a full second of rises, seen
+   *    recently). All that is left here is whether output is actually reaching the listener — so
+   *    ask about NOW, not about a beginning.
+   *  ★★ SAME FAULT, TWO READERS — the web client carried the identical condition and is fixed with
+   *     it (AGENTS.md). The 2026-09-11 round fixed the DECODER counters in both and left the AUDIO
+   *     run, in both, with this dependency. */
   const runStart = p.audioRunStartAt?.() ?? 0, lastPkt = p.lastAudioAt?.() ?? 0;
-  const audioClean = runStart >= pickedAt + 400 && lastPkt - runStart >= 1000;
+  const audioClean = lastPkt > 0 && lastPkt - runStart >= 1000 && Date.now() - lastPkt < 1500;
   const heardSincePick = pickedAt > 0 && decoderFlowing && audioClean;
   if (heardSincePick && pickedAt > 0) setTimeout(() => setPickedAt(0), 0);
   const waitingSecs = (!!d && d.locked && !!d.sid && pickedAt > 0 && !heardSincePick)

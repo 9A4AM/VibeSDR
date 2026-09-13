@@ -4783,8 +4783,28 @@ function dabRender() {
     }
     const decoderFlowing = dabPcmRunStart >= dabPickedAt && dabPcmRoseAt >= dabPickedAt + 400 && (dabPcmRoseAt - dabPcmRunStart) >= 1000
                            && (performance.now() - dabPcmRoseAt) < 1500;
-    // (3) and it is actually HEARD: a sustained second of audible output since the press.
-    const audioClean = !!audio && audio.audibleRunStartAtMs >= dabPickedAt + 400 && audio.audibleRunMs >= 1000;
+    /* (3) and it is actually HEARD — a sustained second of output, AUDIBLE NOW.
+     *
+     * ★★★ THIS USED TO DEMAND A RUN THAT **BEGAN** AFTER THE PRESS, AND THAT IS UNSATISFIABLE ON A
+     *     RECEIVER WHOSE AUDIO NEVER BREAKS. A new audible run only starts after a gap of 400 ms
+     *     (see _noteAudible). On a same-multiplex service switch the audio is continuous, so no gap
+     *     occurs, so the run start stays OLDER than the press and this could never become true —
+     *     the line then sat there for ever. Stuart, 2026-09-13, at 336 s on BBC Radio 1: "the
+     *     tuning text warning that its tuning gets stuck. The audio has been perfect and it settled
+     *     after the usual 3-4 seconds."
+     *
+     * ★★★ WHICH IS WHY IT WAS RARE IN THE BROWSER AND PERMANENT IN THE APP — "its rare on the
+     *     browser by the way, but the app never seems to settle." The browser usually stutters
+     *     briefly on a switch and that accidental gap armed the condition; the app's native jitter
+     *     buffer does not, so nothing ever armed it. The test rewarded the WORSE audio pipeline,
+     *     and a receiver that played flawlessly was the one that looked broken.
+     *
+     * ★ Novelty is not this test's job and never was: `decoderFlowing` above already proves the
+     *   NEW service is producing samples after the press (dabPcmRunStart >= dabPickedAt, a full
+     *   second of rises, seen recently). All that is left for this one to establish is that the
+     *   output is actually reaching the listener — so it asks about NOW, not about a beginning. */
+    const audioClean = !!audio && audio.audibleRunMs >= 1000
+                       && (performance.now() - audio.lastAudibleAtMs) < 1500;
     const heard = gainSettled && decoderFlowing && audioClean;
     if (d.locked && d.sid && dabPickedAt > 0 && audio && !heard) {
       const secs = Math.floor(secsSincePick);
