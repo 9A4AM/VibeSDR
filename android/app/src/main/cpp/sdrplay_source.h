@@ -278,6 +278,16 @@ private:
     std::atomic<int>   liveLna_{0};     // LNA gain reduction, dB (not the LNA *state*)
     std::atomic<float> liveGain_{0.0f}; // total system gain, dB
     std::atomic<bool>  liveValid_{false};
+    /** ★★★ HAS THE AGC CONFIRMED WHAT WE LAST WROTE?
+     *
+     *  Set when WE change the gain, cleared by the next GainChange event. While it is set, the
+     *  AGC's reported figures describe a gain setting that no longer exists, so the readouts must
+     *  come from the struct — which is what we commanded and, when the writes are landing, what
+     *  the radio is actually doing.
+     *  ★ This is NOT a staleness TIMER, and deliberately: a settled AGC fires no events for
+     *    minutes at a time and its last figure stays perfectly true throughout. Only OUR OWN write
+     *    can make it false, so only our own write raises this. */
+    std::atomic<bool>  liveStale_{false};
     // ★ The level measurement above, filled by streamCb. Atomics because the callback is the
     //   API's thread and every reader is ours.
     /** ★★★ BUMPED WHENEVER THE CAPTURE CHANGES UNDER US (rate, frequency, gain re-plan), so the

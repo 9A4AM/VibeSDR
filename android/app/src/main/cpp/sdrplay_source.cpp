@@ -269,6 +269,8 @@ struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* los
                // The AGC's live figures — see the note on liveGr_ in the header.
                std::atomic<int>* gr; std::atomic<int>* lnaGr; std::atomic<float>* gain;
                std::atomic<bool>* valid;
+               // ★ Cleared by a GainChange event — see liveStale_ in the header.
+               std::atomic<bool>* stale;
                // ★ OUR OWN LEVEL MEASUREMENT — see adcPeakDbfs() in the header for why the RSP
                //   needs one of its own rather than borrowing the AGC's reduction figure.
                std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins;
@@ -362,7 +364,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
 
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
-                 &liveGr_, &liveLna_, &liveGain_, &liveValid_,
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_, &liveStale_,
                  &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
@@ -520,7 +522,7 @@ bool SdrplaySource::restartStream(std::string& err) {
 
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
-                 &liveGr_, &liveLna_, &liveGain_, &liveValid_,
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_, &liveStale_,
                  &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
@@ -607,6 +609,10 @@ bool SdrplaySource::reopen(std::string& err) {
 }
 
 void SdrplaySource::setGainTenthDb(int tenthDb) {
+    /* ★ OUR WRITE INVALIDATES THE AGC'S LAST WORD until it answers with a GainChange —
+     *   see liveStale_. Without this the readouts kept describing the PREVIOUS setting. */
+    liveStale_.store(true, std::memory_order_relaxed);
+
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     curGain_ = tenthDb;                   // remembered for reopen()
     if (!impl_->params || !impl_->params->rxChannelA) return;
@@ -768,7 +774,8 @@ float SdrplaySource::systemGainDb() const {
      *    the compensation in vsSdrplayVibeAgcTick. */
     const bool agcOn = impl_->params && impl_->params->rxChannelA
         && impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE;
-    if (agcOn && liveValid_.load(std::memory_order_relaxed))
+    if (agcOn && liveValid_.load(std::memory_order_relaxed)
+              && !liveStale_.load(std::memory_order_relaxed))
         return liveGain_.load(std::memory_order_relaxed);
     /* ★ -999 is "cannot read it", NOT 0.0 — zero is a legitimate system gain on this radio at
      *   medium wave, where the LNA states are attenuators, so returning 0 for "unknown" made a
@@ -797,7 +804,8 @@ int SdrplaySource::currentIfGr() const {
      *   the struct — the only thing that can be true when nobody is sending events. */
     const bool agcOn = impl_->params->rxChannelA->ctrlParams.agc.enable
                        != sdrplay_api_AGC_DISABLE;
-    if (agcOn && liveValid_.load(std::memory_order_relaxed))
+    if (agcOn && liveValid_.load(std::memory_order_relaxed)
+              && !liveStale_.load(std::memory_order_relaxed))
         return liveGr_.load(std::memory_order_relaxed);
     return (int)impl_->params->rxChannelA->tunerParams.gain.gRdB;
 }
@@ -853,6 +861,10 @@ int SdrplaySource::lnaBandId(double hz) {
 }
 
 void SdrplaySource::setLnaState(int state) {
+    /* ★ OUR WRITE INVALIDATES THE AGC'S LAST WORD until it answers with a GainChange —
+     *   see liveStale_. Without this the readouts kept describing the PREVIOUS setting. */
+    liveStale_.store(true, std::memory_order_relaxed);
+
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return;
     const int n = lnaStateCount();
@@ -910,6 +922,10 @@ void SdrplaySource::setLnaState(int state) {
 }
 
 bool SdrplaySource::setIfGainReduction(int gRdB) {
+    /* ★ OUR WRITE INVALIDATES THE AGC'S LAST WORD until it answers with a GainChange —
+     *   see liveStale_. Without this the readouts kept describing the PREVIOUS setting. */
+    liveStale_.store(true, std::memory_order_relaxed);
+
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return false;
     // ★★ REFUSED WHILE THE AGC IS ON. The API's own documentation is explicit that IFGR
@@ -1148,6 +1164,9 @@ static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT tuner,
         if (c->lnaGr) c->lnaGr->store((int)prm->gainParams.lnaGRdB, std::memory_order_relaxed);
         if (c->gain)  c->gain->store((float)prm->gainParams.currGain, std::memory_order_relaxed);
         if (c->valid) c->valid->store(true, std::memory_order_relaxed);
+        // ★ The AGC has spoken since our last write, so its figures describe the gain
+        //   that is actually set. See liveStale_.
+        if (c->stale) c->stale->store(false, std::memory_order_relaxed);
         return;
     }
     // ★ A device removal is the one event the shim genuinely has to know about: its watchdog
