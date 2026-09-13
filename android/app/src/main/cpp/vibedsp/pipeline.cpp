@@ -1074,12 +1074,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★ Maintenance runs at ~12 Hz, not per block — see eyeSince_. The ACCUMULATION
                 //   below is per block; only the display work is gated.
                 eyeSince_ += nc;
-                const bool eyeMaint = (chFs_ > 0.0) && (eyeSince_ >= chFs_ / 12.0);
-                if (eyeMaint) {
-                    // Persistence: the grids fade rather than clearing, as a phosphor does.
-                    for (int b = 0; b < kEyeBands; ++b)
-                        for (float& v : eyeAcc_[b]) v *= 0.55f;
-                }
+                /* ★★ AT THE SEND RATE, NOT TWICE IT. With a 1.5 s time constant there is nothing
+                 *  to gain from maintaining faster than frames go out — the extra pass was
+                 *  computed and thrown away. Stuart, on matching the panel's averaging: "also may
+                 *  save a little CPU too." It halves the 13824-cell pass. */
+                const bool eyeMaint = (chFs_ > 0.0) && (eyeSince_ >= chFs_ / 6.0);
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
                 //   passage genuinely shrinks the composite, and a fixed full scale would hide
                 //   the structure instead of magnifying it (Stuart, 2026-09-13).
@@ -1105,6 +1104,17 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 for (int i = 0; i < nc; ++i) {
                     const float a = std::fabs(eyeHp_[i]);
                     if (a > eyePeak_) eyePeak_ = a;
+                }
+                /* ★★ TOTAL PEAK DEVIATION — the WHOLE composite, audio included, which is the
+                 *  headline broadcast number and the one thing the eye has been drawing (a
+                 *  flattened top) while nothing measured it. Taken from demodBuf_ rather than the
+                 *  high-passed copy precisely BECAUSE the audio belongs in it.
+                 * ★ A slower decay than the eye's scale: this is a peak-hold, and the point of a
+                 *  deviation monitor is that a brief excursion is not missed between glances. */
+                mpxDevPeak_ *= 0.999f;
+                for (int i = 0; i < nc; ++i) {
+                    const float a = std::fabs(demodBuf_[i]);
+                    if (a > mpxDevPeak_) mpxDevPeak_ = a;
                 }
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
                 // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
@@ -1136,6 +1146,16 @@ void RxPipeline::feed(const cf32* iq, int n) {
                  *   healthy pilot — destroying the reading the colours exist to give ("a strong
                  *   line is good, speckle is scatter"). They are judged against each other, so
                  *   they must share a scale. */
+                /* ★★★ CONVERT WHAT WAS ACCUMULATED, *THEN* DECAY — order matters, and getting it
+                 *   wrong is invisible in code review. It first read decay -> accumulate -> convert,
+                 *   so every frame sent was a freshly faded grid plus ONE audio block: everything
+                 *   gathered between ticks was wiped by the next decay before it was ever
+                 *   converted. On air that is a plot which sits nearly flat and only occasionally,
+                 *   when the timing happens to line up, shows the waveform properly before fading
+                 *   again — Stuart, 2026-09-13: "it looks like a proper waveform for a split second
+                 *   then decays back to this look". The pilot is a pure tone locked to the trigger;
+                 *   it should draw a steady sine at ALL times, and a plot that flickers is the
+                 *   display sampling itself at the wrong moment, not the signal coming and going. */
                 if (eyeMaint) {
                     eyeSince_ = 0.0;
                     float mx = 0.0f;
@@ -1147,6 +1167,20 @@ void RxPipeline::feed(const cf32* iq, int n) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
                         }
+                    /* ★★★ PERSISTENCE ON THE SAME CLOCK AS THE REST OF THE PANEL.
+                     *   Fade AFTER publishing, so the next interval builds on a softened version
+                     *   of what was just shown rather than on nothing.
+                     * ★★ 0.889 at 6 Hz is a time constant of about 1.5 SECONDS, deliberately
+                     *   matching the smoothing already applied to pilotDev, rdsDev, coherence and
+                     *   drift. It first shipped at 0.72 — about 0.3 s — which left the eye five
+                     *   times twitchier than every number printed beside it. Stuart: "maybe need
+                     *   to employ averaging like the rest of the metrics, as we had false RDS DEV
+                     *   readings until the averaging went in."
+                     * ★ [[panel_readouts_need_one_clock]]: a panel that mixes timescales invites
+                     *   the reader to compare two things measured over different windows, which
+                     *   has produced wrong diagnoses on this very panel before. */
+                    for (int b = 0; b < kEyeBands; ++b)
+                        for (float& v : eyeAcc_[b]) v *= 0.889f;
                 }
             }
 
@@ -1306,6 +1340,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eyeW = haveEye ? kEyeW : 0;
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
+                x.mpxDevKHz = mpxDevPeak_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);
             }

@@ -158,6 +158,8 @@ export interface RdsExt {
   eyeW: number;
   eyeH: number;
   eyeDev: number;
+  /** Total peak deviation of the whole composite INCLUDING audio, kHz. 75 is the limit. */
+  mpxDev: number;
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -1087,6 +1089,7 @@ export class SpectrumClient {
           eyeW: Number(msg.eyeW ?? 0),
           eyeH: Number(msg.eyeH ?? 0),
           eyeDev: Number(msg.eyeDev ?? 0),
+          mpxDev: Number(msg.mpxDev ?? 0),
         });
         break;
       case 'sig':

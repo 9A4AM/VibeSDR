@@ -8638,6 +8638,38 @@ function drawMpxEye() {
   g.globalCompositeOperation = prev;
   /* ★ THE KEY, IN THE PLOT — three words in their own colours, which is the whole legend. A
    *  separate key would cost a row of the panel and be read once; this is read every time. */
+  /* ★★ THE DEVIATION MONITOR — a BAR, because that is what a deviation monitor is. PILOT DEV
+   *  and RDS DEV measure their own components; this is the WHOLE composite, audio included,
+   *  against the 75 kHz limit — the number a broadcast engineer actually watches, and the one
+   *  the eye has been drawing as a flattened top while nothing reported it (Saber's suggestion,
+   *  2026-09-13, and Stuart: "is that visual like our new eye?" — it should be).
+   * ★ Peak-HELD on the server with a slow decay, because the point of a deviation monitor is
+   *   catching the excursion you were not looking at.
+   * ★ And it refuses to answer when the S/N cannot support it, like everything else here. */
+  {
+    const dv = $('rdsMpxDev');
+    const fill = document.getElementById('rdsMpxFill');
+    const hold = document.getElementById('rdsMpxHold');
+    const md = rdsExt?.mpxDev ?? 0;
+    const snr = rdsExt?.mpxSnr ?? 0;
+    const usable = md > 0.1 && !(snr > 0 && snr < 20);
+    if (dv) {
+      if (!usable) { dv.textContent = 'deviation — not measurable'; dv.className = ''; }
+      else {
+        // 75 kHz is the legal peak. A little over is common on heavily processed stations; well
+        // over is a fault worth seeing.
+        const verdict = md > 82 ? 'OVERMODULATED' : md > 75 ? 'over the limit' : 'nominal';
+        dv.textContent = `deviation ${md.toFixed(0)} kHz peak · ${verdict}`;
+        dv.className = md > 82 ? 'bad' : md > 75 ? 'ok' : 'good';
+      }
+    }
+    // 0..100 kHz across the bar, so the 75 kHz limit sits three quarters along and
+    // overmodulation still has somewhere to go.
+    const pct = usable ? Math.max(0, Math.min(100, md)) : 0;
+    if (fill) fill.style.width = `${pct}%`;
+    if (hold) { hold.style.left = `${pct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
+  }
+
   g.font = '7px ui-monospace, monospace';
   g.textBaseline = 'top';
   const keys: Array<[string, string]> = [
@@ -8690,6 +8722,18 @@ function drawMpxEye() {
     } else if (!locked) {
       vd.textContent = 'no pilot — untriggered, so this is noise rather than a trace';
       vd.className = 'bad';
+    } else if ((rdsExt?.mpxSnr ?? 0) > 0 && (rdsExt?.mpxSnr ?? 0) < 20) {
+      /* ★★★ AT LOW S/N THE SCALE IS MEASURING NOISE, SO THE LEVEL WORDS ARE MEANINGLESS.
+       *   97.2 MHz at 7 dB MPX S/N with no RDS lock read "very strong · near full deviation ·
+       *   ±60 kHz", and 107.4 at 16 dB read "strong stereo · ±48 kHz" — both mush, both called
+       *   STRONG, because the autoscale tracks whatever is biggest and at that S/N that is the
+       *   noise. The pilot is LOCKED on both, so the lock gate above does not catch it: this is
+       *   the same fault one condition further along (Stuart's band sweep, 2026-09-13).
+       * ★★ SAY WHAT THE PANEL ALREADY SAYS ELSEWHERE. "multipath not measurable at this S/N" and
+       *   "signal too weak to equalise" are the house idiom for exactly this, and a readout that
+       *   declines to answer is worth far more than one that answers confidently and wrongly. */
+      vd.textContent = 'buried in noise — level not measurable';
+      vd.className = 'bad';
     } else {
       let what: string;
       if (d < 3)       what = 'little above the audio — mono, or fully blended';
@@ -8703,12 +8747,11 @@ function drawMpxEye() {
        *  the fuzz. Stuart: "you can see it trying to form." True and misleading together, which
        *  is the worst kind of readout. The sharp-against-fuzzy contrast IS the S/N, so the
        *  verdict should name it rather than leave the plot to be read by eye. */
+      // ★ Below 20 dB is handled above — it is not a qualifier there, it is a refusal.
       const snr = rdsExt?.mpxSnr ?? 0;
-      const noise = (snr > 0 && snr < 20) ? ' · buried in noise'
-                  : (snr > 0 && snr < 28) ? ' · noisy'
-                  : '';
+      const noise = (snr > 0 && snr < 28) ? ' · noisy' : '';
       vd.textContent = d > 0.1 ? `${what}${noise} · scale ±${d.toFixed(0)} kHz` : '—';
-      vd.className = (snr > 0 && snr < 20) ? 'bad' : (snr > 0 && snr < 28) ? 'ok' : '';
+      vd.className = (snr > 0 && snr < 28) ? 'ok' : '';
     }
   }
 }

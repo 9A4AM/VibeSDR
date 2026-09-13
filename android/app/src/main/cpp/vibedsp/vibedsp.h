@@ -1841,6 +1841,13 @@ public:
              *  colour saying what is making each part of it. All three share one scale. */
             const unsigned char* eyeBand[3]; int eyeW, eyeH;
             float eyeDevKHz;
+            /** ★★ TOTAL PEAK DEVIATION of the whole composite INCLUDING the audio, in kHz — the
+             *  headline broadcast measurement, and the one this panel was missing. 75 kHz is the
+             *  limit; above it a station is overmodulating. Suggested by Saber, 2026-09-13, and
+             *  it is the number the eye has been DRAWING all along (flattened peaks) while
+             *  nothing reported it. Peak-held with a slow decay so a transient is not missed
+             *  between frames. */
+            float mpxDevKHz;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
@@ -2260,6 +2267,7 @@ private:
      *  about twenty-five times the work required. This counts samples so the maintenance runs at
      *  ~12 Hz, comfortably ahead of the 6 Hz the frames actually go out at. */
     double                     eyeSince_ = 0.0;      // samples since the last grid maintenance
+    float                      mpxDevPeak_ = 0.0f;   // total composite peak — see RdsExt::mpxDevKHz
 
     /** ★★ A 2-POLE RESONATOR PER COMPONENT. A one-pole pair is far too broad — the bands are at
      *  19, 38 and 57 kHz and would leak into each other, which would defeat the whole point of

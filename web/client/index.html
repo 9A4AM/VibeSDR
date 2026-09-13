@@ -2183,6 +2183,38 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   font-family: var(--mono, monospace); color: var(--text-dim);
 }
 #rdsEyeVerdict.bad { color: #ff8a7d; }
+/* ★★ THE DEVIATION MONITOR, AS A BAR — which is what a deviation monitor IS. A number alone
+   tells you the figure; a bar against a marked limit tells you at a glance how much room is
+   left, which is the question being asked. 0-100 kHz so the 75 kHz limit sits three quarters
+   across and overmodulation has somewhere to go. */
+#rdsMpxBar {
+  position: relative; width: 180px; height: 8px; margin-top: 4px;
+  background: rgba(255,160,0,0.10); border: 1px solid var(--btn-border);
+  border-radius: 2px; overflow: hidden;
+}
+#rdsMpxFill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+  background: linear-gradient(90deg, #7dff9a 0%, #7dff9a 70%, #ffd479 78%, #ff8a7d 100%);
+  transition: width 0.12s linear;
+}
+/* ★ The PEAK HOLD — the whole point of a deviation monitor is catching the excursion you were
+   not looking at. Drawn as a bright tick that lingers. */
+#rdsMpxHold {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: #fff;
+  left: 0; opacity: 0; transition: left 0.12s linear, opacity 0.4s linear;
+}
+/* ★ The 75 kHz limit, always visible, so the bar means something without a scale. */
+#rdsMpxLimit {
+  position: absolute; top: -1px; bottom: -1px; left: 75%; width: 1px;
+  background: rgba(255,255,255,0.55);
+}
+#rdsMpxDev {
+  font-size: 11px; letter-spacing: 0.3px; margin-top: 3px;
+  font-family: var(--mono, monospace); color: var(--text-dim);
+}
+#rdsMpxDev.good { color: #7dff9a; }
+#rdsMpxDev.ok   { color: #ffd479; }
+#rdsMpxDev.bad  { color: #ff8a7d; }
 #rdsEyeVerdict.ok  { color: #ffd479; }
 #decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
 /* ★★ The 40vh cap here is what the ADV RDS "taller" button was fighting: the panel grew and
@@ -2986,6 +3018,12 @@ select.btn { padding: 6px 8px; }
              rather than only how far the axis goes. -->
         <div id="rdsEyeCap">composite eye · audio removed</div>
         <div id="rdsEyeVerdict">—</div>
+        <!-- ★★ TOTAL PEAK DEVIATION — the headline broadcast number, and the one the panel was
+             missing: PILOT DEV and RDS DEV measure their own components, this measures the WHOLE
+             composite including audio against the 75 kHz limit. Suggested by Saber, 2026-09-13,
+             and it is exactly what the eye has been DRAWING all along as a flattened top. -->
+        <div id="rdsMpxBar"><i id="rdsMpxFill"></i><b id="rdsMpxHold"></b><u id="rdsMpxLimit"></u></div>
+        <div id="rdsMpxDev">—</div>
         <div id="rdsConstCap">constellation</div>
         <!-- ★ A plain-English verdict, because the plot expects you to already know how to
              read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the
