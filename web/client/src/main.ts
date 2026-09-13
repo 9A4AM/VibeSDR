@@ -1432,6 +1432,53 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onRspStat: (sys, lna, ifgr, overload, settling, m: any = {}) => {
       $('initChip').classList.toggle('set', settling);
+      /* ★★★ THE GAIN READOUTS HAVE STOPPED BEING READINGS — SAY SO, AND OFFER THE REPAIR.
+       *
+       *  The server sets `gainStuck` when its own gain writes stop landing, which freezes every
+       *  API-sourced figure on this panel at whatever it last said. Measured on the RSP1A,
+       *  2026-09-13: six LNA steps in a row with the IF reduction reading exactly 59.0 dB and the
+       *  system gain exactly -13.6 dB, while the ADC peak (which the server measures itself) went
+       *  on moving normally.
+       *
+       *  ★★★ IT IS OFTEN INAUDIBLE, WHICH IS WHY THIS IS A CHIP AND NOT AN AUTOMATIC REPAIR. That
+       *      day it froze and left the signal perfectly clean. Restarting the IF AGC breaks
+       *      everyone's audio for a moment, so the choice belongs to a person: "rather than
+       *      automatically restarting the API which will cause a disruption for the user, we put a
+       *      warning in the chip", and "like at the moment I'd be happy to leave it frozen"
+       *      (Stuart, 2026-09-13). Leaving it frozen is a legitimate outcome — so this informs
+       *      once and then stops talking. No timer, no escalation, no second nag.
+       *
+       *  ★ Written only on CHANGE, the same reason the CENTRE chip is: replacing textContent
+       *    destroys the text node under the pointer, and if that lands between mousedown and
+       *    mouseup the click never fires and the chip reads as unresponsive. */
+      /* ★★★ AND EVERYBODY ELSE HAS TO BE TOLD, BECAUSE THE FRONT END IS SHARED. Stuart,
+       *     2026-09-13: "the issue is on locked range multiple VFOs, as everybody is independent
+       *     on that, and unlocked radio shared VFO — so a warning message must go out to users
+       *     when someone has reset the api." A listener who never touched anything would
+       *     otherwise get an unexplained break in their audio and conclude the receiver had
+       *     fallen over.
+       *  ★★★ NO NEW MESSAGE WAS NEEDED. `agcReinit` already rides rspstat to EVERY listener and
+       *      is already true for six seconds after a re-kick — it was built to show exactly this
+       *      and nothing was reading it here. One chip, three states, no new protocol.
+       *  ★ The restarting state is NOT tappable: there is nothing useful a second tap can do
+       *    while the repair is running, and a control whose use is a no-op should not be offered. */
+      {
+        const stuck    = Number(m.gainStuck) === 1;
+        const resetting = Number(m.agcReinit) === 1;
+        const chip = document.getElementById('mGainStuckFloat');
+        if (chip) {
+          setHidden(chip, !stuck && !resetting);
+          /* ★ Stuart's words, 2026-09-13, both of them. The parenthesis is the point on the first:
+           *   the reset is the disruptive half, and a person choosing it deserves to know that
+           *   BEFORE they tap, not to discover it as a break in the audio. */
+          const label = resetting
+            ? 'PLEASE WAIT · SDRPLAY API RESTARTING'
+            : 'SDRPLAY GAIN API FAILURE · TAP TO RESET (MAY CAUSE AN AUDIO DROP)';
+          if ((stuck || resetting) && chip.textContent !== label) chip.textContent = label;
+          chip.classList.toggle('busy', resetting);
+          (chip as HTMLButtonElement).disabled = resetting;
+        }
+      }
       // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
       // main screen where it will actually be seen.
       $('ovlChip').classList.toggle('set', overload);
@@ -5536,6 +5583,20 @@ function buildControls() {
 
   // Snap the view back onto the VFO. Works whether locked or not — being locked
   // is exactly the case where you have no other way to bring it back.
+  /* ★ The repair is the server's to perform — the client only asks. Gated there by the same
+   *   rule as the gain sliders (front-end state is shared), so on a locked receiver a listener
+   *   without the operator's password is refused and told why, rather than the chip quietly
+   *   doing nothing: never offer a control whose every use is a no-op. */
+  {
+    const chip = document.getElementById('mGainStuckFloat');
+    if (chip) chip.onclick = () => {
+      spec?.send({ type: 'rsp_agc_restart' });
+      // ★ Hide it on the tap. The server clears the flag either way, so if the radio is still
+      //   frozen the DETECTOR will raise it again from fresh evidence — a warning must never be
+      //   kept on screen by a latch nobody re-checked.
+      setHidden(chip, true);
+    };
+  }
   $('centreBtn').onclick = () => {
     spec!.pan(spec!.frequency);
     updateViewOverlays();

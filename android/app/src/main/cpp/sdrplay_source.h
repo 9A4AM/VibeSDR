@@ -135,6 +135,16 @@ public:
      *  the truth while AGC is on. */
     int currentIfGr() const;
     int currentLnaState() const;
+    /** ★★★ WHAT THE API'S OWN STRUCT SAYS THE GAIN IS — never the AGC's event value.
+     *
+     *  systemGainDb() prefers the event figure while the AGC is enabled, which is right for a
+     *  DISPLAY and useless for the one question this answers: **did our write land?** The API
+     *  refreshes `gainVals.curr` on every Update_Tuner_Gr, so it moves when a write is honoured
+     *  and sits still when it is not — including when the AGC is wedged and no events come, which
+     *  is precisely when the event figure is frozen and cannot tell us anything.
+     *  ★ -999 for "cannot read it", same sentinel as systemGainDb(), because 0 dB is a legitimate
+     *    system gain on this radio at medium wave. */
+    float structGainDb() const;
     /** The API's own bandwidth choice for a sample rate, following SoapySDRPlay3's mapping. */
     static int bandwidthKHzForRate(double sampleRateHz);
 

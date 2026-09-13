@@ -777,6 +777,11 @@ float SdrplaySource::systemGainDb() const {
     if (!open_ || !impl_->params || !impl_->params->rxChannelA) return -999.0f;
     return impl_->params->rxChannelA->tunerParams.gain.gainVals.curr;
 }
+float SdrplaySource::structGainDb() const {
+    /* ★ Deliberately NOT systemGainDb(): no event value, no AGC preference. See the header. */
+    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return -999.0f;
+    return impl_->params->rxChannelA->tunerParams.gain.gainVals.curr;
+}
 int SdrplaySource::currentIfGr() const {
     if (!impl_->params || !impl_->params->rxChannelA) return 0;
     /* ★★★ THE AGC'S EVENT IS ONLY THE TRUTH WHILE THE AGC IS RUNNING. This preferred liveGr_
@@ -1208,6 +1213,7 @@ std::string SdrplaySource::deviceNameLocked(int) { return ""; }
 float SdrplaySource::systemGainDb() const { return 0.0f; }
 void SdrplaySource::dcRecalibrate() {}
 int SdrplaySource::currentIfGr() const { return 0; }
+float SdrplaySource::structGainDb() const { return -999.0f; }
 int SdrplaySource::currentLnaState() const { return 0; }
 int SdrplaySource::bandwidthKHzForRate(double) { return 0; }
 }  // namespace vibe

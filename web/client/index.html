@@ -661,7 +661,12 @@ html #bar { display: none; }
 #mAudio.muted, #mPanelMute.muted { color: #ff3b30; border-color: #ff3b30; }
 
 /* ── "Back to the dial" button ────────────────────────────────────────────────── */
-#mCentreFloat {
+/* ★★★ THE SAME CHIP AS 'CENTRE ON VFO', DELIBERATELY. Stuart, 2026-09-13: "we surface the
+   warning in a clickable chip like the VFO off screen chip, that way we dont have to reinvent
+   the wheel for the app too — as the mechanism is already there for it." One rule, two users:
+   a floating, breathing, tappable chip over the waterfall that appears only while it has
+   something to say. */
+#mCentreFloat, #mGainStuckFloat {
   position: absolute; left: 50%; transform: translateX(-50%);
   /* Sits just above the card, measured — the card's height changes with the arrangement. */
   bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 2.9em);
@@ -673,8 +678,19 @@ html #bar { display: none; }
   cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.6);
   animation: sqlBreathe 2s ease-in-out infinite;
 }
-#mCentreFloat[hidden] { display: none; }
+#mCentreFloat[hidden], #mGainStuckFloat[hidden] { display: none; }
 #mCentreFloat:active { background: rgba(53,224,138,0.2); }
+/* ★ AMBER, NOT PHOSPHOR — this one is a FAULT, not a navigation aid, and the two must not read
+   as the same kind of message at a glance. Sits a row higher so it can never cover the CENTRE
+   chip: the dial being off screen and the gain API being frozen are unrelated and can coincide. */
+#mGainStuckFloat {
+  color: var(--amber); border-color: var(--amber);
+  bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 6.2em);
+}
+#mGainStuckFloat:active { background: rgba(255,184,51,0.2); }
+/* ★ The restarting state: same chip, but plainly not a button any more — it is telling you to
+   wait, not offering you a choice. No breathing animation either; that pulse means "act". */
+#mGainStuckFloat.busy { cursor: default; animation: none; opacity: 0.85; }
 
 /* ── House glyphs ────────────────────────────────────────────────────────────── */
 /* ★★ THE APP'S OWN MARKS, NOT EMOJI. An emoji is a different drawing on every platform,
@@ -2988,6 +3004,7 @@ select.btn { padding: 6px 8px; }
        ★ It names the DIRECTION as well: knowing the station is off to the left is most of
        what you wanted to know, and it costs nothing since we already computed which side. -->
   <button id="mCentreFloat" hidden></button>
+  <button id="mGainStuckFloat" hidden></button>
 
   <!-- ══ CONTROLS ══════════════════════════════════════════════════════════════
        ★★★ ONE CONTROL SURFACE AT EVERY WIDTH. This and the desktop bar used to swap at a

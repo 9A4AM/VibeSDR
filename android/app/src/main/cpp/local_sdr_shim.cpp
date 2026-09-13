@@ -2589,6 +2589,16 @@ static std::atomic<bool> g_rspAgcSetLock{false};
  *  start-up kick — which is what made it walk several steps and disturb the IF AGC. */
 static std::atomic<int>  g_rspRfAgcStart{-1};
 static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
+/** ★★★ WE have concluded the API is stuck, because our own gain writes stopped landing.
+ *
+ *  Deliberately SEPARATE from SdrplaySource::apiFailed(), which is the API reporting its own
+ *  collapse. That distinction is load-bearing: a heuristic once "repaired" a perfectly happy
+ *  receiver, and the lesson recorded there was that behaviour cannot tell a stalled AGC from a
+ *  contented one. This is not behaviour — it is our own write failing to arrive — but it is still
+ *  an INFERENCE, and it must never be logged in the API's voice. */
+static std::atomic<bool> g_rspApiStuck{false};
+/** ★ A listener has tapped the chip. Performed on the radio thread, never where it arrives. */
+static std::atomic<bool> g_rspAgcRestartReq{false};
 
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
  *   forward for a global is how a file grows an ordering dependency nobody can see. */
@@ -2695,6 +2705,15 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     /* ★ What the last STEP did, so an immediate reversal can be recognised as hunting. Cleared by
      *   a retune or a band change, where the right answer genuinely may be on the other side. */
     static int   lastDir = 0; static double lastMean = 0.0; static bool oscWarned = false;
+    /* ★ The reduction we stepped ON, so the next settled reading can be checked against it — see
+     *   the open-loop test below. -1 = nothing to check (no step outstanding). */
+    static int   grAtLastStep = -1;
+    static int   deadSteps = 0;          // consecutive steps that did not move it at all
+    static bool  deadWarned = false;     // say it once, not every window
+    /* ★ The API's own gainVals.curr at the moment we stepped — the evidence that our WRITE landed,
+     *   independent of whether its AGC is running. -999 = nothing outstanding. */
+    static float structGainAtStep = -999.0f;
+    static int   unhonoured = 0;         // consecutive steps whose write never reached the radio
 
     const int gr = sdrp->currentIfGr();
     if (gr <= 0) return;                                  // not reported yet
@@ -2739,6 +2758,103 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
             return;
         }
     }
+    /* ★★★ DID OUR OWN LAST STEP MOVE THE NUMBER WE ARE STEERING BY? IF NOT, THE LOOP IS OPEN.
+     *
+     *  An LNA rung is worth ~21 dB here (measured, see below). Shed one and the IF AGC MUST
+     *  answer — that is the entire mechanism this loop relies on. If the reported reduction comes
+     *  back bit-identical after a step that large, it is not a reading of the radio: it is a
+     *  frozen number, and every further step is taken on evidence that cannot change.
+     *
+     *  ★★★ MEASURED ON THE LIVE RSP1A, 2026-09-13, 648 kHz — six steps, one number:
+     *        IF reduction averaged 59.0 dB ... RF gain state 0 -> 1
+     *        IF reduction averaged 59.0 dB ... RF gain state 1 -> 2
+     *        ... 2 -> 3, 3 -> 4, 4 -> 5, 5 -> 6
+     *      Six rungs — well over a hundred decibels of front end — and 59.0 every time, to the
+     *      decimal. The IF AGC has 39 dB of range; it cannot sit still through that. Stuart got
+     *      there first: "its using a stuck IF agc readout to base its RF gain on and as it was
+     *      stuck the RF gain kept lowering but the API being stuck never honoured it."
+     *
+     *  ★★★ WHY THE NUMBER FREEZES, since the cause is one function away in sdrplay_source.cpp:
+     *      currentIfGr() prefers the AGC's event value while `agc.enable != DISABLE` — but
+     *      `liveValid_` is a LATCH, set by the first GainChange event and never cleared. Enabled
+     *      and NOT FIRING is a third case that guard does not have, so the readout keeps handing
+     *      back the last event's value for ever: the handover 59. systemGainDb() has the same
+     *      guard and froze with it (-13.6 dB, also for ever). Everything the API's event path
+     *      feeds was stuck; adcPeak, which we measure from the samples ourselves, kept moving.
+     *      AGENTS.md, "ELSE MEANS DONGLE" — an else meaning "the other one" cannot survive a third.
+     *
+     *  ★★★ AND THIS IS **NOT** THE DETECTOR THE DESIGN BANS. "The reduction has not moved in 30 s"
+     *      is forbidden, and rightly: that is exactly what a SETTLED radio looks like, and it once
+     *      repaired a working receiver. This asks a different question, and only ever right after
+     *      WE changed the front end by a rung. A settled radio holds its reduction because nothing
+     *      is disturbing it; it cannot hold it while we pull 21 dB out from under it. The timer
+     *      says nothing; the step is a probe with a known answer.
+     *
+     *  ★★ TWO STEPS, NOT ONE. The reduction is an integer and a step CAN land on the same value by
+     *     luck, particularly near a rail. Two in a row cannot be luck, and two rungs is a cheap
+     *     price for certainty — against the six this cost tonight.
+     *
+     *  ★ Judged here, AFTER the five seconds of silence above, so the reading being compared is
+     *    the AGC's settled answer and not the wake of our own move. */
+    /* ★★★ AND THE STEP SEPARATES THE TWO FAULTS, WHICH LOOK IDENTICAL FROM HERE.
+     *  Stuart, 2026-09-13: *"one simple thing we do is add a check to see if our gain changes are
+     *  being honoured — if we request gain 3/6 but it never moves we assume the API is stuck and
+     *  restart it."* That is the better question, because it tests OUR WRITE rather than an
+     *  inference from someone else's loop. Two readings answer it:
+     *
+     *    structGainDb()   the API's own `gainVals.curr`, refreshed on every Update_Tuner_Gr.
+     *                     Moves when a write LANDS, regardless of whether the AGC is running.
+     *    the reduction    the AGC's answer to the change we just made.
+     *
+     *  ★ write landed, reduction moved      → healthy; carry on.
+     *  ★ write landed, reduction FROZEN     → the API took our write but its IF AGC is not
+     *                                         answering. Stop steering by a dead number.
+     *  ★ write did NOT land                 → the API is stuck. Repair it: the same re-kick the
+     *                                         DeviceFailure path does, on an honest second trigger.
+     *
+     *  ✗ currentLnaState() CANNOT be used for this, and it is the obvious thing to reach for: it
+     *    reads the commanded struct field, so it always agrees with what we asked for. That is
+     *    exactly why nothing looked wrong on screen tonight while the loop shed six rungs.
+     */
+    if (grAtLastStep >= 0) {
+        const float gNow    = sdrp->structGainDb();
+        const bool  haveG   = gNow > -998.0f && structGainAtStep > -998.0f;
+        const bool  wrLanded = haveG && std::fabs(gNow - structGainAtStep) > 0.05f;
+        const bool  grMoved  = (int)llround(mean) != grAtLastStep;
+
+        if (haveG && !wrLanded) { ++unhonoured; deadSteps = 0; }
+        else if (!grMoved)      { ++deadSteps;  unhonoured = 0; }
+        else                    { deadSteps = 0; unhonoured = 0; deadWarned = false; }
+        grAtLastStep = -1; structGainAtStep = -999.0f;    // consumed, whichever way it went
+    }
+
+    /* ★★ TWO STEPS BEFORE EITHER VERDICT, NOT ONE. The reduction is an integer and the gain ladder
+     *    is coarse, so ONE step can land on the same value by luck, particularly against a rail.
+     *    Two in a row cannot — and two rungs is a cheap price beside the six this cost tonight. */
+    if (unhonoured >= 2) {
+        unhonoured = 0;
+        LOGI("RSP RF AGC: our gain writes are NOT being honoured — %d LNA steps and the API's own "
+             "gainVals.curr never moved from %.1f dB. Treating the API as stuck and restarting "
+             "its IF AGC in place. (Inferred from our own writes, NOT reported by the API — see "
+             "the DeviceFailure path for the case where it says so itself.)",
+             2, (double)structGainAtStep);
+        g_rspApiStuck.store(true, std::memory_order_relaxed);
+        outMs = 0; outDir = 0;
+        return;
+    }
+    if (deadSteps >= 2) {
+        if (!deadWarned) {
+            deadWarned = true;
+            LOGI("RSP RF AGC: HOLDING — our writes are landing, but the IF reduction has read "
+                 "exactly %.0f dB through %d of our own LNA steps. A rung is worth ~21 dB here, so "
+                 "a live AGC cannot sit still through that: this number is frozen, not measured, "
+                 "and every further step would be taken on evidence that cannot change. Holding RF "
+                 "gain at state %d.", mean, deadSteps, sdrp->currentLnaState());
+        }
+        outMs = 0; outDir = 0;
+        return;
+    }
+
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
@@ -2826,6 +2942,10 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     LOGI("RSP RF AGC: IF reduction averaged %.1f dB for %.1f s, %s the %d-%d dB window "
          "(%.0f dB past the trigger) — RF gain state %d -> %d",
          mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want);
+    /* ★ Remember what we stepped ON. The next settled window checks whether this moved; if it
+     *   never does, we are steering by a frozen number and must stop. See the open-loop test. */
+    grAtLastStep     = (int)llround(mean);
+    structGainAtStep = sdrp->structGainDb();
     LocalSdrShim::instance().setLnaState(want);
     g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
     lastMove = now;
@@ -7639,12 +7759,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★★ A re-kick is still the right REPAIR — agc.enable acts on a transition, so disable,
              *    nudge the reduction two decibels where it stands, enable again. It just needs a
              *    trustworthy trigger, and now it has one. */
-            if (sdrpAgcWanted && sdrp->apiFailed()) {
+            /* ★★★ WHEN *WE* INFER IT, WE DO NOT ACT — WE ASK. A re-kick disturbs the radio for
+             *     everybody listening, and this trigger is an inference, not the API's own report.
+             *     Stuart, 2026-09-13: *"rather than automatically restarting the API which will
+             *     cause a disruption for the user, we put a warning in the chip — SDRplay Gain API
+             *     Frozen, tap here to restart."* So g_rspApiStuck is REPORTED (rspstat.gainStuck)
+             *     and repaired only when somebody asks, via `rsp_agc_restart`.
+             *  ★ sdrplay_api_DeviceFailure is different and still acts on its own: that is the
+             *    library saying it has collapsed, and there is nothing to preserve by waiting. */
+            if (sdrpAgcWanted && (sdrp->apiFailed()
+                                  || g_rspAgcRestartReq.load(std::memory_order_relaxed))) {
+                /* ★★ ONE REPAIR, TWO CALLERS, AND THE LOG MUST SAY WHICH. The API reporting its
+                 *    own collapse is a FACT; a listener tapping the chip is a DECISION taken on
+                 *    our inference. Neither may be written in the other's voice — the next person
+                 *    reading this log has to be able to tell a reported failure from a requested
+                 *    reset. */
+                const bool asked = g_rspAgcRestartReq.exchange(false, std::memory_order_relaxed);
                 sdrp->clearApiFailed();
+                g_rspApiStuck.store(false, std::memory_order_relaxed);
                 const int gnow   = sdrp->currentIfGr();
                 const int nudged = (gnow >= 40) ? std::max(20, gnow - 2) : std::min(59, gnow + 2);
-                LOGI("RSP: the SDRplay API reported a device failure — restarting its IF AGC in "
-                     "place (%d -> %d -> AGC on).", gnow, nudged);
+                LOGI("RSP: %s — restarting its IF AGC in place (%d -> %d -> AGC on).",
+                     asked ? "a listener asked to reset the frozen gain API"
+                           : "the SDRplay API reported a device failure",
+                     gnow, nudged);
                 sdrp->setIfAgc(false);
                 sdrp->setIfGainReduction(nudged);
                 sdrp->setIfAgc(true);
@@ -8016,7 +8154,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  discard the whole thing and show a frozen gain readout with no error anywhere.
                  *  That exact fault cost an evening on the DAB stats block — see the note on its
                  *  2048-byte buffer. snprintf returns the length it WANTED, so it is checked. */
-                char gb[320];
+                /* ★ 250 bytes measured on air, and every added field eats the margin.
+                 *   A silent truncation here reads as a DEAD FEATURE — the check below
+                 *   exists because of one. Grown with the field, not after it. */
+                char gb[416];
                 const int need = snprintf(gb, sizeof gb,
                     /* ★ The notch state rides with the gain figures because it is the same kind of
                      *   thing: what the FRONT END is doing right now. Stuart asked for the readout
@@ -8036,7 +8177,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   say — the same rule that "a client must not decide what only the server
                      *   knows" was written for. hwinfo stays as it is: this is live state, and it
                      *   belongs on the live channel. */
-                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d,\"agcInit\":%d}",
+                    /* ★★★ THE GAIN READOUTS HAVE STOPPED BEING READINGS. Our own writes are no longer
+                     *   landing, so every API-sourced figure above is frozen at whatever it last
+                     *   said. The client draws a chip offering a restart; it does NOT act by
+                     *   itself, because the fault is often INAUDIBLE — today it froze and left the
+                     *   signal clean, and an automatic repair would have turned a receiver that
+                     *   sounded perfect into a break in everybody's audio. Stuart: "like at the
+                     *   moment I'd be happy to leave it frozen." Leaving it frozen is a legitimate
+                     *   outcome, so this informs and then stops talking. */
+                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d,"
+                    "\"agcInit\":%d,\"gainStuck\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -8069,7 +8219,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   broken. Stuart, who has built this thing: "wow initial kick too ages with
                      *   no initialising chip, i was about to tell you it was broken again."
                      *   If he nearly called it, a stranger certainly would. */
-                    sdrpSettling ? 1 : 0);
+                    sdrpSettling ? 1 : 0,
+                    g_rspApiStuck.load(std::memory_order_relaxed) ? 1 : 0);
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
@@ -10306,6 +10457,43 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (LocalSdrShim::agcLocked() && v == 0) LOGI("AGC off refused — locked by the owner");
                 else                                     LocalSdrShim::instance().setAhfAgc(v != 0);
             }
+            return;
+        }
+        /* ★★★ THE OPERATOR'S ANSWER TO A FROZEN GAIN API — see rspstat.gainStuck.
+         *
+         *  Detected automatically, repaired only on request. The freeze is frequently INAUDIBLE:
+         *  today it left the signal clean while every gain readout sat still, and restarting the
+         *  IF AGC underneath a listener is a real break in their audio. Stuart: "rather than
+         *  automatically restarting the API which will cause a disruption for the user, we put a
+         *  warning in the chip", and "like at the moment I'd be happy to leave it frozen."
+         *
+         *  ★★ SAME GATE AS `rsp_control`, and for the same reason: this is the front end, not a
+         *     per-listener preference. One person restarting the AGC restarts it for everybody on
+         *     the receiver, so on a shared/locked radio it belongs behind the operator's password
+         *     exactly as the gain sliders beside it do. On a personal receiver it is freely
+         *     available, because it is the owner's own radio.
+         *  ★ The repair itself is the one the DeviceFailure path uses — agc.enable acts on a
+         *    TRANSITION, so disable, nudge the reduction two decibels where it stands, enable.
+         *    One mechanism, two callers; it is not reimplemented here.
+         *  ★ The flag is cleared whether or not the repair takes, so a receiver that cannot be
+         *    rescued stops nagging. If it is still frozen, the detector will say so again from
+         *    the evidence — a stale latch must never be what keeps a warning on screen. */
+        if (type == "rsp_agc_restart") {
+            if (!sharedGate("restarting the SDRplay gain API")) return;
+            if (!LocalSdrShim::instance().isSdrplay()) {
+                LOGI("rsp_agc_restart ignored — this receiver is not an SDRplay");
+                return;
+            }
+            /* ★★★ ASK, DO NOT TOUCH. This runs on a CONNECTION thread, and driving the SDRplay
+             *     API from one is the crash this file already carries a warning about: its
+             *     lifecycle is process-wide shared state and ReleaseDevice from the connection
+             *     thread went down inside the API's own shared mutex (2026-07-26). So this only
+             *     raises a request; the housekeeping pass that already holds the device performs
+             *     it, beside the DeviceFailure repair it is identical to.
+             *  ★ Same reason the rest of this file routes hardware through the DSP side rather
+             *    than doing it where the message happens to arrive. */
+            g_rspAgcRestartReq.store(true, std::memory_order_relaxed);
+            LOGI("RSP: a listener asked to reset the frozen gain API — queued for the radio thread");
             return;
         }
         if (type == "rsp_control") {
