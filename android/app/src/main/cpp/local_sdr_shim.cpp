@@ -8220,7 +8220,44 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   no initialising chip, i was about to tell you it was broken again."
                      *   If he nearly called it, a stranger certainly would. */
                     sdrpSettling ? 1 : 0,
-                    g_rspApiStuck.load(std::memory_order_relaxed) ? 1 : 0);
+                    /* ★★★ ONLY WHEN IT IS ACTUALLY HURTING. Stuart, 2026-09-13: "to reduce the
+                     *   amount of warnings we actively monitor the noisefloor and signals, and if
+                     *   a user is seeing a good clean spectrum like I am we dont fire it — but if
+                     *   we detect overloading or poor signal or issues on moving bands, that is
+                     *   when we fire it."
+                     *
+                     *  A frozen gain API with a clean spectrum has cost the listener NOTHING, and
+                     *  a chip offering to break their audio to fix a problem they do not have is
+                     *  worse than silence. The freeze only becomes a fault when the gain can no
+                     *  longer be corrected INTO a problem — and there are exactly two of those:
+                     *    · SATURATED — the front end is clipping, which is audible distortion.
+                     *    · STARVED  — we have shed so much gain the ADC is barely being used,
+                     *                 which is noise where signal should be. This is the state
+                     *                 the runaway walks towards, so it is the one that catches a
+                     *                 band change the frozen loop can no longer follow.
+                     *
+                     *  ★ STARVED IS DEFINED AGAINST THE TARGET, NOT AS A NUMBER. The AGC set
+                     *    point is what "correct level" MEANS here, and it moves — DAB alone
+                     *    shifts it to -40. A hardcoded dBFS would be true only at the setting it
+                     *    was measured at; 20 dB below whatever the target currently is says why.
+                     *  ★ The detection and the LOG are unconditional — the operator's log should
+                     *    record a frozen API whether or not it is yet doing harm. This gates only
+                     *    what is put in front of a listener.
+                     *
+                     *  ★★ AND IT ALL BUT REMOVES THE WARNING FROM LOCKED-RANGE RECEIVERS, which
+                     *     is the right outcome and not a coincidence. There the radio's own IF AGC
+                     *     runs unaided and nothing here writes gain at it — an RSP1B has held that
+                     *     for WEEKS without this fault (Stuart). A receiver that is not being
+                     *     written to does not wedge, and on the rare occasion it does, a clean
+                     *     spectrum means nobody is asked to fix anything. The warning appears
+                     *     where the writing happens, which is where the fault is caused. */
+                    [&]{
+                        if (!g_rspApiStuck.load(std::memory_order_relaxed)) return 0;
+                        const int  target  = vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30;
+                        const bool saturated = sdrp->overloadReal() || sdrp->adcClipPct() > 0.0;
+                        const bool starved   = sdrp->adcPeakDbfs() < (double)target - 20.0;
+                        return (saturated || starved) ? 1 : 0;
+                    }());
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
