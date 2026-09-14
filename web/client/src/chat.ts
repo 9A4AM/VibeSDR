@@ -32,6 +32,8 @@ export const PHRASES: Array<{ id: string; text: string }> = [
   { id: 'tuning_now',     text: 'Tuning now' },
   { id: 'go_ahead',       text: 'Go ahead, tune' },
   { id: 'please_hold',    text: 'Please hold — chasing DX' },
+  { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
+  { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
   { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
   { id: 'decoding_10min', text: 'Decoding — about 10 minutes' },
   { id: 'decode_done',    text: 'Decode finished — all yours' },

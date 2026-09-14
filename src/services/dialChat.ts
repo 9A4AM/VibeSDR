@@ -31,6 +31,8 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'tuning_now',     text: 'Tuning now' },
   { id: 'go_ahead',       text: 'Go ahead, tune' },
   { id: 'please_hold',    text: 'Please hold — chasing DX' },
+  { id: 'yes_go_ahead',   text: "Yes, I'm on it — but go ahead and tune" },
+  { id: 'yes_hold',       text: "Yes, I'm on it — please hold on" },
   { id: 'mid_decode',     text: "I'm running a decoder — can you wait please?" },
   // ★★ THE LONG ONES EARN THEIR PLACE. A WEFAX chart or an SSTV frame is ten minutes of holding
   //    still, and "please wait" with no duration is what makes people ask again ninety seconds

@@ -6662,6 +6662,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "tuning_now",      // Tuning now
             "go_ahead",        // Go ahead, tune
             "please_hold",     // Please hold — chasing DX
+            // ★ Two honest answers to "Anyone using this?" — before these the only replies were
+            //   "go ahead" or "hold", with no way to say "yes, I am on it" either way (Stuart, 2026-09-14).
+            "yes_go_ahead",    // Yes, I'm on it — but go ahead and tune
+            "yes_hold",        // Yes, I'm on it — please hold on
             "mid_decode",      // Please wait — mid-decode
             // ★★ THE LONG ONES. A WEFAX chart or an SSTV image is ten minutes of holding still,
             //    and "please wait" without a duration is what makes people ask again in ninety

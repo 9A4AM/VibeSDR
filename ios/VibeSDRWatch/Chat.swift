@@ -47,6 +47,8 @@ enum CannedDial {
     ("tuning_now",     "Tuning now"),
     ("go_ahead",       "Go ahead, tune"),
     ("please_hold",    "Please hold — chasing DX"),
+    ("yes_go_ahead",   "Yes, on it — go ahead"),
+    ("yes_hold",       "Yes, on it — please hold"),
     ("mid_decode",     "Mid-decode — please wait"),
     ("decoding_10min", "Decoding — about 10 min"),
     ("decode_done",    "Decode done — all yours"),

@@ -51,6 +51,8 @@ enum CannedDial {
     ("tuning_now",     "Tuning now"),
     ("go_ahead",       "Go ahead, tune"),
     ("please_hold",    "Please hold — chasing DX"),
+    ("yes_go_ahead",   "Yes, on it — go ahead"),
+    ("yes_hold",       "Yes, on it — please hold"),
     ("mid_decode",     "Mid-decode — please wait"),
     // ★★ A WEFAX chart is ten minutes of holding still, and "please wait" with no duration is what
     //    makes people ask again in ninety seconds. The number is the difference between a queue
