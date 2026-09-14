@@ -1174,11 +1174,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
                     eyeHp2_ += eyeHpA_ * (h1 - eyeHp2_);      const float h2 = h1 - eyeHp2_;
                     eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      const float h  = h2 - eyeHp3_;
-                    const float ah = std::fabs(h);
+                    const float y0 = eyeBand_[0][1].step(eyeBand_[0][0].step(h));
+                    const float y1 = eyeBand_[1][1].step(eyeBand_[1][0].step(h));
+                    const float y2 = eyeBand_[2][1].step(eyeBand_[2][0].step(h));
+                    /* ★★★ THE SCALE COMES FROM WHAT IS DRAWN — the sum of the three band outputs —
+                     *   not from the raw high-passed composite. That peak included every bit of
+                     *   broadband noise above 15 kHz, so on a noisy station (Flex FM at 26 dB MPX
+                     *   S/N) it read ±28 kHz while the pilot was 6.6: three rows of 48, and
+                     *   Stuart saw "basically a straight line". On a clean station the two agree
+                     *   and nothing changes. */
+                    const float ah = std::fabs(y0 + y1 + y2);
                     if (ah > blockPk) blockPk = ah;
-                    const float u0 = eyeBand_[0][1].step(eyeBand_[0][0].step(h)) * inv;
-                    const float u1 = eyeBand_[1][1].step(eyeBand_[1][0].step(h)) * inv;
-                    const float u2 = eyeBand_[2][1].step(eyeBand_[2][0].step(h)) * inv;
+                    const float u0 = y0 * inv, u1 = y1 * inv, u2 = y2 * inv;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
