@@ -3669,12 +3669,12 @@ select.btn { padding: 6px 8px; }
   <!-- ★ WebKit only (Safari, and every browser on iOS): see AudioPlayer._useMediaPlayout. -->
   <div class="mrow" id="mediaPlayoutRow" hidden>
     <label>SAFARI MEDIA PLAYOUT</label>
-    <div class="seg"><button class="btn" id="mediaPlayout">OFF</button></div>
+    <div class="seg"><button class="btn" id="mediaPlayout">ON</button></div>
   </div>
   <div class="lbl wrap" id="mediaPlayoutNote" hidden>
-    On, the audio plays through Safari's media pipeline instead of Web Audio. AirPods can then
-    offer Spatialise Stereo, and playback no longer depends on the audio clock that sometimes
-    freezes in Safari. Tuning may feel a touch slower. Reloads the page.
+    On (the default), the audio plays through Safari's media pipeline instead of Web Audio:
+    AirPods can offer Spatialise Stereo, and playback no longer depends on the audio clock that
+    sometimes freezes in Safari. Off returns to Web Audio, which tunes a touch quicker. Reloads.
   </div>
   <!-- ★★★ RAW IQ OUT — this session's channel as an rtl_tcp stream, for a decoder we do not carry
        (digital voice, and anything else). A side channel of THIS session: it dies with it, and a

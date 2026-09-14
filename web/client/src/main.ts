@@ -742,7 +742,8 @@ function visitSessionId(): string {
 
 const MEDIA_PLAYOUT_KEY = 'vibesdr.mediaPlayout';
 function prefersMediaPlayout(): boolean {
-  try { return localStorage.getItem(MEDIA_PLAYOUT_KEY) === '1'; } catch { return false; }
+  // On by default (unset = on); only an explicit '0' turns it off. Mirrors AudioPlayer.
+  try { return localStorage.getItem(MEDIA_PLAYOUT_KEY) !== '0'; } catch { return true; }
 }
 /** The Safari media-playout row: offered on WebKit only, where it means something. */
 function refreshMediaPlayoutRow() {

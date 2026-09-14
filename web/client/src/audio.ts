@@ -653,7 +653,9 @@ export class AudioPlayer {
     if (location.hash.includes('nomsaudio')) return false;
     if (location.hash.includes('msaudio')) return AudioPlayer.isWebKit();
     if (!AudioPlayer.isWebKit()) return false;
-    try { return localStorage.getItem('vibesdr.mediaPlayout') === '1'; } catch { return false; }
+    // ★ THE DEFAULT on WebKit (Stuart, 2026-09-14: "It needs to be the default") — the switch in
+    //   the audio menu turns it OFF; an unset key means on.
+    try { return localStorage.getItem('vibesdr.mediaPlayout') !== '0'; } catch { return true; }
   }
 
   private static _needsAnchor(): boolean {
