@@ -17148,6 +17148,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** When the idle park becomes due (nowSecs()), or 0 if no park is pending. Armed when the
      *  LAST listener leaves and cleared the moment one returns — see g_vsIdleGraceSec. */
     std::atomic<double> idleParkDueAt{0.0};
+    /** ★★★ THE RSP KEEPALIVE PROBE. An RSP1A left released and unclaimed for an hour dropped out
+     *  of the SDRplay API's enumeration on the Lenovo (2026-09-14: released 04:50:54 when the
+     *  last listener left, "no radio with serial 2235030199 is attached" at 05:49, OpenWebRX's
+     *  own attempt at the same minute "no sdrplay device matches", no USB disconnect in the
+     *  kernel log, a reboot to recover). Release-on-idle stays — it is what lets another program
+     *  borrow the radio, and it saves power — but while released we re-acquire it every ten
+     *  minutes for fifteen seconds and release it again, so it is never unclaimed long enough to
+     *  go dormant. Stuart: "probe the SDR every so often to just remind it we are here and
+     *  waiting for it." A probe that cannot get it back is logged loudly and retried, because
+     *  that is the fault this exists to catch at 04:55 rather than at 05:49. */
+    std::atomic<double> releasedAt{0.0};        // when releaseRadio() last let it go
+    double rspProbeHoldUntil = 0.0;             // a probe is holding the radio until then
+    double rspProbeRetryAt   = 0.0;             // next attempt after a failed probe
+    int    rspProbeFails     = 0;
     /// ★★★ IDLE THE DONGLE BY DISCARDING, NOT BY STOPPING IT. See pauseCaptureIdle.
     /// The unix socket other VibeServer processes hand connections to us on.
     /// True for the process that owns the public port and owns no radio.
@@ -18418,6 +18432,43 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         LocalSdrShim::instance().releaseRadio();
                     }
                     else { idleParkDueAt.store(0.0); pauseCaptureIdle(); }
+                }
+
+                // ── The RSP keepalive probe — see releasedAt ─────────────────────────────
+                if (useSdrplay() && g_vsReleaseWhenIdle.load()) {
+                    const double now = nowSecs();
+                    constexpr double kProbeEvery = 600.0, kProbeHold = 15.0, kProbeRetry = 60.0;
+                    if (radioReleased.load()) {
+                        const double since = releasedAt.load() > 0.0 ? now - releasedAt.load() : 0.0;
+                        if (since >= kProbeEvery && now >= rspProbeRetryAt) {
+                            bool empty;
+                            { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+                            if (empty) {
+                                std::string err;
+                                if (LocalSdrShim::instance().reacquireRadio(err)) {
+                                    rspProbeFails = 0;
+                                    rspProbeHoldUntil = now + kProbeHold;
+                                    LOGI("RSP keepalive: re-acquired after %.0f min released — holding %.0f s, then releasing again",
+                                         since / 60.0, kProbeHold);
+                                } else {
+                                    ++rspProbeFails;
+                                    rspProbeRetryAt = now + kProbeRetry;
+                                    LOGE("RSP keepalive: the radio did NOT answer after %.0f min released (%s) — attempt %d; "
+                                         "if this keeps failing the RSP has gone dormant and needs a power cycle",
+                                         since / 60.0, err.c_str(), rspProbeFails);
+                                }
+                            }
+                        }
+                    } else if (rspProbeHoldUntil > 0.0 && now >= rspProbeHoldUntil) {
+                        rspProbeHoldUntil = 0.0;
+                        bool empty;
+                        { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+                        if (empty) {
+                            LOGI("RSP keepalive: probe done — releasing again");
+                            LocalSdrShim::instance().releaseRadio();
+                        }
+                        // a listener arrived during the hold: they keep it; the idle path re-arms
+                    }
                 }
 
                 // ★ SILENCE = GONE. 3s is far longer than any legitimate gap (a rate change is
@@ -23539,6 +23590,7 @@ bool LocalSdrShim::releaseRadio() {
         // ★★ radioReleased goes up INSIDE the lock and BEFORE the close, so a control call that
         //    is already waiting on modeMtx returns instead of touching a freed handle.
         impl->radioReleased.store(true);
+        impl->releasedAt.store(Impl::nowSecs());
         if (rsp)      impl->sdrp->close();
         else if (ahf) { impl->ahf->stop(); impl->ahf->close(); }
         else if (hrf) { impl->hrf->stop(); impl->hrf->close(); }
