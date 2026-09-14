@@ -1229,7 +1229,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     const float a0 = std::fabs(y0), a1 = std::fabs(y1), a2 = std::fabs(y2);
                     if (a0 > bpk[0]) bpk[0] = a0;  if (a1 > bpk[1]) bpk[1] = a1;  if (a2 > bpk[2]) bpk[2] = a2;
                     // Each band against ITS OWN peak — see eyeBandPk_. 0.92 keeps the crest inside the box.
-                    const float u0 = y0 * binv[0] * 0.92f, u1 = y1 * binv[1] * 0.92f, u2 = y2 * binv[2] * 0.92f;
+                    // ★ RDS at HALF height: it is a data-modulated carrier, so its trace is a filled
+                    //   eye by nature, and at full height it strobed the whole box blue (Stuart:
+                    //   "looks like a disco light"). It reads by texture, not by amplitude.
+                    const float u0 = y0 * binv[0] * 0.92f, u1 = y1 * binv[1] * 0.92f, u2 = y2 * binv[2] * 0.46f;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
@@ -1344,10 +1347,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
                          *   band's, square-rooted so a component at a tenth still draws at a third,
                          *   floored at 0.3 so nothing readable disappears. Vertical size no longer
                          *   carries strength; this does. */
-                        float maxPk = 1e-9f;
-                        for (int k = 0; k < kEyeBands; ++k) maxPk = std::max(maxPk, eyeBandPk_[k] / eyeHpGain_[k]);
-                        const float rel = (eyeBandPk_[b] / eyeHpGain_[b]) / maxPk;
-                        const float strength = std::max(0.3f, std::sqrt(std::max(0.0f, rel)));
+                        /* Against its own NOMINAL, not the loudest band: judged against 29 kHz of
+                         *  stereo a 4.4 kHz pilot looked weak when it was healthy. Nominals in
+                         *  composite kHz: pilot 6.75, stereo 25 (typical peak L−R), RDS 2.5. RDS is
+                         *  capped at 0.6 so it stays a texture behind the two waves. */
+                        static const float kNomKHz[3] = { 6.75f, 25.0f, 2.5f };
+                        static const float kCap[3]    = { 1.0f, 1.0f, 0.6f };
+                        const float rel = (eyeBandPk_[b] / eyeHpGain_[b] * 75.0f) / kNomKHz[b];
+                        const float strength = std::min(kCap[b], std::max(0.3f, std::sqrt(std::max(0.0f, rel))));
                         // ★ bmx^0.75 · mx^0.25: the geometric mean left Heart's stereo at 36/63 —
                         //   persistent on the wire, but on a retina Safari faint enough that
                         //   Stuart saw it only when a chorus pushed it to full ("flashes for a
