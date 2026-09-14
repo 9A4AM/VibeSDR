@@ -6063,8 +6063,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
     markInteract();
+    /* ★★ SNAP TO THE STEP. A finger lands a few hundred hertz off; on 5 kHz steps 9568.45 kHz
+     *  means 9570, on 1 kHz 7073.14 means 7074 — the channel, not the pixel. The web client
+     *  already does this and SDR++ is the reference (DL8LDN, 2026-09-14: "Typing with finger on
+     *  the waterfall never reach the right frequency"). */
+    const s = stepRef.current;
+    const snapped = s > 0 ? Math.round(hz / s) * s : hz;
     const [loHz, hiHz] = c.caps.freqRange;
-    const clamped = Math.max(loHz, Math.min(hiHz, hz));
+    const clamped = Math.max(loHz, Math.min(hiHz, snapped));
     userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
@@ -9151,6 +9157,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAdminUnlock={onAdminUnlockPw}
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
+        visualGain={visualGain}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
@@ -9351,6 +9358,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         iqLocal={/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/i.test(connectBase)}
         onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
+        visualGain={visualGain}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         signalMode={signalMode}

@@ -317,6 +317,9 @@ export interface AudioSheetProps {
 
   // OWRX server-side squelch (dB) + NR (threshold dB)
   onOwrxSquelch?: (db: number) => void;
+  /** The display trim, dB — the OWRX squelch slider lives on the SAME trimmed scale as the
+   *  SIGNAL readout above it, and the server is sent the raw figure (DL8LDN, 2026-09-14). */
+  visualGain?: number;
   onOwrxNr?:      (threshold: number) => void;
   owrxDspDefaults?: { squelchDb?: number; nrEnabled?: boolean; nrThreshold?: number; seq: number };
 
@@ -344,7 +347,7 @@ export default function AudioSheet({
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
-  onOwrxSquelch, onOwrxNr, owrxDspDefaults,
+  onOwrxSquelch, onOwrxNr, owrxDspDefaults, visualGain = 0,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
 }: AudioSheetProps) {
@@ -463,13 +466,14 @@ export default function AudioSheet({
           {isOwrx && (<>
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
+              {/* ★ Slider and label on the TRIMMED scale (raw + visualGain); the server gets raw. */}
               <NavSlider style={st.bwSlider}
                 minimumValue={-130} maximumValue={-20} step={1}
-                value={owrxSql <= -130 ? -130 : owrxSql}
-                onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
+                value={owrxSql <= -130 ? -130 : Math.max(-129, Math.min(-20, owrxSql + visualGain))}
+                onValueChange={(v: number) => { const db = v <= -130 ? -150 : v - visualGain; setOwrxSql(db); onOwrxSquelch?.(db); }}
                 minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
-              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql)}</Text>
+              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql + visualGain)}</Text>
             </View>
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
