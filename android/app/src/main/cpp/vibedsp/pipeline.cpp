@@ -1181,13 +1181,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     const float u2 = eyeBand_[2][1].step(eyeBand_[2][0].step(h)) * inv;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
-                    int hb = (int)(std::fabs(d) * kHistScale);
-                    if (hb >= kDevHistN) hb = kDevHistN - 1;
+                    // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
+                    //   to write kilobytes below the histogram. The step() guards return 0 for a
+                    //   non-finite output, but the index must not trust that alone.
+                    unsigned hb = (unsigned)(int)(std::fabs(d) * kHistScale);
+                    if (hb >= (unsigned)kDevHistN) hb = kDevHistN - 1;
                     ++hist[hb];
                     const float g = mpxGuard_[2].step(mpxGuard_[1].step(mpxGuard_[0].step(x)));
                     devGp += (double)g * g;
                     // The fold — one x for all three bands: they share the trigger.
                     const float t = bitClkBuf_[i] * kTurns;
+                    /* ★★★ A NaN HERE SEGFAULTED THE LENOVO's RSP CHILD (dev 5.6.0, 2026-09-14). The
+                     *   old nearest-cell fold clamped its index, which happened to swallow a NaN
+                     *   pilot clock (it casts to INT_MIN, and "< 0 → 0" caught it). The splat's
+                     *   wrap arithmetic did not, and INT_MIN + 96 is still a write a long way
+                     *   below the grid. The PLL can hand out a NaN clock briefly after a mode
+                     *   change (here AM 648 kHz → WFM 96.6). Skip the sample; never index on it. */
+                    if (!std::isfinite(t)) continue;
                     const float fx = (t - std::floor(t)) * (float)eyeW_ - 0.5f;
                     int x0 = (int)fx; if (fx < (float)x0) --x0;
                     const float wx = fx - (float)x0;
@@ -1196,7 +1206,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     auto splat = [&](float* acc, float u) {
                         // Row 0 is the TOP, so +full scale is at the top like a scope.
                         float fy = (1.0f - u) * halfH - 0.5f;
-                        if (fy < 0.0f) fy = 0.0f; else if (fy > (float)(kEyeH - 1)) fy = (float)(kEyeH - 1);
+                        // ★ Written so a NaN u lands on row 0 rather than at INT_MIN.
+                        if (!(fy >= 0.0f)) fy = 0.0f; else if (fy > (float)(kEyeH - 1)) fy = (float)(kEyeH - 1);
                         const int y0 = (int)fy;
                         const int y1 = (y0 + 1 < kEyeH) ? y0 + 1 : y0;
                         const float wy = fy - (float)y0;
