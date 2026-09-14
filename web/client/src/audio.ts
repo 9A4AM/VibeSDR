@@ -1951,6 +1951,33 @@ export class AudioPlayer {
   }
   /** When the playout node last reported that it had actually put samples out. */
   private lastDrainAt = 0;
+  private lastCtxTime = 0;         // the context clock as last seen by the watchdog
+  private ctxAdvancedAt = 0;       // when it last moved
+  private clockKicks = 0;          // suspend/resume attempts on a frozen clock (reset on a rebuild)
+  private contextRebuilds = 0;     // full teardowns — capped so a broken browser cannot loop
+  private rebuilding = false;
+
+  /** Tear everything down and start again: the only cure for a context whose render thread has
+   *  died. Volume, mute and recording survive; the socket is reopened; the caller's callbacks
+   *  are the same object, so the UI keeps working. */
+  private async _rebuildContext() {
+    if (this.rebuilding) return;
+    this.rebuilding = true;
+    const wasRec = !!this.rec;
+    try {
+      this.close();
+      this.closedByUs = false;
+      this.lastCtxTime = 0; this.ctxAdvancedAt = 0; this.clockKicks = 0; this.stallRebuilds = 0;
+      this.lastAudibleAt = 0; this.lastDrainAt = 0;
+      await this.start();
+      if (wasRec && this.worker) this.worker.postMessage({ type: 'rec', on: true });
+      console.info('[audio] audio context rebuilt');
+    } catch (e) {
+      console.error('[audio] rebuilding the audio context failed', e);
+    } finally {
+      this.rebuilding = false;
+    }
+  }
   private stallWatch: number | null = null;
   private stallRebuilds = 0;
 
@@ -1976,6 +2003,37 @@ export class AudioPlayer {
       if (this._muted || this.squelchActive || this.suspended) return;
       const now = performance.now();
       const feeding = this.lastAudibleAt > 0 && now - this.lastAudibleAt < 2000;
+      /* ★★★ THE CLOCK, NOT THE STATE STRING. Safari 27 (macOS and iOS): the context reports
+       *   "running" while its currentTime has stopped advancing — the render thread is dead.
+       *   Measured on Stuart's silent tab, 2026-09-14: state "running", currentTime 1.18 s and
+       *   frozen, the worklet no longer draining, and the console's "rebuilding the playout
+       *   node" already fired without effect, because a new node on a dead context is still
+       *   dead. That is the "flash of audio then silence" — about a second of output, then
+       *   nothing — and a refresh does not always cure it because Safari's media session
+       *   underneath can stay wedged. So: watch the clock. If frames are arriving and the
+       *   clock has not moved for 2.5 s, first suspend/resume the context (cheap, sometimes
+       *   enough), and if it is still frozen 2.5 s later tear the WHOLE thing down and start
+       *   again — new context, new worklet, new media element, new socket. */
+      const ct = this.ctx.currentTime;
+      if (ct > this.lastCtxTime + 0.05) { this.lastCtxTime = ct; this.ctxAdvancedAt = now; }
+      if (this.ctxAdvancedAt === 0) this.ctxAdvancedAt = now;
+      const clockFrozen = this.ctx.state === 'running' && feeding && now - this.ctxAdvancedAt > 2500;
+      if (clockFrozen && !this.rebuilding) {
+        if (this.clockKicks === 0) {
+          this.clockKicks = 1;
+          console.warn(`[audio] the context says "running" but its clock is frozen at ${ct.toFixed(2)} s — suspend/resume`);
+          const c = this.ctx;
+          void c.suspend().then(() => c.resume()).catch(() => {});
+          this.ctxAdvancedAt = now;            // give the kick its own 2.5 s
+          return;
+        }
+        if (this.contextRebuilds < 3) {
+          this.contextRebuilds++;
+          console.warn(`[audio] clock still frozen after the kick — rebuilding the whole audio context (attempt ${this.contextRebuilds})`);
+          void this._rebuildContext();
+        }
+        return;
+      }
       // ★★★ RESUME BEFORE REBUILDING — IT COSTS NOTHING AND LOSES NOTHING. An AudioContext that is
       //     not `running` cannot pull from the worklet, and Safari has a THIRD state nobody codes
       //     for: `interrupted`, which is neither running nor suspended and is what you get when
@@ -2051,6 +2109,8 @@ export class AudioPlayer {
       drainAgoMs: this.lastDrainAt > 0 ? Math.round(now - this.lastDrainAt) : -1,
       underruns: this.underruns, skips: this.skips, jitterMs: this.jitterMs,
       stallRebuilds: this.stallRebuilds, workerOpen: this.workerOpen,
+      clockKicks: this.clockKicks, contextRebuilds: this.contextRebuilds,
+      ctxAdvancedAgoMs: this.ctxAdvancedAt > 0 ? Math.round(now - this.ctxAdvancedAt) : -1,
       opusBroken: this.opusBroken, opusStuck: this.opusStuck, needsCodec: this.needsCodec,
       muted: this._muted, volume: this._volume, squelch: this.squelchActive,
       suspended: this.suspended,
