@@ -17,7 +17,69 @@ void NCO::setFreq(double normFreq) {
 void NCO::mix(const cf32* in, cf32* out, int n) {
     cf32 cur = cur_;
     const cf32 rot = rot_;
-    for (int i = 0; i < n; ++i) {
+    int i = 0;
+    /* ★★ FOUR PHASORS AT ONCE. perf on the Pi's V4 child (2026-09-14): NCO::mix 5.9 % of the
+     *  time — a scalar complex multiply per sample at the full 2.4 MS/s. This is a MAP, the
+     *  shape SIMD is for (unlike the eye's serial IIR): lanes hold cur, cur·rot, cur·rot²,
+     *  cur·rot³ and all four advance by rot⁴ per step. Output equals the scalar path to float
+     *  rounding; phase continuity is exact because the scalar tail picks up from lane 0's
+     *  successor. Renormalised every 1024 samples on all four lanes, as the scalar path did. */
+#if VIBE_NEON || VIBE_SSE
+    if (n >= 8) {
+        const cf32 rot2 = rot * rot, rot3 = rot2 * rot, rot4 = rot2 * rot2;
+        float pr[4] = { cur.real(), (cur * rot).real(), (cur * rot2).real(), (cur * rot3).real() };
+        float pi_[4] = { cur.imag(), (cur * rot).imag(), (cur * rot2).imag(), (cur * rot3).imag() };
+        const float* z = reinterpret_cast<const float*>(in);
+        float* o = reinterpret_cast<float*>(out);
+#if VIBE_NEON
+        float32x4_t cr = vld1q_f32(pr), ci = vld1q_f32(pi_);
+        const float32x4_t r4r = vdupq_n_f32(rot4.real()), r4i = vdupq_n_f32(rot4.imag());
+        for (; i + 4 <= n; i += 4) {
+            const float32x4x2_t a = vld2q_f32(z + 2 * i);
+            float32x4x2_t y;
+            y.val[0] = vmlsq_f32(vmulq_f32(a.val[0], cr), a.val[1], ci);   // re: ar*cr - ai*ci
+            y.val[1] = vmlaq_f32(vmulq_f32(a.val[0], ci), a.val[1], cr);   // im: ar*ci + ai*cr
+            vst2q_f32(o + 2 * i, y);
+            const float32x4_t nr = vmlsq_f32(vmulq_f32(cr, r4r), ci, r4i);
+            const float32x4_t ni = vmlaq_f32(vmulq_f32(cr, r4i), ci, r4r);
+            cr = nr; ci = ni;
+            sinceNorm_ += 4;
+            if (sinceNorm_ >= 1024) {
+                sinceNorm_ = 0;
+                float32x4_t m2 = vmlaq_f32(vmulq_f32(cr, cr), ci, ci);
+                float32x4_t inv = vrsqrteq_f32(m2);
+                inv = vmulq_f32(inv, vrsqrtsq_f32(vmulq_f32(m2, inv), inv));
+                inv = vmulq_f32(inv, vrsqrtsq_f32(vmulq_f32(m2, inv), inv));
+                cr = vmulq_f32(cr, inv); ci = vmulq_f32(ci, inv);
+            }
+        }
+        vst1q_f32(pr, cr); vst1q_f32(pi_, ci);
+#else
+        __m128 cr = _mm_loadu_ps(pr), ci = _mm_loadu_ps(pi_);
+        const __m128 r4r = _mm_set1_ps(rot4.real()), r4i = _mm_set1_ps(rot4.imag());
+        for (; i + 4 <= n; i += 4) {
+            __m128 ar, ai;
+            sseLoad2(z + 2 * i, ar, ai);
+            const __m128 yr = _mm_sub_ps(_mm_mul_ps(ar, cr), _mm_mul_ps(ai, ci));
+            const __m128 yi = _mm_add_ps(_mm_mul_ps(ar, ci), _mm_mul_ps(ai, cr));
+            sseStore2(o + 2 * i, yr, yi);
+            const __m128 nr = _mm_sub_ps(_mm_mul_ps(cr, r4r), _mm_mul_ps(ci, r4i));
+            const __m128 ni = _mm_add_ps(_mm_mul_ps(cr, r4i), _mm_mul_ps(ci, r4r));
+            cr = nr; ci = ni;
+            sinceNorm_ += 4;
+            if (sinceNorm_ >= 1024) {
+                sinceNorm_ = 0;
+                const __m128 m2 = _mm_add_ps(_mm_mul_ps(cr, cr), _mm_mul_ps(ci, ci));
+                const __m128 inv = _mm_div_ps(_mm_set1_ps(1.0f), _mm_sqrt_ps(m2));
+                cr = _mm_mul_ps(cr, inv); ci = _mm_mul_ps(ci, inv);
+            }
+        }
+        _mm_storeu_ps(pr, cr); _mm_storeu_ps(pi_, ci);
+#endif
+        cur = cf32(pr[0], pi_[0]);   // lane 0 is the phasor for sample i — the scalar tail continues it
+    }
+#endif
+    for (; i < n; ++i) {
         out[i] = in[i] * cur;     // multiply by running phasor (no per-sample trig)
         cur *= rot;
         // Renormalise occasionally so |cur| doesn't drift from 1 (recursion error).
