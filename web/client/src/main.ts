@@ -8588,9 +8588,13 @@ function drawMpxEye() {
   const rdsCol    = (rdev <= 0.2 || rdev > 5.8) ? BAD : rdev < 1.5 ? WARN : GOOD;
   const stereoCol = snr >= 28 ? GOOD : snr >= 10 ? WARN : BAD;
   const bands: Array<{ id: string; name: string; g: string; r: number; gr: number; b: number; khz: number }> = [
-    { id: 'rdsEyeMpx',  name: 'PILOT',  g: rdsExt?.eyeP ?? '', r: pilotCol[0],  gr: pilotCol[1],  b: pilotCol[2],  khz: amp[0] },
+    /* ★ PILOT and RDS quote the panel's own coherent measurements (pilotDev, rdsDev), not the
+     *  eye's band-filter estimate: the eye read the pilot at 4.4 kHz beside a PILOT DEV of 6.7
+     *  (2026-09-14), and one panel must not carry two answers to one question. Only the stereo
+     *  box has no other source, so it keeps the eye's figure. */
+    { id: 'rdsEyeMpx',  name: 'PILOT',  g: rdsExt?.eyeP ?? '', r: pilotCol[0],  gr: pilotCol[1],  b: pilotCol[2],  khz: pdev },
     { id: 'rdsEyeMpxS', name: 'STEREO', g: rdsExt?.eyeS ?? '', r: stereoCol[0], gr: stereoCol[1], b: stereoCol[2], khz: amp[1] },
-    { id: 'rdsEyeMpxR', name: 'RDS',    g: rdsExt?.eyeR ?? '', r: rdsCol[0],    gr: rdsCol[1],    b: rdsCol[2],    khz: amp[2] },
+    { id: 'rdsEyeMpxR', name: 'RDS',    g: rdsExt?.eyeR ?? '', r: rdsCol[0],    gr: rdsCol[1],    b: rdsCol[2],    khz: rdev },
   ];
   const decodeEye = (src: string, want: number): Uint8Array | null => {
     if (!src) return null;
