@@ -3156,6 +3156,18 @@ static std::string         g_vsMaintActions;
 // Opus target bitrate (bits/sec) for compressed VibeServer audio — THE link-adaptive lever. 64 kbps
 // is a near-transparent FM-stereo default; the client ramps it down over a constrained link.
 static std::atomic<int>    g_vsOpusBitrate{64000};
+// ★★ STEREO GETS HALF AS MUCH AGAIN. 64 kb/s is transparent for a mono AM/SSB/NFM channel and
+//    audibly thin for FM stereo and DAB (Stuart, 2026-09-14: "FM Stereo and DAB could do with a
+//    little nudge upwards"). Mono streams are untouched, and the budget that matters is Jr's
+//    Bluetooth link: on the watch speaker Jr asks channels=1 and still gets 64 kb/s (8 KB/s); on
+//    AirPods it takes the stereo stream at 96 kb/s = 12 KB/s, beside a ~1.5 KB/s spectrum at
+//    5 fps — inside the ~19 KB/s the link has been measured to carry, with room to spare.
+//    ★ The shared dial fans ONE encode out to everybody, so this is a rule about the STREAM
+//      (its channel count), never about who is listening — that is what keeps it honest there.
+static inline int opusBitrateFor(int channels) {
+    const int base = g_vsOpusBitrate.load();
+    return channels >= 2 ? base * 3 / 2 : base;
+}
 
 // ── The config API's handlers, registered by the DAEMON (never on a phone) ────────────────────
 // See local_sdr_shim.h for why this is a callback and not code in here.
@@ -9337,7 +9349,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
 #ifdef VIBE_HAVE_OPUS
         if (c->wantsOpus) {
-            c->opus.setBitrate(g_vsOpusBitrate.load());
+            c->opus.setBitrate(opusBitrateFor(ch));
             std::vector<std::vector<uint8_t>> packets;
             c->opus.encode(pcm, count, ch, packets);
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;
@@ -9389,7 +9401,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
         // current web client — is never sent it, so nothing breaks; it gets PCM below.
         if (audioWantsOpus.load()) {
-            opusEnc.setBitrate(g_vsOpusBitrate.load());
+            opusEnc.setBitrate(opusBitrateFor(ch));
             std::vector<std::vector<uint8_t>> packets;
             opusEnc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;   // always 48 kHz

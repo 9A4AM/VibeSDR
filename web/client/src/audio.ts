@@ -298,6 +298,9 @@ let ts = 0;
 let recording = false;
 let closedByUs = false;
 let url = '';
+// ★ Media playout (Safari): hand the Opus packets to the page UNDECODED — a MediaSource on an
+//   <audio> element decodes them. The decoder here is then only for the recorder.
+let rawOpus = false;
 
 function toFloat(pcm, ch, frames) {
   const l = new Float32Array(frames);
@@ -312,10 +315,11 @@ function toFloat(pcm, ch, frames) {
 
 function emit(pcm, ch) {
   const frames = Math.floor(pcm.length / Math.max(1, ch));
-  if (frames <= 0 || !sink) return;
+  if (frames <= 0) return;
   // ★ The recorder lives on the page and taps PCM BEFORE the node, so a recording stays perfect
   //   even when playout is not. Forward it ONLY while recording, so the ordinary case never pays.
   if (recording) self.postMessage({ type: 'pcm', pcm, ch }, [pcm.buffer.slice(0)]);
+  if (!sink) return;
   const [l, r] = toFloat(pcm, ch, frames);
   sink.postMessage({ l, r }, [l.buffer, r.buffer]);
 }
@@ -361,6 +365,16 @@ function onFrame(buf) {
   self.postMessage({ type: 'bytes', n: buf.byteLength });
   if (format === 3) {
     const ch = channels || 1;
+    // ★ Raw mode: the page's media element decodes. Decode here too ONLY while recording, and
+    //   slice first — the transfer below detaches the buffer.
+    if (rawOpus) {
+      if (recording) {
+        try { ensureDec(ch); dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: ts, duration: 20000, data: buf.slice(6) })); ts += 20000; }
+        catch (e) { /* the recording is best-effort on this path */ }
+      }
+      self.postMessage({ type: 'opus', buf }, [buf]);
+      return;
+    }
     try {
       ensureDec(ch);
       dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: ts, duration: 20000, data: buf.slice(6) }));
@@ -406,12 +420,87 @@ function open() {
 
 self.onmessage = (e) => {
   const d = e.data || {};
-  if (d.type === 'init')      { sink = d.sinkPort; url = d.url; open(); }
+  if (d.type === 'init')      { sink = d.sinkPort || null; rawOpus = !!d.rawOpus; url = d.url; open(); }
   else if (d.type === 'url')  { url = d.url; closedByUs = true; try { ws && ws.close(); } catch (err) {} closedByUs = false; open(); }
   else if (d.type === 'rec')  { recording = !!d.on; }
   else if (d.type === 'close'){ closedByUs = true; try { ws && ws.close(); } catch (err) {} }
 };
 `;
+
+/* ── A minimal WebM (Matroska) muxer for live Opus ───────────────────────────────────────────
+ *  Just enough EBML for a MediaSource: an initialisation segment (EBML header + Segment of
+ *  unknown size with Info and one A_OPUS TrackEntry) and then one Cluster per packet. Sizes are
+ *  written exactly, except the Segment's, which is the "unknown" marker so it never has to be
+ *  patched. This is what UberSDR's player does, and what Chrome's MediaRecorder writes. */
+function ebmlId(id: number): number[] {
+  const out: number[] = [];
+  if (id >= 0x1000000) out.push((id >>> 24) & 0xff);
+  if (id >= 0x10000)   out.push((id >>> 16) & 0xff);
+  if (id >= 0x100)     out.push((id >>> 8) & 0xff);
+  out.push(id & 0xff);
+  return out;
+}
+function ebmlSize(n: number): number[] {
+  // Variable-length integer: 1..8 bytes, leading 1-bit marks the length.
+  if (n < 0x7f)         return [0x80 | n];
+  if (n < 0x3fff)       return [0x40 | (n >>> 8), n & 0xff];
+  if (n < 0x1fffff)     return [0x20 | (n >>> 16), (n >>> 8) & 0xff, n & 0xff];
+  if (n < 0x0fffffff)   return [0x10 | (n >>> 24), (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  return [0x01, 0, 0, 0, (n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+}
+function ebml(id: number, body: number[] | Uint8Array): number[] {
+  const b = body instanceof Uint8Array ? Array.from(body) : body;
+  return [...ebmlId(id), ...ebmlSize(b.length), ...b];
+}
+function ebmlUint(id: number, v: number): number[] {
+  const b: number[] = [];
+  let x = v;
+  do { b.unshift(x & 0xff); x = Math.floor(x / 256); } while (x > 0);
+  return ebml(id, b);
+}
+function ebmlStr(id: number, s: string): number[] {
+  return ebml(id, Array.from(s, (c) => c.charCodeAt(0) & 0x7f));
+}
+function ebmlFloat(id: number, v: number): number[] {
+  const dv = new DataView(new ArrayBuffer(4)); dv.setFloat32(0, v);
+  return ebml(id, [dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)]);
+}
+function opusHead(channels: number): number[] {
+  // RFC 7845 §5.1. Pre-skip 312 and a 6.5 ms CodecDelay are libopus's own figures.
+  const b = new Uint8Array(19); const dv = new DataView(b.buffer);
+  'OpusHead'.split('').forEach((c, i) => { b[i] = c.charCodeAt(0); });
+  b[8] = 1; b[9] = channels;
+  dv.setUint16(10, 312, true); dv.setUint32(12, 48000, true); dv.setInt16(16, 0, true); b[18] = 0;
+  return Array.from(b);
+}
+function webmInit(channels: number): Uint8Array {
+  const header = ebml(0x1A45DFA3, [
+    ...ebmlUint(0x4286, 1), ...ebmlUint(0x42F7, 1), ...ebmlUint(0x42F2, 4), ...ebmlUint(0x42F3, 8),
+    ...ebmlStr(0x4282, 'webm'), ...ebmlUint(0x4287, 4), ...ebmlUint(0x4285, 2),
+  ]);
+  const info = ebml(0x1549A966, [
+    ...ebmlUint(0x2AD7B1, 1000000), ...ebmlStr(0x4D80, 'vibesdr'), ...ebmlStr(0x5741, 'vibesdr'),
+  ]);
+  const track = ebml(0xAE, [
+    ...ebmlUint(0xD7, 1), ...ebmlUint(0x73C5, 1), ...ebmlUint(0x83, 2), ...ebmlStr(0x86, 'A_OPUS'),
+    ...ebmlUint(0x56AA, 6500000), ...ebmlUint(0x56BB, 80000000), ...ebml(0x63A2, opusHead(channels)),
+    ...ebml(0xE1, [...ebmlFloat(0xB5, 48000), ...ebmlUint(0x9F, channels)]),
+  ]);
+  const tracks = ebml(0x1654AE6B, track);
+  // Segment with the unknown-size marker, then its first children.
+  const segment = [...ebmlId(0x18538067), 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, ...info, ...tracks];
+  return new Uint8Array([...header, ...segment]);
+}
+function webmCluster(timecodeMs: number, packet: Uint8Array): Uint8Array {
+  // SimpleBlock: track 1 (vint 0x81), relative timecode 0, flags 0x80 (keyframe), then the packet.
+  const blockHead = [...ebmlId(0xA3), ...ebmlSize(4 + packet.byteLength), 0x81, 0x00, 0x00, 0x80];
+  const tc = ebmlUint(0xE7, timecodeMs);
+  const bodyLen = tc.length + blockHead.length + packet.byteLength;
+  const head = [...ebmlId(0x1F43B675), ...ebmlSize(bodyLen), ...tc, ...blockHead];
+  const out = new Uint8Array(head.length + packet.byteLength);
+  out.set(head, 0); out.set(packet, head.length);
+  return out;
+}
 
 function wavBlob(pcm: Int16Array, channels: number, rate: number): Blob {
   const dataBytes = pcm.length * 2;
@@ -536,6 +625,37 @@ export class AudioPlayer {
     return !AudioPlayer._isChromium();
   }
 
+  /** WebKit proper: Safari on macOS and iOS, and every iOS browser (they are all WebKit). Not
+   *  Chromium (which also says AppleWebKit) and not Firefox (which does not). */
+  static isWebKit(): boolean {
+    return /AppleWebKit/.test(navigator.userAgent) && !AudioPlayer._isChromium();
+  }
+
+  /** ★ Set once the media path has proved unable to play in this page — the Web Audio path takes
+   *  over for the rest of the session, and the toggle is left as the listener set it. */
+  private static mediaPlayoutBroken = false;
+
+  /**
+   * ★★★ MEDIA PLAYOUT — Safari plays our Opus through a MediaSource on an <audio> element, with NO
+   * Web Audio anywhere in the chain. Two reasons, both Safari-only, both measured:
+   *   1. macOS spatialises MEDIA-ELEMENT playback (Apple's media renderer) and never Web Audio
+   *      output (a raw output unit) — proved 2026-08-02 with a plain WAV in an <audio src>, and
+   *      the reason "Spatialise Stereo" was grey for every Web Audio path we tried.
+   *   2. The Safari silence (2026-09-14): the Web Audio output unit stops delivering render
+   *      callbacks while the context still says "running" (WebKit bug 263627, open since 2023).
+   *      The media renderer is a different playout path with its own session bookkeeping.
+   * Opt-in from the audio menu (WebKit only; the row is not offered elsewhere), `#msaudio` forces
+   * it on for a test and `#nomsaudio` off. Chromium and Firefox never take this branch: their
+   * Web Audio path works and is untouched.
+   */
+  private static _useMediaPlayout(): boolean {
+    if (AudioPlayer.mediaPlayoutBroken) return false;
+    if (location.hash.includes('nomsaudio')) return false;
+    if (location.hash.includes('msaudio')) return AudioPlayer.isWebKit();
+    if (!AudioPlayer.isWebKit()) return false;
+    try { return localStorage.getItem('vibesdr.mediaPlayout') === '1'; } catch { return false; }
+  }
+
   private static _needsAnchor(): boolean {
     if (!location.hash.includes('anchor') || location.hash.includes('noanchor')) return false;
     // `#anchor` alone is the Chromium Now Playing experiment (UA-gated, see above).
@@ -640,6 +760,17 @@ export class AudioPlayer {
 
   /** Must be called from a user gesture — browsers block audio otherwise. */
   async start() {
+    if (AudioPlayer._useMediaPlayout()) {
+      if (!this.omEl) await this._startMediaPlayout();
+      if (this.omEl) {
+        // The Worker still owns the socket; it forwards Opus undecoded (rawOpus). No worklet,
+        // no context — the element is the whole output chain.
+        if (typeof Worker !== 'undefined' && !location.hash.includes('legacyaudio')) this._startWorker();
+        else this._openWs();
+        return;
+      }
+      console.warn('[audio] media playout unavailable — using Web Audio');
+    }
     if (!this.ctx) {
       this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
       this.gain = this.ctx.createGain();
@@ -794,11 +925,13 @@ export class AudioPlayer {
   }
 
   /** The element the OS media controls attach to (null if unavailable). */
-  get element(): HTMLAudioElement | null { return this.mediaEl; }
+  get element(): HTMLAudioElement | null { return this.omEl ?? this.mediaEl; }
 
   /** ★ Drop everything queued for playout. See the worklet's flush handler for why. Called on
    *  every retune, through SpectrumClient.tune(). */
   flush() {
+    // Media playout: what is buffered was demodulated at the old frequency — skip past it.
+    if (this.omEl) { this._mediaSkipToLive(0.05); }
     // The worklet path.
     if (this.node) { try { this.node.port.postMessage({ flush: true }); } catch { /* closing */ } }
     // The main-thread fallback path uses its own ring; clear that too, or the fallback keeps the
@@ -842,9 +975,14 @@ export class AudioPlayer {
       /* ★★★ THE TRANSFER IS THE WHOLE POINT. port2 goes INTO the worklet, port1 to the Worker, and
        *     from then on PCM never touches this thread. Transferring detaches the port here, which
        *     is exactly what we want: there is no second owner to get confused about. */
-      const ch = new MessageChannel();
-      this.node!.port.postMessage({ sinkPort: ch.port2 }, [ch.port2]);
-      w.postMessage({ type: 'init', url: this.url, sinkPort: ch.port1 }, [ch.port1]);
+      if (this.node) {
+        const ch = new MessageChannel();
+        this.node.port.postMessage({ sinkPort: ch.port2 }, [ch.port2]);
+        w.postMessage({ type: 'init', url: this.url, sinkPort: ch.port1 }, [ch.port1]);
+      } else {
+        // Media playout: no worklet to feed — the packets come back here for the element.
+        w.postMessage({ type: 'init', url: this.url, rawOpus: true });
+      }
       if (this.rec) w.postMessage({ type: 'rec', on: true });
       /* ★★★ SAY SO, BECAUSE OTHERWISE NOBODY CAN TELL. Every failure path here logs loudly, but
        *     SUCCESS said nothing — so a console with no warnings was indistinguishable from a
@@ -874,6 +1012,7 @@ export class AudioPlayer {
           /* ★ A frame the worker cannot decode but the page can — DAB+ AAC. See the worker's own
            *   note: forwarding it keeps the socket and every other format off the main thread. */
           case 'passthru': if (d.buf) this._handleFrame(d.buf as ArrayBuffer); break;
+          case 'opus':     if (d.buf) this._mediaFeed(d.buf as ArrayBuffer); break;
           /* ★★★ A DECODER THAT WILL NOT WORK IN THE WORKER MUST NOT MEAN SILENCE. Fall the whole
            *     path back to the page, which still has the WASM decoder and every fallback this
            *     class has always had. Better a busy main thread than no audio. */
@@ -948,7 +1087,10 @@ export class AudioPlayer {
 
     // format 3 = Opus (VibeServer compressed audio). Decoded ASYNCHRONOUSLY via WebCodecs — the
     // decoded PCM lands in _onOpusData → _playPcm, same tail as the sync paths below.
-    if (format === 3) { this._decodeOpus(buf, channels); return; }
+    if (format === 3) {
+      if (this.omEl) { this._mediaFeed(buf); return; }
+      this._decodeOpus(buf, channels); return;
+    }
 
     /* ★★★ format 4 = DAB+ AAC, in ADTS. VibeServer links no AAC decoder — it de-interleaves the
      *  super frame, corrects it with Reed-Solomon and reframes the access units, and the BROWSER's
@@ -1445,6 +1587,190 @@ export class AudioPlayer {
     this._failAac('support', 'no AAC configuration this browser accepts');
   }
 
+  // ── Media playout (Safari): Opus in WebM through a MediaSource ─────────────────────────────
+  //   See _useMediaPlayout for why. One element and one source for the life of the player; a
+  //   channel-count change (FM stereo ↔ a mono mode) appends a fresh initialisation segment to
+  //   the same buffer, which MSE permits for the same codec.
+  private omEl: HTMLAudioElement | null = null;
+  private omSrc: MediaSource | null = null;
+  private omBuf: SourceBuffer | null = null;
+  private omQueue: Uint8Array[] = [];
+  private omCh = 0;                 // channels the current init segment declared
+  private omSeq = 0;                // packets appended (20 ms each) — the cluster clock
+  private omManaged = false;
+  private omStreaming = false;
+  private omSawStreaming = false;
+  private omTimer: number | null = null;
+  private omFedAt = 0;              // last packet queued
+  private omProgressAt = 0;         // last time the element's clock moved while playing
+  private omLastTime = -1;
+  private omStartedAt = 0;
+  /** Playout cushion behind the live edge, seconds. Skips forward when it grows past 3x this. */
+  private static readonly OM_CUSHION = 0.25;
+
+  private async _startMediaPlayout(): Promise<boolean> {
+    const Managed = (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
+    const MS: typeof MediaSource | undefined =
+      Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
+    const mime = 'audio/webm; codecs="opus"';
+    let ok = false;
+    try { ok = !!MS && MS.isTypeSupported(mime); } catch { ok = false; }
+    if (!MS || !ok) { console.warn('[audio] media playout: no MediaSource for ' + mime); return false; }
+    this.omManaged = !!Managed && MS === Managed;
+    this.omStreaming = false; this.omSawStreaming = false;
+    return await new Promise<boolean>((resolve) => {
+      const el = document.createElement('audio');
+      el.autoplay = true;
+      // ★ In the document and attached with srcObject — the two Safari rules the DAB+ path
+      //   learned the hard way (see _startMse). play() BEFORE sourceopen, for the same reason.
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      el.volume = this._volume; el.muted = this._muted;
+      const ms = new MS();
+      const anyEl = el as unknown as { srcObject: unknown; src: string };
+      if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { anyEl.src = URL.createObjectURL(ms as unknown as MediaSource); } }
+      else anyEl.src = URL.createObjectURL(ms as unknown as MediaSource);
+      void el.play().catch(() => { /* a gesture may still be needed; the source still opens */ });
+      let settled = false;
+      ms.addEventListener('sourceopen', () => {
+        try {
+          const sb = ms.addSourceBuffer(mime);
+          sb.mode = 'sequence';
+          sb.addEventListener('updateend', () => this._mediaDrain());
+          sb.addEventListener('error', () => console.warn('[audio] media playout: SourceBuffer error'));
+          const mms = ms as unknown as EventTarget;
+          mms.addEventListener('startstreaming', () => { this.omStreaming = true; this.omSawStreaming = true; this._mediaDrain(); });
+          mms.addEventListener('endstreaming',   () => { this.omStreaming = false; });
+          setTimeout(() => {
+            if (!this.omSawStreaming) { this.omManaged = false; this._mediaDrain(); }
+          }, 1500);
+          this.omEl = el; this.omSrc = ms; this.omBuf = sb;
+          this.omCh = 0; this.omSeq = 0; this.omQueue = [];
+          this.omStartedAt = performance.now(); this.omProgressAt = 0; this.omLastTime = -1;
+          el.addEventListener('timeupdate', () => {
+            if (el.paused || el.muted) return;
+            if (el.currentTime > this.omLastTime + 0.01) {
+              this.omLastTime = el.currentTime;
+              this.omProgressAt = performance.now();
+              this._noteAudible();
+            }
+          });
+          el.addEventListener('error', () => {
+            const err = (el.error && el.error.message) || String(el.error && el.error.code);
+            console.warn('[audio] media playout: element error — ' + err);
+          });
+          this._watchMediaPlayout();
+          console.info('[audio] media playout: Opus/WebM via ' + (this.omManaged ? 'ManagedMediaSource' : 'MediaSource'));
+          if (!settled) { settled = true; resolve(true); }
+        } catch (e) {
+          console.warn('[audio] media playout: setup failed — ' + ((e as Error)?.name || e));
+          el.remove();
+          if (!settled) { settled = true; resolve(false); }
+        }
+      }, { once: true });
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          console.warn('[audio] media playout: source never opened (readyState ' + ms.readyState + ')');
+          el.remove();
+          resolve(false);
+        }
+      }, 4000);
+    });
+  }
+
+  /** One Opus wire frame ([0]=ch [1]=3 [2..5]=rate, then the packet) → one WebM cluster. */
+  private _mediaFeed(buf: ArrayBuffer) {
+    if (!this.omBuf || buf.byteLength < 7) return;
+    const ch = new DataView(buf).getUint8(0) || 1;
+    if (ch !== this.omCh) {
+      // A new initialisation segment on the same buffer: same codec, new channel count.
+      this.omQueue.push(webmInit(ch));
+      this.omCh = ch;
+      if (this.omSeq) console.info('[audio] media playout: channel count now ' + ch);
+    }
+    this.omQueue.push(webmCluster(this.omSeq * 20, new Uint8Array(buf, 6)));
+    this.omSeq++;
+    this.omFedAt = performance.now();
+    // ★ Bounded, like every other audio queue here: audio seconds late is worse than a gap.
+    while (this.omQueue.length > 100) this.omQueue.shift();
+    this._mediaDrain();
+  }
+
+  private _mediaDrain() {
+    const sb = this.omBuf;
+    if (!sb || sb.updating || !this.omQueue.length) return;
+    if (this.omManaged && !this.omStreaming) return;
+    // ★ Coalesce what is waiting into ONE append — appends are the expensive part, not bytes.
+    let n = 0; for (const s of this.omQueue) n += s.byteLength;
+    const all = new Uint8Array(n); let off = 0;
+    for (const s of this.omQueue) { all.set(s, off); off += s.byteLength; }
+    this.omQueue = [];
+    try { sb.appendBuffer(all as unknown as BufferSource); }
+    catch (e) { console.warn('[audio] media playout: append failed — ' + ((e as Error)?.name || e)); }
+  }
+
+  /** Jump to (live edge − cushion). Used by flush() on a retune and by the lag guard. */
+  private _mediaSkipToLive(cushion: number) {
+    const el = this.omEl; if (!el) return;
+    try {
+      const b = el.buffered;
+      if (!b.length) return;
+      const end = b.end(b.length - 1);
+      const to = Math.max(b.start(b.length - 1), end - cushion);
+      if (to > el.currentTime) el.currentTime = to;
+    } catch { /* not seekable yet */ }
+  }
+
+  /** Keep the element near the live edge, trim old ranges, restart a paused element, and hand
+   *  the session back to Web Audio if this path never produces sound. */
+  private _watchMediaPlayout() {
+    if (this.omTimer !== null) return;
+    this.omTimer = window.setInterval(() => {
+      const el = this.omEl, sb = this.omBuf;
+      if (!el || !sb) return;
+      const now = performance.now();
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      try {
+        const b = el.buffered;
+        if (b.length) {
+          const end = b.end(b.length - 1);
+          const lag = end - el.currentTime;
+          // ★ Too far behind (a stall that caught up, a hidden tab): skip forward. Hysteresis:
+          //   act at 3x the cushion, land at 1x, so it does not chase every wobble.
+          if (lag > AudioPlayer.OM_CUSHION * 3) this._mediaSkipToLive(AudioPlayer.OM_CUSHION);
+          // Trim what has played, so the buffer never grows for the life of the page.
+          if (!sb.updating && el.currentTime - b.start(0) > 20) sb.remove(0, el.currentTime - 10);
+        }
+      } catch { /* between states */ }
+      if (el.paused && !this._muted) void el.play().catch(() => {});
+      // ★★ FED BUT NEVER PLAYING: 8 s of packets with the clock stuck is this path failing in a
+      //    browser that claimed to support it. Give the session back to Web Audio rather than sit
+      //    silent — the same rule the Opus decoder follows (rebuild, never limit permanently).
+      const fed = this.omFedAt > 0 && now - this.omFedAt < 2000;
+      const since = Math.max(this.omProgressAt, this.omStartedAt);
+      if (fed && since > 0 && now - since > 8000 && !this._muted) {
+        console.warn('[audio] media playout: packets arriving but the element is not playing — back to Web Audio for this session');
+        AudioPlayer.mediaPlayoutBroken = true;
+        const wasRec = !!this.rec;
+        this.close(); this.closedByUs = false;
+        void this.start().then(() => { if (wasRec && this.worker) this.worker.postMessage({ type: 'rec', on: true }); });
+      }
+    }, 500);
+  }
+
+  private _mediaTeardown() {
+    if (this.omTimer !== null) { clearInterval(this.omTimer); this.omTimer = null; }
+    const el = this.omEl;
+    if (el) {
+      try { el.pause(); } catch { /* gone */ }
+      try { (el as unknown as { srcObject: unknown }).srcObject = null; } catch { /* gone */ }
+      try { el.remove(); } catch { /* not in the document */ }
+    }
+    this.omEl = null; this.omSrc = null; this.omBuf = null; this.omQueue = [];
+    this.omCh = 0; this.omSeq = 0; this.omFedAt = 0; this.omProgressAt = 0; this.omStartedAt = 0;
+  }
+
   // ── MediaSource fallback (Safari) ──────────────────────────────────────────────────────────
   private mseEl: HTMLAudioElement | null = null;
   private mseSrc: MediaSource | null = null;
@@ -1914,7 +2240,7 @@ export class AudioPlayer {
     //   every other symptom ('silent', 'no-stream') is a consequence, and reporting the
     //   consequence sends the listener looking at their tab mute instead of the real cause.
     if (this.needsCodec || this.opusStuck) return 'opus-stuck';
-    if (!this.ctx) return 'no-stream';
+    if (!this.ctx && !this.omEl) return 'no-stream';
     if (this.suspended) return 'suspended';
     if (!this.streaming) return 'no-stream';
     if (this._muted) return 'muted';
@@ -2137,17 +2463,21 @@ export class AudioPlayer {
   async resume() {
     if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
     if (this.mediaEl && this.mediaEl.paused) await this.mediaEl.play().catch(() => {});
+    if (this.omEl && this.omEl.paused) await this.omEl.play().catch(() => {});
   }
 
   set volume(v: number) {
     this._volume = Math.max(0, Math.min(1, v));
     if (this.gain && !this._muted) this.gain.gain.value = this._volume;
+    // ★ Media playout: the element owns the level (read-only on iOS, where the buttons do).
+    if (this.omEl) { try { this.omEl.volume = this._volume; } catch { /* iOS */ } }
   }
   get volume() { return this._volume; }
 
   set muted(m: boolean) {
     this._muted = m;
     if (this.gain) this.gain.gain.value = m ? 0 : this._volume;
+    if (this.omEl) this.omEl.muted = m;
   }
   get muted() { return this._muted; }
 
@@ -2162,6 +2492,7 @@ export class AudioPlayer {
     this.ws?.close();
     this.ws = null;
     if (this.mediaEl) { this.mediaEl.pause(); this.mediaEl.srcObject = null; this.mediaEl = null; }
+    this._mediaTeardown();
     this._stopAnchor();
     this.streamDest = null;
     if (this.sp) { this.sp.onaudioprocess = null; this.sp.disconnect(); this.sp = null; }
