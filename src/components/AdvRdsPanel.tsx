@@ -576,13 +576,19 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     const ok = md > 0.1 && devGate.current;
     if (!(md > 0.1)) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
     const pk = md;
-    const t = ok
+    /* ★ SAY WHAT WAS REMOVED, as the web does: the server takes the guard-band noise out in
+     *  quadrature and reports it; NEGATIVE means a neighbour sat in the guard band and nothing
+     *  was removed (Stuart, 2026-09-14: "this one doesn't say if it is subtracting any noise"). */
+    const nz = x?.mpxNoise ?? 0;
+    const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed`
+                : nz <= -1 ? ' · neighbour in the guard band, noise not removed' : '';
+    const t = (ok
       ? `deviation ${pk.toFixed(0)} kHz · ${pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal'}`
-      : `deviation ${pk.toFixed(0)} kHz · low S/N, unreliable`;
+      : `deviation ${pk.toFixed(0)} kHz · low S/N, unreliable`) + nzTxt;
     const c = !ok ? C.muted : pk > 82 ? C.bad : pk > 75 ? C.warn : C.good;
     return { t, c, pct: Math.max(0, Math.min(100, md)),
              hold: Math.max(0, Math.min(100, x?.mpxHold ?? 0)) };
-  }, [x?.mpxDev, x?.mpxHold, x?.mpxSnr]);
+  }, [x?.mpxDev, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
