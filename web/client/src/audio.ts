@@ -933,7 +933,7 @@ export class AudioPlayer {
    *  every retune, through SpectrumClient.tune(). */
   flush() {
     // Media playout: what is buffered was demodulated at the old frequency — skip past it.
-    if (this.omEl) { this._mediaSkipToLive(0.05); }
+    if (this.omEl) { this._mediaSkipToLive(Math.min(0.1, this.omTarget)); }
     // The worklet path.
     if (this.node) { try { this.node.port.postMessage({ flush: true }); } catch { /* closing */ } }
     // The main-thread fallback path uses its own ring; clear that too, or the fallback keeps the
@@ -1607,8 +1607,13 @@ export class AudioPlayer {
   private omProgressAt = 0;         // last time the element's clock moved while playing
   private omLastTime = -1;
   private omStartedAt = 0;
-  /** Playout cushion behind the live edge, seconds. Skips forward when it grows past 3x this. */
-  private static readonly OM_CUSHION = 0.25;
+  /** Playout cushion behind the live edge, seconds — ADAPTIVE, like the worklet's jitter buffer:
+   *  starts here and grows on every stall (a tunnel delivers in bursts; the LAN does not), up to
+   *  OM_CUSHION_MAX. Never shrinks within a session: a link that stalled once will stall again. */
+  private static readonly OM_CUSHION = 0.4;
+  private static readonly OM_CUSHION_MAX = 2.0;
+  private omTarget = 0.4;
+  private omStalls = 0;
 
   private async _startMediaPlayout(): Promise<boolean> {
     /* ★★★ PLAIN MediaSource FIRST. A ManagedMediaSource does not open until the element has
@@ -1666,6 +1671,17 @@ export class AudioPlayer {
           el.addEventListener('error', () => {
             const err = (el.error && el.error.message) || String(el.error && el.error.code);
             console.warn('[audio] media playout: element error — ' + err);
+          });
+          /* ★★ A STALL GROWS THE CUSHION. 'waiting' fires when the element runs out of buffered
+           *  audio while playing — through the tunnel (Stuart, 2026-09-14: "the audio is
+           *  dropping out") a 0.25 s cushion was eaten by every burst gap. Each stall adds
+           *  0.3 s, the same shape as the worklet's JITTER_STEP; the rate trim then holds it. */
+          el.addEventListener('waiting', () => {
+            if (this.omFedAt && performance.now() - this.omFedAt < 3000) {
+              this.omStalls++;
+              const t = Math.min(AudioPlayer.OM_CUSHION_MAX, this.omTarget + 0.3);
+              if (t !== this.omTarget) { this.omTarget = t; console.info('[audio] media playout: stall ' + this.omStalls + ' — cushion now ' + t.toFixed(1) + ' s'); }
+            }
           });
           this._watchMediaPlayout();
           console.info('[audio] media playout: Opus/WebM via ' + (this.omManaged ? 'ManagedMediaSource' : 'MediaSource'));
@@ -1754,10 +1770,12 @@ export class AudioPlayer {
            *  Spatialise Stereo "keeps disappearing and reappearing". Now the playback rate is
            *  trimmed by up to 2 % around the target cushion; Safari preserves pitch by default,
            *  so a trim that small is inaudible. A seek is kept only for a real pile-up. */
-          if (lag > 3) this._mediaSkipToLive(AudioPlayer.OM_CUSHION);
+          if (lag > this.omTarget + 3) this._mediaSkipToLive(this.omTarget);
           else {
-            const err = lag - AudioPlayer.OM_CUSHION;             // +ve: behind live, speed up
-            const rate = Math.max(0.98, Math.min(1.02, 1 + err * 0.08));
+            const err = lag - this.omTarget;                        // +ve: behind live, speed up
+            // ±1 %: a cushion 0.5 s over target closes in under a minute, and a link that is
+            // merely bursty does not get chased.
+            const rate = Math.max(0.99, Math.min(1.01, 1 + err * 0.04));
             if (Math.abs(rate - el.playbackRate) > 0.001) el.playbackRate = rate;
           }
           // Trim what has played, so the buffer never grows for the life of the page.
@@ -1790,6 +1808,7 @@ export class AudioPlayer {
     }
     this.omEl = null; this.omSrc = null; this.omBuf = null; this.omQueue = [];
     this.omCh = 0; this.omSeq = 0; this.omFedAt = 0; this.omProgressAt = 0; this.omStartedAt = 0;
+    this.omTarget = AudioPlayer.OM_CUSHION; this.omStalls = 0;
   }
 
   // ── MediaSource fallback (Safari) ──────────────────────────────────────────────────────────
@@ -2468,7 +2487,8 @@ export class AudioPlayer {
       // Media playout (Safari): the element IS the output chain — no context below.
       mediaPlayout: !!om,
       mediaTime: om?.currentTime, mediaPaused: om?.paused, mediaReady: om?.readyState,
-      mediaBufferedAheadS: omBuffered, mediaPackets: this.omSeq, mediaChannels: this.omCh,
+      mediaBufferedAheadS: omBuffered, mediaTargetS: this.omTarget, mediaStalls: this.omStalls,
+      mediaRate: om?.playbackRate, mediaPackets: this.omSeq, mediaChannels: this.omCh,
       mediaManaged: this.omManaged,
       ctxState: this.ctx?.state, ctxTime: this.ctx?.currentTime, ctxRate: this.ctx?.sampleRate,
       baseLatency: this.ctx?.baseLatency,
