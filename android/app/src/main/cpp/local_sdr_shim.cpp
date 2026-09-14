@@ -10921,16 +10921,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  watching it, an off from one socket is refused and that socket is handed the
                  *  live block again so its box re-opens. The last listener's off — and the last
                  *  socket closing — still restore the receiver, as before. */
-                std::vector<std::shared_ptr<net::Socket>> socks;
-                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-                size_t others = 0;
-                for (auto& sk : socks) if (sk != sock) ++others;
-                if (others > 0 && g_dabMode.load(std::memory_order_relaxed)) {
-                    LOGI("[DAB] off refused — %zu other listener%s on this multiplex", others, others == 1 ? " is" : "s are");
-                    sendText(sock, "{\"type\":\"dab_error\",\"why\":\"DAB stays on \xe2\x80\x94 other listeners are on this multiplex\"}");
-                    sendText(sock, dabStatusJson());
-                    return;
-                }
+                /* ★★★ THE SHARED DIAL OBEYS WHOEVER IS TUNING IT. This used to refuse to leave DAB
+                 *   while any other spectrum socket was open ("DAB stays on — other listeners are
+                 *   on this multiplex"), which held Stuart in DAB on his own receiver on
+                 *   2026-09-14 because a headless test probe was connected. It was the only
+                 *   control on the shared dial that did not obey the person at it. Stuart: "the
+                 *   shared dial should always obey the person tuning it, that is why we added the
+                 *   chat feature to ask for tuning". Tune, mode and block changes never had such
+                 *   a guard; leaving DAB now has none either. */
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
