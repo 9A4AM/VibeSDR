@@ -497,14 +497,22 @@ function webmInit(channels: number): Uint8Array {
   const segment = [...ebmlId(0x18538067), 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, ...info, ...tracks];
   return new Uint8Array([...header, ...segment]);
 }
-function webmCluster(timecodeMs: number, packet: Uint8Array): Uint8Array {
-  // SimpleBlock: track 1 (vint 0x81), relative timecode 0, flags 0x80 (keyframe), then the packet.
-  const blockHead = [...ebmlId(0xA3), ...ebmlSize(4 + packet.byteLength), 0x81, 0x00, 0x00, 0x80];
+function webmCluster(timecodeMs: number, packets: Uint8Array[]): Uint8Array {
+  // One SimpleBlock per packet: track 1 (vint 0x81), relative timecode (int16 ms, 20 per block),
+  // flags 0x80 (keyframe — every Opus packet is), then the packet.
+  const blocks: Uint8Array[] = packets.map((p, i) => {
+    const rel = i * 20;
+    const head = [...ebmlId(0xA3), ...ebmlSize(4 + p.byteLength), 0x81, (rel >> 8) & 0xff, rel & 0xff, 0x80];
+    const b = new Uint8Array(head.length + p.byteLength);
+    b.set(head, 0); b.set(p, head.length);
+    return b;
+  });
   const tc = ebmlUint(0xE7, timecodeMs);
-  const bodyLen = tc.length + blockHead.length + packet.byteLength;
-  const head = [...ebmlId(0x1F43B675), ...ebmlSize(bodyLen), ...tc, ...blockHead];
-  const out = new Uint8Array(head.length + packet.byteLength);
-  out.set(head, 0); out.set(packet, head.length);
+  let bodyLen = tc.length; for (const b of blocks) bodyLen += b.byteLength;
+  const head = [...ebmlId(0x1F43B675), ...ebmlSize(bodyLen), ...tc];
+  const out = new Uint8Array(head.length + bodyLen - tc.length);
+  out.set(head, 0);
+  let off = head.length; for (const b of blocks) { out.set(b, off); off += b.byteLength; }
   return out;
 }
 
@@ -659,9 +667,10 @@ export class AudioPlayer {
     if (location.hash.includes('nomsaudio')) return false;
     if (location.hash.includes('msaudio')) return AudioPlayer.isWebKit();
     if (!AudioPlayer.isWebKit()) return false;
-    // ★ THE DEFAULT on WebKit (Stuart, 2026-09-14: "It needs to be the default") — the switch in
-    //   the audio menu turns it OFF; an unset key means on.
-    try { return localStorage.getItem('vibesdr.mediaPlayout') !== '0'; } catch { return true; }
+    // ★★ OPT-IN. It was the default for two hours on 2026-09-14 and was not good enough: audio
+    //    that failed to start, lagged and hiccupped ("what is the point"). Web Audio with the
+    //    clock watchdog is what ships; this stays a switch for testing until it is proven.
+    try { return localStorage.getItem('vibesdr.mediaPlayout') === '1'; } catch { return false; }
   }
 
   private static _needsAnchor(): boolean {
@@ -1617,11 +1626,17 @@ export class AudioPlayer {
    *  honest. Watched because a wrong guess here is what made the first build unplayable. */
   private omRatio = 0;
   private omRatioEnd = 0; private omRatioPk = 0;
+  /** Packets waiting to be written into one cluster — see OM_PER_CLUSTER. */
+  private omPending: Uint8Array[] = [];
+  /** ★★★ TEN BLOCKS PER CLUSTER, NOT ONE. With every 20 ms packet in its own cluster the audio
+   *  still stuttered at 1.4 s buffered (Stuart, 2026-09-14) — a starved element cannot explain
+   *  that, a decoder restarted at every cluster boundary can. 200 ms per cluster. */
+  private static readonly OM_PER_CLUSTER = 10;
   /** Playout cushion behind the live edge, seconds — ADAPTIVE, like the worklet's jitter buffer:
    *  starts here and grows on every stall (a tunnel delivers in bursts; the LAN does not), up to
    *  OM_CUSHION_MAX. Never shrinks within a session: a link that stalled once will stall again. */
   private static readonly OM_CUSHION = 0.4;
-  private static readonly OM_CUSHION_MAX = 2.0;
+  private static readonly OM_CUSHION_MAX = 1.5;
   private omTarget = 0.4;
   private omStalls = 0;
 
@@ -1668,7 +1683,7 @@ export class AudioPlayer {
           }, 1500);
           this.omEl = el; this.omSrc = ms; this.omBuf = sb;
           // Packets queued before the source opened start again from a fresh init segment.
-          this.omCh = 0; this.omSeq = 0; this.omQueue = [];
+          this.omCh = 0; this.omSeq = 0; this.omQueue = []; this.omPending = [];
           this.omStartedAt = performance.now(); this.omProgressAt = 0; this.omLastTime = -1;
           el.addEventListener('timeupdate', () => {
             if (el.paused || el.muted) return;
@@ -1726,9 +1741,14 @@ export class AudioPlayer {
       this.omCh = ch;
       if (this.omSeq) console.info('[audio] media playout: channel count now ' + ch);
     }
-    this.omQueue.push(webmCluster(this.omSeq * 20, new Uint8Array(buf, 6)));
+    this.omPending.push(new Uint8Array(buf, 6));
     this.omSeq++;
     this.omFedAt = performance.now();
+    if (this.omPending.length >= AudioPlayer.OM_PER_CLUSTER) {
+      const first = this.omSeq - this.omPending.length;
+      this.omQueue.push(webmCluster(first * 20, this.omPending));
+      this.omPending = [];
+    }
     // ★ Bounded, like every other audio queue here: audio seconds late is worse than a gap.
     while (this.omQueue.length > 100) this.omQueue.shift();
     this._mediaDrain();
@@ -1787,14 +1807,14 @@ export class AudioPlayer {
            *  Spatialise Stereo "keeps disappearing and reappearing". Now the playback rate is
            *  trimmed by up to 2 % around the target cushion; Safari preserves pitch by default,
            *  so a trim that small is inaudible. A seek is kept only for a real pile-up. */
-          if (lag > this.omTarget + 3) this._mediaSkipToLive(this.omTarget);
-          else {
-            const err = lag - this.omTarget;                        // +ve: behind live, speed up
-            // ±1 %: a cushion 0.5 s over target closes in under a minute, and a link that is
-            // merely bursty does not get chased.
-            const rate = Math.max(0.99, Math.min(1.01, 1 + err * 0.04));
-            if (Math.abs(rate - el.playbackRate) > 0.001) el.playbackRate = rate;
-          }
+          /* ★★★ RATE 1.0, ALWAYS. The trim (±1–2 %) kept Safari time-stretching the whole time,
+           *  and the stutter survived a 1.4 s cushion — so the stretch, not starvation, is the
+           *  suspect. With an honest timeline (DefaultDuration) the only drift left is the server's
+           *  clock against this machine's, hundreds of ppm at most: half a second takes many
+           *  minutes to accumulate, and ONE small seek then is a far smaller wound than a
+           *  continuous stretch. */
+          if (el.playbackRate !== 1) el.playbackRate = 1;
+          if (lag > this.omTarget + 0.5) this._mediaSkipToLive(this.omTarget);
           // Trim what has played, so the buffer never grows for the life of the page.
           if (!sb.updating && el.currentTime - b.start(0) > 20) sb.remove(0, el.currentTime - 10);
         }
@@ -1825,7 +1845,7 @@ export class AudioPlayer {
     }
     this.omEl = null; this.omSrc = null; this.omBuf = null; this.omQueue = [];
     this.omCh = 0; this.omSeq = 0; this.omFedAt = 0; this.omProgressAt = 0; this.omStartedAt = 0;
-    this.omTarget = AudioPlayer.OM_CUSHION; this.omStalls = 0;
+    this.omTarget = AudioPlayer.OM_CUSHION; this.omStalls = 0; this.omPending = [];
   }
 
   // ── MediaSource fallback (Safari) ──────────────────────────────────────────────────────────
