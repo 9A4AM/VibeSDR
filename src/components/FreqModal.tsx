@@ -672,6 +672,7 @@ export default function FreqModal({
                     onChangeText={onMagicKey}
                     placeholder="OWRX magic key (optional)"
                     placeholderTextColor="rgba(255,190,90,0.45)"
+                    secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
                     spellCheck={false}
@@ -679,6 +680,7 @@ export default function FreqModal({
                   />
                   <Text style={st.magicHint}>
                     The operator's key for locked profiles. Blank unless they gave you one.
+                    Kept for this session only.
                   </Text>
                 </View>
               )}

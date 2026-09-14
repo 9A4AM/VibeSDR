@@ -211,7 +211,7 @@ struct BatteryPillV: View {
 }
 
 enum CrownMode: Equatable {
-  case tune, zoom, brightness, contrast, autoContrast, volume, wfFloor, wfCeil
+  case tune, zoom, brightness, contrast, autoContrast, volume, wfFloor, wfCeil, visualGain
 
   var glyph: String {
     switch self {
@@ -222,6 +222,7 @@ enum CrownMode: Equatable {
     case .autoContrast: return "wand.and.stars"
     case .wfFloor: return "arrow.down.to.line"
     case .wfCeil:  return "arrow.up.to.line"
+    case .visualGain: return "plus.forwardslash.minus"
     case .volume:       return "speaker.wave.2.fill"
     }
   }
@@ -232,6 +233,7 @@ enum CrownMode: Equatable {
     case .autoContrast: return "Auto"
     case .wfFloor: return "Floor"
     case .wfCeil:  return "Ceiling"
+    case .visualGain: return "Trim"
     }
   }
   /// Double-Tap cycles just the three primary crown modes.
@@ -634,7 +636,8 @@ struct ControlMenu: View {
   // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
   // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
   static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab", "adsb"]
-  static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
+  // ★ 5 kHz = the shortwave broadcast raster (DL8LDN, 2026-09-14). Mirrors sdrTypes.ts.
+  static let steps: [Double] = [10, 100, 500, 1_000, 5_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   private var crownLabel: String {
     CrownSens(rawValue: crownSens)?.label ?? "Normal"
@@ -1447,7 +1450,7 @@ struct DisplaySheet: View {
   ///   brightness and contrast are adjusted in the same look-tweak-look loop.
   static func isDisplayMode(_ m: CrownMode) -> Bool {
     switch m {
-    case .brightness, .contrast, .autoContrast, .wfFloor, .wfCeil: return true
+    case .brightness, .contrast, .autoContrast, .wfFloor, .wfCeil, .visualGain: return true
     default: return false
     }
   }
@@ -1470,6 +1473,10 @@ struct DisplaySheet: View {
   @AppStorage("wfFloorDb")      private var wfFloorDb      = -110.0
   @AppStorage("wfCeilDb")       private var wfCeilDb       = -30.0
   @AppStorage("meterUnit")      private var meterUnit      = "snr"
+  // ★ VISUAL GAIN — the phone's ±20 dB display trim (DL8LDN's S-meter request), on the wrist too
+  //   (Stuart, 2026-09-14: "might be worth adding it too"). Shifts the S-meter/dBFS readout and
+  //   the squelch needle's scale by the same amount; SNR is a difference and does not move.
+  @AppStorage("visualGainDb")   private var visualGainDb   = 0.0
 
   @State private var showPalette = false
   @State private var showVfo     = false
@@ -1486,7 +1493,7 @@ struct DisplaySheet: View {
   private var isDefaultVfo: Bool { wfVfoColour == "orange" || wfVfoColour == "sync" }
   private var displayDirty: Bool {
     wfAutoContrast != 5 || wfBright != 0 || wfContrast != 0 || wfManualRange
-      || !isDefaultPalette || !isDefaultVfo || !wfPeakHold || meterUnit != "snr"
+      || !isDefaultPalette || !isDefaultVfo || !wfPeakHold || meterUnit != "snr" || visualGainDb != 0
   }
 
   var body: some View {
@@ -1525,6 +1532,8 @@ struct DisplaySheet: View {
           Text("dBFS").tag("dbfs")
         }
         .onChange(of: meterUnit) { _, u in link.meterUnit = u }
+        toneRow(icon: "plus.forwardslash.minus", label: "Signal trim",
+                value: (visualGainDb > 0 ? "+" : "") + "\(Int(visualGainDb)) dB") { onPickCrown(.visualGain) }
       }
       Section {
         Toggle(isOn: $wfPeakHold) {
@@ -1542,6 +1551,7 @@ struct DisplaySheet: View {
           // ★ Reset must cover the new state too — back to AUTO at 5, floor/ceiling cleared.
           wfManualRange = false; wfFloorDb = -110; wfCeilDb = -30
           wfPalette = "sonar"; wfVfoColour = "orange"; wfPeakHold = true
+          visualGainDb = 0; link.visualGainDb = 0
           link.setManualRange(false, floor: -110, ceil: -30)
           link.setAutoContrast(5); link.waterfall.brightness = 0; link.waterfall.contrast = 0
           link.applyPalette("sonar"); link.applyVfo("orange")

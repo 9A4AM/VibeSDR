@@ -633,7 +633,7 @@ struct ControlMenu: View {
    *  ★ A mode the phone REPORTS still routes the screen; that path is untouched. This list is only
    *    what the wrist may ASK for. */
   static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl"]
-  static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
+  static let steps: [Double] = [10, 100, 500, 1_000, 5_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
   /// at default, so it reads as a status as much as a button.

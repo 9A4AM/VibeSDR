@@ -252,15 +252,21 @@ final class UberClient: ObservableObject {
 
   /// Per-host tune memory (VibeServer only) — so it reopens where you left it, not the 648 kHz/AM default.
   private var vibeStateKey: String { "vibe.tune.\(host)" }
+  /// ★ The last squelch sent to THIS host, dBFS (−100 = off) — remembered with the tune (GitHub #28:
+  ///   frequency and mode came back, the squelch did not, so NFM opened at full noise every launch).
+  private(set) var savedSquelchDb = -100.0
+  /// Bumped when a remembered squelch is restored, so SpikeLink can move its needle to match.
+  @Published private(set) var squelchRestoreSeq = 0
   private func saveVibeState() {
     guard isVibe, frequency > 0 else { return }
-    UserDefaults.standard.set(["f": frequency, "m": mode], forKey: vibeStateKey)
+    UserDefaults.standard.set(["f": frequency, "m": mode, "q": savedSquelchDb], forKey: vibeStateKey)
   }
   private func restoreVibeState() {
     guard isVibe, let s = UserDefaults.standard.dictionary(forKey: vibeStateKey),
           let f = s["f"] as? Double, f > 0 else { return }
     frequency = f
     if let m = s["m"] as? String { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
+    if let q = s["q"] as? Double { savedSquelchDb = q } else { savedSquelchDb = -100 }
     vibeRestored = true
   }
   /// Per-host RTL-SDR memory (VibeServer only) — gain/bias-T/AGC/ppm/rate/de-emphasis, so the dongle comes
@@ -2952,6 +2958,11 @@ final class UberClient: ObservableObject {
         try? await Task.sleep(nanoseconds: 500_000_000)   // let the audio socket come up first
         guard !self.goingIdle else { return }
         self.sendTune()
+        // ★ And the remembered squelch, on the same beat — the gate is per session server-side.
+        if self.savedSquelchDb > -100 {
+          self.specSock.send(json: ["type": "squelch", "db": self.savedSquelchDb])
+          self.squelchRestoreSeq += 1
+        }
       }
     }
     status = "live"
@@ -3132,7 +3143,9 @@ final class UberClient: ObservableObject {
   ///   UberSDR — because SpikeLink.sqlScale converts the needle per backend.
   func setSquelch(_ value: Double) {
     if isVibe {
-      specSock.send(json: ["type": "squelch", "db": value <= -999 ? -100.0 : value])
+      savedSquelchDb = value <= -999 ? -100.0 : value
+      saveVibeState()
+      specSock.send(json: ["type": "squelch", "db": savedSquelchDb])
     } else {
       audioSock.send(json: ["type": "set_audio_gate",
                             "min_snr": value <= -999 ? -999 : Int((value + 30).rounded())])

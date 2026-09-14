@@ -258,6 +258,7 @@ struct ContentView: View {
   @AppStorage("wfAutoContrast") private var wfAutoContrast = 5.0
   @AppStorage("wfManualRange")  private var wfManualRange  = false
   @AppStorage("wfFloorDb")      private var wfFloorDb      = -110.0
+  @AppStorage("visualGainDb")   private var visualGainDb   = 0.0
   @AppStorage("wfCeilDb")       private var wfCeilDb       = -30.0
   @AppStorage("wfPalette")      private var wfPalette      = "sync"
   @AppStorage("wfVfoColour")    private var wfVfoColour    = "sync"
@@ -918,6 +919,9 @@ link.setAutoContrast(wfAutoContrast)
       case .wfCeil:
         wfCeilDb = max(wfFloorDb + 10, min(0, wfCeilDb + Double(delta)))
         link.setManualRange(true, floor: wfFloorDb, ceil: wfCeilDb)
+      case .visualGain:
+        visualGainDb = min(20, max(-20, visualGainDb + Double(delta)))
+        link.visualGainDb = visualGainDb
       }
     }
     // Volume mode hands the crown to the native WKInterfaceVolumeControl; releasing the
@@ -1390,6 +1394,7 @@ link.setAutoContrast(wfAutoContrast)
     case .contrast:     return .white
     case .autoContrast: return .orange
     case .wfFloor, .wfCeil: return .orange
+    case .visualGain: return .mint
     // Muted must be unmistakable at a glance: the bar still shows the level the phone
     // will return to, but nothing is coming out of it.
     case .volume:     return link.muted ? .red : .green
@@ -1410,6 +1415,7 @@ link.setAutoContrast(wfAutoContrast)
     // range am I", which is the only thing a ring can usefully say about a dB figure.
     case .wfFloor:      return (wfFloorDb + 140) / 140
     case .wfCeil:       return (wfCeilDb + 140) / 140
+    case .visualGain:   return (visualGainDb + 20) / 40
     // The iPhone's REAL system volume — so a phone sitting at 50% reads half a bar, not
     // a full one. That lie is the entire reason this feature was rebuilt.
     case .volume:     return link.volume

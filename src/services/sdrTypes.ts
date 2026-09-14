@@ -9,7 +9,9 @@ export const MODE_LABELS: Record<SDRMode, string> = {
   fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM',
 };
 
-export const STEPS = [10, 100, 500, 1000, 9000, 10000];
+// ★ 5 kHz is the shortwave BROADCAST raster (the 49 m to 16 m bands channel on it) — a DL8LDN
+//   request, 2026-09-14. 9 kHz stays for MW/LW.
+export const STEPS = [10, 100, 500, 1000, 5000, 9000, 10000];
 // VHF/UHF tuning steps — 10 kHz is uselessly small for broadcast FM (100 kHz),
 // NFM repeaters (12.5/25 kHz) and air/marine. Used above 30 MHz (e.g. OWRX VHF
 // profiles). 12.5k/25k shown as "12.5k"/"25k" by formatStep.
@@ -30,7 +32,7 @@ export function stepsForFreq(hz: number): number[] {
 }
 export const STEP_LABELS: Record<number, string> = {
   10: '10Hz', 100: '100Hz', 500: '500Hz',
-  1000: '1kHz', 9000: '9kHz', 10000: '10kHz',
+  1000: '1kHz', 5000: '5kHz', 9000: '9kHz', 10000: '10kHz',
 };
 
 export const MIN_HZ = 10_000;

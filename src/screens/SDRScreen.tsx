@@ -974,10 +974,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
       const stereo = prefs.stereo !== false;   // default on
-      // Squelch / NR / Notch are session-scoped DSP — NEVER restored, so a new
-      // connection always starts clean (no surprise muted/“funny” audio carried
-      // over from a previous session). Device config (gain/ppm/etc.) still persists.
-      const sql = -100, nrLvl = 0, notch = false;
+      // NR / Notch are session-scoped DSP — never restored, so a new connection starts clean.
+      // ★★ SQUELCH IS REMEMBERED (GitHub #28, ea4acy, 2026-09-14): frequency and mode came back
+      //    on an RTL-TCP server but the squelch reset to 0, so NFM opened at full noise on every
+      //    launch until it was raised again. It is a property of THIS device's noise floor, like
+      //    the gain — and it lives in the same per-device blob. Older blobs have no field → off.
+      const sql = typeof prefs.squelch === 'number' ? Math.max(-100, prefs.squelch) : -100;
+      hwSquelchRef.current = sql;
+      const nrLvl = 0, notch = false;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
       setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
@@ -1080,9 +1084,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   converter is a property of one physical dongle-plus-front-end, and that is exactly what
       //   localDeviceKey identifies. Nothing new to sync or migrate.
       converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
+      squelch: hwSquelch,            // ★ remembered per device — see the restore above (#28)
     })).catch(() => {});
-    // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter]);
+    // NB: nrLevel / notch are intentionally NOT saved (session-scoped).
+  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -1587,24 +1592,16 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  discussion asked for it so a listener the operator trusts can get past the profile limits.
    *  ★ PER SERVER, never global: the key belongs to one operator and is given to people they
    *    trust. Storing one key for every OWRX would leak it to receivers it was never meant for. */
+  /* ★★ SESSION ONLY, like the admin password — never stored. It WAS stored per server, and
+   *  DL8LDN (2026-09-14) found the trap: the saved key came back on the next connect but the
+   *  server no longer honoured it, so the field showed a key that did not work and had to be
+   *  cleared and retyped. Going back to the server list drops this screen, and the key with it. */
   const [owrxMagicKey, setOwrxMagicKey] = useState('');
-  const magicKeyStore = `lsv_owrx_magic:${baseUrl}`;
-  useEffect(() => {
-    let gone = false;
-    AsyncStorage.getItem(magicKeyStore)
-      .then((v) => { if (!gone && v) { setOwrxMagicKey(v); (client.current as any)?.setMagicKey?.(v); } })
-      .catch(() => {});
-    return () => { gone = true; };
-  }, [magicKeyStore]);
   const onOwrxMagicKey = useCallback((k: string) => {
     const v = (k ?? '').trim();
     setOwrxMagicKey(v);
     (client.current as any)?.setMagicKey?.(v);
-    // ★ Remove rather than store an empty string: "no key" and "a key that is blank" must not
-    //   look the same on the next connect.
-    (v ? AsyncStorage.setItem(magicKeyStore, v) : AsyncStorage.removeItem(magicKeyStore))
-      .catch(() => {});
-  }, [magicKeyStore]);
+  }, []);
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   // OWRX: server/profile preset DSP defaults (initial_squelch_level / initial_nr_level)
   // pushed on connect + every profile switch; seeds the menu's squelch/NR sliders so
@@ -2718,11 +2715,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
     let s = -1;
-    if (isKiwi)       { if (kiwiSquelch > -130) s = clamp01((kiwiSquelch + 130) / 90); }
-    else if (isLocal) { if (hwSquelch   > -100) s = clamp01((hwSquelch   + 130) / 90); }
+    /* ★★★ THE MARKER LIVES ON THE TRIMMED SCALE. The meter level has `vg` added (see the meter
+     *  emit) and the gate is set by subtracting it (onSquelchDrag) — but this marker was drawn
+     *  from the RAW threshold, so a −20 dB trim left the red line 20 dB away from where the user
+     *  had put it. DL8LDN, 2026-09-14: the S-meter moved with the trim, the squelch did not. */
+    const vg = visualGain;
+    if (isKiwi)       { if (kiwiSquelch > -130) s = clamp01((kiwiSquelch + vg + 130) / 90); }
+    else if (isLocal) { if (hwSquelch   > -100) s = clamp01((hwSquelch   + vg + 130) / 90); }
     else if (!isOwrx) { if (snrSquelch  > -999 && signalMode === 'snr') s = sigNorm(snrSquelch); }
     sqlNormRef.current = s;   // SNR-gate in S-meter/dBFS mode is filled live in the meter emit (needs floor)
-  }, [isKiwi, isLocal, isOwrx, kiwiSquelch, hwSquelch, snrSquelch, signalMode]);
+  }, [isKiwi, isLocal, isOwrx, kiwiSquelch, hwSquelch, snrSquelch, signalMode, visualGain]);
   const handleChatJoin = useCallback((cs: string) => {
     const clean = sanitizeCallsign(cs);
     if (!clean) return;

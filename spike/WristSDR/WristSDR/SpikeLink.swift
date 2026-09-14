@@ -70,6 +70,10 @@ final class SpikeLink: ObservableObject {
   /// signal, and which one is "right" depends entirely on the operator — a DXer wants S-units,
   /// someone setting squelch wants SNR, someone chasing overload wants dBFS.
   @AppStorage("meterUnit") var meterUnit = "snr" { didSet { meter = "" } }
+  /// ★ The display trim, dB. Added to every ABSOLUTE level the wrist shows (dBFS/S-units and the
+  ///   squelch needle's scale) and taken back off what the gate is told — so the trim moves what
+  ///   you see and never what the radio does. SNR is a difference; it is left alone.
+  @AppStorage("visualGainDb") var visualGainDb = 0.0 { didSet { meter = "" } }
 
   /// Format the meter readout in the chosen unit.
   ///
@@ -752,10 +756,15 @@ final class SpikeLink: ObservableObject {
     // Signal meter — bar fill + SNR text, computed for free by the spectrum DSP. Round the
     // text so it doesn't invalidate the view on sub-dB jitter.
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
-    let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs)
+    let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs + visualGainDb)
     if meter != mt { meter = mt }
     let sn = sqlNorm(client.signalDb)   // signal on the needle's 0..1 scale, per backend
     if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
+    // ★ A squelch remembered for this VibeServer (GitHub #28) — put the needle where the gate is.
+    if let u = client as? UberClient, u.squelchRestoreSeq != squelchRestoreSeen {
+      squelchRestoreSeen = u.squelchRestoreSeq
+      sql = u.savedSquelchDb <= -100 ? -1 : sqlNorm(u.savedSquelchDb)
+    }
 
     // A new row was drawn → the spectrum is alive.
     if client.rowsPushed != lastRowsPushed {
@@ -1169,6 +1178,7 @@ final class SpikeLink: ObservableObject {
   // live signal reading, the red needle off the squelch value. `sql` (0..1) is the needle position; the
   // indicator's CLOSED state is derived (level < needle), like the phone.
   @Published var sql = -1.0
+  private var squelchRestoreSeen = 0
   /// The signal on the SAME 0..1 scale as the needle (signalDb / 50) — so the squelch bar and needle
   /// line up (the meter's own `level` is a compressed fill pinned near full, useless for this).
   @Published var sqlSignal = 0.0
@@ -1197,13 +1207,16 @@ final class SpikeLink: ObservableObject {
   func setSquelch(_ pos: Double) {
     sql = pos < 0 ? -1 : min(1, pos)
     let s = sqlScale
-    client?.setSquelch(sql < 0 ? -999 : sql * s.span + s.offset)
+    // ★ The needle sits on the TRIMMED scale; the gate wants the real level (see visualGainDb).
+    client?.setSquelch(sql < 0 ? -999 : sql * s.span + s.offset - (sqlAbsolute ? visualGainDb : 0))
   }
+  /// True when the needle's scale is an absolute level (dBm/dBFS) the trim applies to; SNR is not.
+  private var sqlAbsolute: Bool { sqlScale.offset != 0 }
 
   /// `signalDb` on the needle's own 0..1 scale, whichever backend we're on.
   func sqlNorm(_ db: Double) -> Double {
     let s = sqlScale
-    return min(1, max(0, (db - s.offset) / s.span))
+    return min(1, max(0, (db + (sqlAbsolute ? visualGainDb : 0) - s.offset) / s.span))
   }
 
   /// Keep the signal bar live while the squelch SHEET covers the waterfall (its 20fps render driver
