@@ -1169,7 +1169,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★★ DECAY IN TIME, NOT PER BLOCK. 0.995 per block was 0.1 s on an RTL's 168-sample
                 //    blocks and many seconds on a bench feeding 8192 at a time — the same
                 //    block-size trap the deviation window fell into. 0.5 s is the constant.
-                eyePeak_ *= (chFs_ > 0.0) ? (float)std::exp(-(double)nc / chFs_ / 0.5) : 1.0f;
+                // ★ 2 s, not 0.5: at 0.5 s the scale followed the music bar by bar and the whole
+                //   trace visibly breathed with it (Stuart, 2026-09-14).
+                eyePeak_ *= (chFs_ > 0.0) ? (float)std::exp(-(double)nc / chFs_ / 2.0) : 1.0f;
                 const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
                 float blockPk = eyePeak_;
                 // ★★ NO fmod. A fractional part is floor-and-subtract; working in TURNS (0..1)
@@ -1311,8 +1313,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     for (int b = 0; b < kEyeBands; ++b)
                         for (float v : eyeAcc_[b]) if (v > mx) mx = v;
                     for (int b = 0; b < kEyeBands; ++b) {
-                        float bmx = 0.0f;
-                        for (float v : eyeAcc_[b]) if (v > bmx) bmx = v;
+                        float bmxNow = 0.0f;
+                        for (float v : eyeAcc_[b]) if (v > bmxNow) bmxNow = v;
+                        /* ★ The brightness reference is SMOOTHED (~1 s at 6 Hz), not the instant
+                         *   maximum: normalising each frame to its own peak made the stereo band
+                         *   pulse with its own loudness — "almost breathes, fades in and out"
+                         *   (Stuart, 2026-09-14). Rises are taken faster than falls so a band that
+                         *   appears is not clipped while the reference catches up. */
+                        float& bmx = eyeBmxSm_[b];
+                        bmx += ((bmxNow > bmx) ? 0.35f : 0.15f) * (bmxNow - bmx);
                         // ★ bmx^0.75 · mx^0.25: the geometric mean left Heart's stereo at 36/63 —
                         //   persistent on the wire, but on a retina Safari faint enough that
                         //   Stuart saw it only when a chorus pushed it to full ("flashes for a

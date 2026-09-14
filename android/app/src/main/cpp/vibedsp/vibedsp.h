@@ -2307,6 +2307,7 @@ private:
     std::vector<float>         eyeAcc_[kEyeBands];   // intensity, decayed each block = persistence
     std::vector<unsigned char> eyeOut_[kEyeBands];   // the same grids scaled to 0..255 for the wire
     float                      eyePeak_ = 0.0f;      // ONE peak for all three: they share an axis
+    float                      eyeBmxSm_[kEyeBands] = { 0.0f, 0.0f, 0.0f };   // smoothed brightness reference per band
     /** ★★★ THE GRID WORK IS A DISPLAY COST, NOT AN AUDIO COST — DO IT AT THE FRAME RATE.
      *  Accumulating samples has to happen every block, but DECAYING, scanning for the maximum and
      *  converting to bytes are needed once per frame SENT. Doing all three every audio block over
