@@ -1866,6 +1866,9 @@ public:
              *  colour saying what is making each part of it. All three share one scale. */
             const unsigned char* eyeBand[3]; int eyeW, eyeH;
             float eyeDevKHz;
+            /** Per-component deviation, kHz: [0] pilot, [1] stereo L-R, [2] RDS — corrected for the
+             *  eye's 15 kHz high-pass, so the pilot figure agrees with pilotDevKHz. */
+            float eyeBandKHz[3];
             /** ★★ TOTAL PEAK DEVIATION of the whole composite INCLUDING the audio, in kHz — the
              *  headline broadcast measurement, and the one this panel was missing. 75 kHz is the
              *  limit; above it a station is overmodulating. Suggested by Saber, 2026-09-13, and
@@ -2308,6 +2311,16 @@ private:
     std::vector<unsigned char> eyeOut_[kEyeBands];   // the same grids scaled to 0..255 for the wire
     float                      eyePeak_ = 0.0f;      // ONE peak for all three: they share an axis
     float                      eyeBmxSm_[kEyeBands] = { 0.0f, 0.0f, 0.0f };   // smoothed brightness reference per band
+    /** ★★★ EACH BAND ON ITS OWN VERTICAL SCALE, STRENGTH IN THE BRIGHTNESS. A shared axis drew
+     *  whichever component was loudest at full height and squashed the rest into the centre —
+     *  on a strong-stereo station the pilot was a near-white line and the RDS invisible.
+     *  Stuart, 2026-09-14: "keep the box and zoom level the same size then make the waveform
+     *  grow to the edge of the box and then increase the intensity so it indicates the
+     *  strength, that way it will also preserve the pilot view". So each band tracks its own
+     *  peak (2 s decay) and fills the box with it; its brightness is scaled by its strength
+     *  relative to the strongest band, floored so a weak one stays readable. */
+    float                      eyeBandPk_[kEyeBands] = { 0.0f, 0.0f, 0.0f };   // per-band peak, decayed in time
+    float                      eyeHpGain_[kEyeBands] = { 1.0f, 1.0f, 1.0f };   // |H_hp| at 19/38/57 kHz, to report true kHz
     /** ★★★ THE GRID WORK IS A DISPLAY COST, NOT AN AUDIO COST — DO IT AT THE FRAME RATE.
      *  Accumulating samples has to happen every block, but DECAYING, scanning for the maximum and
      *  converting to bytes are needed once per frame SENT. Doing all three every audio block over

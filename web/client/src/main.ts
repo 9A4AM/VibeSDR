@@ -8906,7 +8906,14 @@ function drawMpxEye() {
       // ★ Below the gate is handled above — not a qualifier there, a refusal.
       const snr = rdsExt?.mpxSnr ?? 0;
       const noise = (snr > 0 && snr < 28) ? ' · noisy' : '';
-      vd.textContent = d > 0.1 ? `${what}${noise} · scale ±${d.toFixed(0)} kHz` : '—';
+      /* ★ EACH BAND ON ITS OWN SCALE NOW, so "scale ±N" would describe nothing on screen. The
+       *  caption says what each component measures instead — the numbers the plot used to
+       *  imply by height and now carries by brightness. */
+      const amp = rdsExt?.eyeAmp ?? [0, 0, 0];
+      const amps = (amp[0] > 0.05 || amp[1] > 0.05)
+        ? ` · pilot ${amp[0].toFixed(1)} · stereo ${amp[1].toFixed(0)} · RDS ${amp[2].toFixed(1)} kHz`
+        : ` · scale ±${d.toFixed(0)} kHz`;
+      vd.textContent = d > 0.1 ? `${what}${noise}${amps}` : '—';
       vd.className = (snr > 0 && snr < 28) ? 'ok' : '';
     }
   }

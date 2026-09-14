@@ -1150,8 +1150,16 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 eyeSince_ += nc;
                 const bool eyeMaint = (chFs_ > 0.0) && (eyeSince_ >= chFs_ / 6.0);
                 // ── High-pass above the audio (see the note on eyeHpA_) ─────────────────
-                if (eyeHpA_ <= 0.0f && chFs_ > 0.0)
+                if (eyeHpA_ <= 0.0f && chFs_ > 0.0) {
                     eyeHpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 15000.0 / chFs_));
+                    // |H| of three cascaded one-pole high-passes at each band centre, so the
+                    // per-band kHz figures report the composite, not the filtered copy.
+                    static const double kBandHz[3] = { 19000.0, 38000.0, 57000.0 };
+                    for (int b = 0; b < kEyeBands; ++b) {
+                        const double r = kBandHz[b] / 15000.0;
+                        eyeHpGain_[b] = (float)std::pow(r / std::sqrt(1.0 + r * r), 3.0);
+                    }
+                }
                 // ★ Same reasoning as the biquads: a one-pole that goes non-finite stays there.
                 if (!std::isfinite(eyeHp1_) || !std::isfinite(eyeHp2_) || !std::isfinite(eyeHp3_))
                     eyeHp1_ = eyeHp2_ = eyeHp3_ = 0.0f;
@@ -1171,9 +1179,15 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 //    block-size trap the deviation window fell into. 0.5 s is the constant.
                 // ★ 2 s, not 0.5: at 0.5 s the scale followed the music bar by bar and the whole
                 //   trace visibly breathed with it (Stuart, 2026-09-14).
-                eyePeak_ *= (chFs_ > 0.0) ? (float)std::exp(-(double)nc / chFs_ / 2.0) : 1.0f;
-                const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
+                const float pkDecay = (chFs_ > 0.0) ? (float)std::exp(-(double)nc / chFs_ / 2.0) : 1.0f;
+                eyePeak_ *= pkDecay;
                 float blockPk = eyePeak_;
+                float bpk[3], binv[3];
+                for (int b = 0; b < kEyeBands; ++b) {
+                    if (!std::isfinite(eyeBandPk_[b])) eyeBandPk_[b] = 0.0f;
+                    eyeBandPk_[b] *= pkDecay; bpk[b] = eyeBandPk_[b];
+                    binv[b] = (eyeBandPk_[b] > 1e-6f) ? (1.0f / eyeBandPk_[b]) : 0.0f;
+                }
                 // ★★ NO fmod. A fractional part is floor-and-subtract; working in TURNS (0..1)
                 //    rather than radians removes the division too. bitClk = (cycle*2pi+phase)/16,
                 //    so bitClk * 16/(4pi) is the position in two-pilot-cycle units.
@@ -1212,7 +1226,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
                      *   and nothing changes. */
                     const float ah = std::fabs(y0 + y1 + y2);
                     if (ah > blockPk) blockPk = ah;
-                    const float u0 = y0 * inv, u1 = y1 * inv, u2 = y2 * inv;
+                    const float a0 = std::fabs(y0), a1 = std::fabs(y1), a2 = std::fabs(y2);
+                    if (a0 > bpk[0]) bpk[0] = a0;  if (a1 > bpk[1]) bpk[1] = a1;  if (a2 > bpk[2]) bpk[2] = a2;
+                    // Each band against ITS OWN peak — see eyeBandPk_. 0.92 keeps the crest inside the box.
+                    const float u0 = y0 * binv[0] * 0.92f, u1 = y1 * binv[1] * 0.92f, u2 = y2 * binv[2] * 0.92f;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
@@ -1249,6 +1266,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     deposit(acc0, u0); deposit(acc1, u1); deposit(acc2, u2);
                 }
                 eyePeak_ = blockPk;
+                for (int b = 0; b < kEyeBands; ++b) eyeBandPk_[b] = bpk[b];
                 devWinGp_ = devGp; devWinCnt_ += nc;
                 /* ★★ THE 50 ms WINDOW CLOSES — see devWinN_. The bar is the AVERAGE of window
                  *  maxima on the panel's 1.5 s clock (Stuart: "average it the same as the other
@@ -1322,13 +1340,20 @@ void RxPipeline::feed(const cf32* iq, int n) {
                          *   appears is not clipped while the reference catches up. */
                         float& bmx = eyeBmxSm_[b];
                         bmx += ((bmxNow > bmx) ? 0.35f : 0.15f) * (bmxNow - bmx);
+                        /* ★ STRENGTH IN THE BRIGHTNESS: the band's true peak against the strongest
+                         *   band's, square-rooted so a component at a tenth still draws at a third,
+                         *   floored at 0.3 so nothing readable disappears. Vertical size no longer
+                         *   carries strength; this does. */
+                        float maxPk = 1e-9f;
+                        for (int k = 0; k < kEyeBands; ++k) maxPk = std::max(maxPk, eyeBandPk_[k] / eyeHpGain_[k]);
+                        const float rel = (eyeBandPk_[b] / eyeHpGain_[b]) / maxPk;
+                        const float strength = std::max(0.3f, std::sqrt(std::max(0.0f, rel)));
                         // ★ bmx^0.75 · mx^0.25: the geometric mean left Heart's stereo at 36/63 —
                         //   persistent on the wire, but on a retina Safari faint enough that
                         //   Stuart saw it only when a chorus pushed it to full ("flashes for a
                         //   split second, no persistence"). Three-quarters own scale keeps the
                         //   tone-vs-spread ordering while a band 3x below the leader draws at ~48.
-                        const float es = (bmx > 1e-6f && mx > 1e-6f)
-                                       ? (255.0f / (std::pow(bmx, 0.75f) * std::pow(mx, 0.25f))) : 0.0f;
+                        const float es = (bmx > 1e-6f) ? (255.0f * strength / bmx) : 0.0f;
                         for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
@@ -1498,6 +1523,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eyeW = haveEye ? eyeW_ : 0;
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
+                for (int b = 0; b < kEyeBands; ++b) x.eyeBandKHz[b] = eyeBandPk_[b] / eyeHpGain_[b] * 75.0f;
                 x.mpxDevKHz     = mpxDevOut_  * 75.0f;
                 x.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
                 x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;

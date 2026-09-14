@@ -158,6 +158,8 @@ export interface RdsExt {
   eyeW: number;
   eyeH: number;
   eyeDev: number;
+  /** Per-component deviation, kHz: pilot, stereo, RDS. */
+  eyeAmp: number[];
   /** Total peak deviation of the whole composite INCLUDING audio, kHz. 75 is the limit. */
   mpxDev: number;
   /** The peak-hold tick — a much slower decay than mpxDev, so a brief excursion is still shown. */
@@ -1093,6 +1095,7 @@ export class SpectrumClient {
           eyeW: Number(msg.eyeW ?? 0),
           eyeH: Number(msg.eyeH ?? 0),
           eyeDev: Number(msg.eyeDev ?? 0),
+          eyeAmp: Array.isArray(msg.eyeAmp) ? msg.eyeAmp.map(Number) : [0, 0, 0],
           mpxDev: Number(msg.mpxDev ?? 0),
           mpxHold: Number(msg.mpxHold ?? 0),
           mpxNoise: Number(msg.mpxNoise ?? 0),
