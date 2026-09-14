@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace vibebands {
 
@@ -175,15 +176,24 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "70cm", "70 cm amateur", 430000000.0,  450000000.0 },
         { "9cm",  "9 cm amateur", 3300000000.0, 3500000000.0 },
     };
+    /* ★★★ BUILT EXACTLY ONCE, UNDER std::call_once. This was a bare `if (!done[r])` — two threads
+     *   could both see it false and both assign the vector, and the front door hands a listener's
+     *   spectrum and audio sockets to the radio child on two connection threads within the same
+     *   millisecond. The second assignment freed the buffer the first was still copying from:
+     *   AddressSanitizer, 2026-09-14, heap-use-after-free in namedBands() from vsTunableJson on
+     *   thread T34 while T35 freed it — "malloc(): unsorted double linked list corrupted" and
+     *   "double free or corruption (out)" on three dev children in one afternoon, always right
+     *   after "adopted a handed-over connection". Direct connections open their sockets one after
+     *   another and never raced it, which is why the bench, the probes and the apt boxes' own
+     *   uptime hid it. Almost certainly the front door's long-open "double free" too. */
     static std::vector<NamedBand> built[4];
-    static bool done[4] = { false, false, false, false };
+    static std::once_flag once[4];
     const int r = (region >= 1 && region <= 3) ? region : 1;
-    if (!done[r]) {
+    std::call_once(once[r], [r] {
         const auto& extra = r == 2 ? kR2 : r == 3 ? kR3 : kR1;
         built[r] = kCommon;
         built[r].insert(built[r].end(), extra.begin(), extra.end());
-        done[r] = true;
-    }
+    });
     return built[r];
 }
 
