@@ -2026,6 +2026,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
   #rdsConst { width: 150px; height: 150px; }
   #rdsEye   { width: 150px; height: 44px; }
+  #rdsEyeMpx { width: 150px; height: 63px; }
 }
 @container decbox (max-width: 360px) {
   #rdsGrid { grid-template-columns: 1fr; }
@@ -2082,6 +2083,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #rdsEye {
   width: 180px; height: 54px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+}
+/* ★★★ THE COMPOSITE EYE MUST HAVE A CSS SIZE. It had none, so its size came from the canvas
+   width/height ATTRIBUTES — and the moment drawMpxEye sized the backing store to the device
+   (768x384) the element itself grew to 768x384 CSS px, a huge box of dead space under the panel
+   (Stuart, 2026-09-14). CSS owns the layout size; the attributes own only the pixel store. */
+#rdsEyeMpx {
+  width: 180px; height: 76px; background: #000; display: block;
   border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
 }
 #decLogo {

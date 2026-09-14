@@ -1271,10 +1271,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
                      *   component draws small, and a DEAD one draws as a flat bright line at zero
                      *   (its noise is tiny against the shared axis) — which is exactly what
                      *   "nothing there" should look like. Scatter still reads as fuzz. */
+                    /* ★★ THE GEOMETRIC MEAN OF ITS OWN MAXIMUM AND THE SHARED ONE. Fully own-scaled
+                     *   (tried first today) every band saturated and the three added to white — the
+                     *   RDS, a spread band, drew as fat violet blobs over the pilot (Stuart: "the
+                     *   individual components are blending into each other too much"). Fully shared
+                     *   (5.5.5) hid weak stereo. sqrt(bmx·mx) lifts a band 25x below the leader by
+                     *   5x and one 100x below by 10x: a concentrated tone still reads brighter than
+                     *   a spread band, which is the "strong line vs speckle" reading the colours
+                     *   exist for, and nothing vanishes. */
+                    float mx = 0.0f;
+                    for (int b = 0; b < kEyeBands; ++b)
+                        for (float v : eyeAcc_[b]) if (v > mx) mx = v;
                     for (int b = 0; b < kEyeBands; ++b) {
                         float bmx = 0.0f;
                         for (float v : eyeAcc_[b]) if (v > bmx) bmx = v;
-                        const float es = (bmx > 1e-6f) ? (255.0f / bmx) : 0.0f;
+                        const float es = (bmx > 1e-6f && mx > 1e-6f) ? (255.0f / std::sqrt(bmx * mx)) : 0.0f;
                         for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
