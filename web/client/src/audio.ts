@@ -1956,6 +1956,7 @@ export class AudioPlayer {
   private clockKicks = 0;          // suspend/resume attempts on a frozen clock (reset on a rebuild)
   private contextRebuilds = 0;     // full teardowns — capped so a broken browser cannot loop
   private rebuilding = false;
+  private hiddenAt = 0;            // when the tab went to the background (0 = visible)
 
   /** Tear everything down and start again: the only cure for a context whose render thread has
    *  died. Volume, mute and recording survive; the socket is reopened; the caller's callbacks
@@ -2002,6 +2003,22 @@ export class AudioPlayer {
       if (!this.node || !this.ctx) return;
       if (this._muted || this.squelchActive || this.suspended) return;
       const now = performance.now();
+      /* ★★★ A HIDDEN TAB IS NOT A STALL. Safari throttles or pauses audio rendering in a
+       *   background tab: the worklet stops draining and the context clock stops while the
+       *   state still says "running" — exactly the frozen-clock signature. The node rebuild
+       *   fired on Stuart's idle Pi tab ("the fact I hadn't been on that server for a while
+       *   suggests the audio rebuild is false triggering", 2026-09-14) and the context rebuild
+       *   would have torn the socket down as well, on a tab nobody was looking at. So neither
+       *   watchdog acts while the document is hidden, and the clocks restart when it returns. */
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        this.hiddenAt = this.hiddenAt || now;
+        return;
+      }
+      if (this.hiddenAt) {
+        this.hiddenAt = 0;
+        this.lastCtxTime = 0; this.ctxAdvancedAt = now; this.lastDrainAt = now; this.lastAudibleAt = 0;
+        return;                                  // one clean tick before judging anything
+      }
       const feeding = this.lastAudibleAt > 0 && now - this.lastAudibleAt < 2000;
       /* ★★★ THE CLOCK, NOT THE STATE STRING. Safari 27 (macOS and iOS): the context reports
        *   "running" while its currentTime has stopped advancing — the render thread is dead.
