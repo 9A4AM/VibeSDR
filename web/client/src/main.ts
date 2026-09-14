@@ -8784,7 +8784,10 @@ function drawMpxEye() {
          *  on a weak station that can be a large correction, and a reader comparing against
          *  another analyser should know it happened. Only worth a word once it reaches 1 kHz. */
         const nz = rdsExt?.mpxNoise ?? 0;
-        const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed` : '';
+        // ★ Negative = the server found a NEIGHBOUR in the guard band and removed nothing (see
+        //   the guardOccupied note in pipeline.cpp). Say so rather than print a collapsed figure.
+        const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed`
+                    : nz <= -1 ? ' · neighbour in the guard band, noise not removed' : '';
         dv.textContent = `deviation ${pk.toFixed(0)} kHz · ${verdict}${nzTxt}`;
         dv.className = (overRange || pk > 82) ? 'bad' : pk > 75 ? 'ok' : 'good';
       }

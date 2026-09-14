@@ -1313,10 +1313,26 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     mpxNoiseSm_ += aSm * (gp - mpxNoiseSm_);
                     // σ² in the measurement band, then the quadrature removal — see devNoiseK_.
                     const float sig2 = mpxNoiseSm_ * devNoiseK_;
-                    mpxDevNoise_ = std::sqrt(std::max(0.0f, sig2));
                     const float kC = 4.5f;   // fitted on the bench (bench_eye), see devNoiseK_
-                    const float s2 = mpxDevSm_ * mpxDevSm_ - kC * kC * sig2;
-                    mpxDevOut_ = (s2 > 0.0f) ? std::sqrt(s2) : 0.0f;
+                    /* ★★★ A NEIGHBOUR IN THE GUARD BAND IS NOT NOISE. The guard sits at 80 kHz,
+                     *  which is where an adjacent station 100 kHz away puts its sidebands. Classic
+                     *  FM on 100.4 beside a strong 100.3 (Stuart, 2026-09-14): the "noise" read
+                     *  7 kHz, the removal took 31 kHz off a 32 kHz raw peak, and the meter showed
+                     *  8 kHz falling to nothing while every other readout said the transmitter
+                     *  was fine. Real broadband noise never removes most of the reading on a
+                     *  station whose pilot and RDS are locked — so if the removal would take more
+                     *  than 60 % of the raw figure, the guard band is occupied: subtract nothing,
+                     *  and report the noise as NEGATIVE so the panel can say why. */
+                    const float removal = kC * std::sqrt(std::max(0.0f, sig2));
+                    const bool guardOccupied = mpxDevSm_ > 0.02f && removal > 0.6f * mpxDevSm_;
+                    if (guardOccupied) {
+                        mpxDevNoise_ = -std::sqrt(std::max(0.0f, sig2));
+                        mpxDevOut_ = mpxDevSm_;
+                    } else {
+                        mpxDevNoise_ = std::sqrt(std::max(0.0f, sig2));
+                        const float s2 = mpxDevSm_ * mpxDevSm_ - kC * kC * sig2;
+                        mpxDevOut_ = (s2 > 0.0f) ? std::sqrt(s2) : 0.0f;
+                    }
                     const float kHold = (float)std::exp(-dtW / 6.0);
                     mpxDevHold_ = (mpxDevOut_ > mpxDevHold_) ? mpxDevOut_ : mpxDevHold_ * kHold;
                 }
