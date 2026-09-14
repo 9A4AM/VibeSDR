@@ -5984,7 +5984,19 @@ function updateMediaSession() {
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
   // logo, prefer that — it's a picture of what you're actually hearing.
-  const artSrc = rdsLogoUrl || artworkUrl;
+  /* ★ AND IN DAB, THE SERVICE'S OWN PICTURE — the same three sources the decoder pane uses, in
+   *  the same order: the slideshow off the air, the logo off the air, then RadioDNS. The card
+   *  showed art for FM and none for DAB (Stuart, 2026-09-14) because only the RDS logo was
+   *  ever consulted here. */
+  let dabArt = '';
+  if (dabOn && dabState) {
+    const d = dabState;
+    const cur = d.services.find(x => x.sid === d.sid);
+    const slideUrl = d.slide && d.slide.seq ? P(`/vibeserver/dabslide?seq=${d.slide.seq}`) : '';
+    const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
+    dabArt = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
+  }
+  const artSrc = (dabOn ? dabArt : rdsLogoUrl) || artworkUrl;
   // ★ Publish only on a real change, so this can be called from updateVts() — i.e. on every RDS
   // frame — without rebuilding MediaMetadata constantly. It USED to be called only when tuning,
   // which had the effect exactly backwards: the station name and logo arrive SECONDS after the
@@ -6002,7 +6014,8 @@ function updateMediaSession() {
     title: station && station !== '—' ? station : freq,
     artist: station && station !== '—' ? `${freq} · ${modeText}` : modeText,
     album: 'VibeSDR',
-    ...(artSrc ? { artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }] } : {}),
+    // ★ No `type`: a DAB slide is JPEG, a RadioDNS logo may be anything; the browser sniffs it.
+    ...(artSrc ? { artwork: [{ src: artSrc, sizes: '512x512' }] } : {}),
   });
 }
 
