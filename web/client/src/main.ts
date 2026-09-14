@@ -984,9 +984,29 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Our turn. The slot is reserved for this session for a few seconds only, and a reload is
     //   the honest claim: it re-runs the preflight and opens both sockets cleanly, exactly as the
     //   admin-override path does. Anything cleverer races the reservation window for no gain.
+    // ★★★ CAPPED, AND ONLY WHILE VISIBLE. On 2026-09-14 a hidden Safari page (no tab showing)
+    //   rebooted this client about once a second for two hours: every boot was refused, every
+    //   refusal ended in a reload, and nobody could see the page to stop it. Three radios and
+    //   the directory Worker took ~35k requests. So: a hidden page WAITS for visibility before
+    //   claiming its turn, and more than three turns in two minutes means the claim is not
+    //   completing — stop and leave a button for a person to press.
     onYourTurn: () => {
+      const KEY = 'vsYourTurns';
+      const now = Date.now();
+      let turns: number[] = [];
+      try { turns = (JSON.parse(sessionStorage.getItem(KEY) || '[]') as number[]).filter((t) => now - t < 120_000); } catch { /* fresh */ }
+      turns.push(now);
+      try { sessionStorage.setItem(KEY, JSON.stringify(turns)); } catch { /* private mode */ }
+      if (turns.length > 3) {
+        // The overlay's own TRY AGAIN button is the way back in — a person's press, not a timer.
+        showRefusal('YOUR TURN', 'A slot keeps being offered but this page cannot take it.<br><br>Press TRY AGAIN.', false);
+        return;
+      }
       showRefusal('YOUR TURN', 'A slot has freed up and is being held for you.<br><br>Connecting…', false);
-      setTimeout(() => location.reload(), 600);
+      const claim = () => setTimeout(() => location.reload(), 600);
+      if (document.visibilityState === 'hidden') {
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') claim(); }, { once: true });
+      } else claim();
     },
     onEvicted: () => showEvicted(),
     onBanned: () => showBanned(),
