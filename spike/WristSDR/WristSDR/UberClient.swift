@@ -2789,11 +2789,14 @@ final class UberClient: ObservableObject {
       // spectrum entirely (audio claimed the slot anonymously, spectrum was turned away). 2026-07-23.
       var extra = authSuffix.isEmpty ? "" : "&" + authSuffix.dropFirst()
       if !adminSuffix.isEmpty { extra += adminWire }
-      // ★ On a MONO output route (the watch speaker) ask for a fullband mono stream — the server folds
-      // stereo before encoding so all 64k lands in one channel. On AirPods (stereo) omit it and keep
-      // the stereo image. Re-requested on a route change via audio.onRouteChange (openVibeSockets).
-      let chParam = audio.outputIsMono ? "&channels=1" : ""
-      url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/audio?user_session_id=\(uuid)&codec=opus\(chParam)\(extra)")
+      // ★★ ALWAYS THE STEREO STREAM, even on the speaker. Jr used to ask `channels=1` on a mono
+      //    route so all of a 64 kb/s budget went into one channel — and reopened the socket on
+      //    every AirPods-in/out. Since 5.6.1 the server keeps ONE stream shape for the life of a
+      //    socket (stereo Opus at 96 kb/s, mono content duplicated) so no client ever rebuilds its
+      //    decoder mid-session — the cause of the Safari drops at a mode/DAB change. WatchAudio.play
+      //    folds stereo to mono for the speaker itself (Stuart: "we play stereo FM on Jr's speaker
+      //    downmixed to mono"). Cost on Bluetooth: 12 KB/s of the ~19 the link carries.
+      url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/audio?user_session_id=\(uuid)&codec=opus\(extra)")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)
@@ -2934,14 +2937,9 @@ final class UberClient: ObservableObject {
   /// LAN, single-user, no 2/sec rate limit — open both sockets straight away (no UberSDR audio-ready dance).
   private func openVibeSockets() {
     specOpened = true          // suppress the UberSDR "audio never readied" fallback path
-    // Re-request the matching channel count when the output route flips (AirPods in/out). Only the
-    // audio socket carries the channels param, so reopen JUST that — spectrum is untouched. Rides the
-    // same-session takeover on the server, so the reclaim is instant. isVibe only.
-    audio.onRouteChange = { [weak self] _ in
-      guard let self, self.isVibe, !self.goingIdle else { return }
-      self.audioSock.cancel()
-      self.openAudio()
-    }
+    // ★ A route flip (AirPods in/out) no longer reopens the audio socket: the stream is stereo
+    //   whatever the route, and WatchAudio.play folds it for a mono output. One less reconnect.
+    audio.onRouteChange = nil
     openAudio()
     openSpectrum()
     // ★★ THE TAKEOVER IS SPENT. Both URLs have been built by now, so both carried the intent if
