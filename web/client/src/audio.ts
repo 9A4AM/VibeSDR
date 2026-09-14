@@ -1747,9 +1747,19 @@ export class AudioPlayer {
         if (b.length) {
           const end = b.end(b.length - 1);
           const lag = end - el.currentTime;
-          // ★ Too far behind (a stall that caught up, a hidden tab): skip forward. Hysteresis:
-          //   act at 3x the cushion, land at 1x, so it does not chase every wobble.
-          if (lag > AudioPlayer.OM_CUSHION * 3) this._mediaSkipToLive(AudioPlayer.OM_CUSHION);
+          /* ★★★ RATE, NOT SEEKS. The server's clock and the Mac's audio clock differ by a few
+           *  hundred ppm, so the cushion creeps; the first version SKIPPED half a second whenever
+           *  it passed 0.75 s — an audible jump every twenty seconds ("the audio is flapping on
+           *  the pi", Stuart 2026-09-14) and each seek blinked the media session, which is why
+           *  Spatialise Stereo "keeps disappearing and reappearing". Now the playback rate is
+           *  trimmed by up to 2 % around the target cushion; Safari preserves pitch by default,
+           *  so a trim that small is inaudible. A seek is kept only for a real pile-up. */
+          if (lag > 3) this._mediaSkipToLive(AudioPlayer.OM_CUSHION);
+          else {
+            const err = lag - AudioPlayer.OM_CUSHION;             // +ve: behind live, speed up
+            const rate = Math.max(0.98, Math.min(1.02, 1 + err * 0.08));
+            if (Math.abs(rate - el.playbackRate) > 0.001) el.playbackRate = rate;
+          }
           // Trim what has played, so the buffer never grows for the life of the page.
           if (!sb.updating && el.currentTime - b.start(0) > 20) sb.remove(0, el.currentTime - 10);
         }
