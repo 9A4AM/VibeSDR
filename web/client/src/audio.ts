@@ -2029,6 +2029,34 @@ export class AudioPlayer {
     }, 1000);
   }
 
+  /** ★ Everything a driver or a bug report needs to say WHERE the audio stopped. The Safari
+   *  silence of 2026-09-14 ("a flash of audio then silence, sometimes a refresh does not fix
+   *  it") lives somewhere between the worklet, the MediaStream destination and the <audio>
+   *  element; the stall watchdog only sees the worklet. Read as window.__vibeAudio.debugState(). */
+  debugState() {
+    const now = performance.now();
+    const st = this.streamDest?.stream;
+    const tr = st ? st.getAudioTracks()[0] : null;
+    const el = this.mediaEl;
+    return {
+      path: this.worker ? 'worker' : (this.ws ? 'main' : 'none'),
+      ctxState: this.ctx?.state, ctxTime: this.ctx?.currentTime, ctxRate: this.ctx?.sampleRate,
+      baseLatency: this.ctx?.baseLatency,
+      mediaStream: !!this.streamDest, streamActive: st?.active,
+      trackState: tr?.readyState, trackMuted: tr?.muted, trackEnabled: tr?.enabled,
+      elPaused: el?.paused, elReady: el?.readyState, elTime: el?.currentTime, elMuted: el?.muted,
+      elVolume: el?.volume, elError: el?.error?.code,
+      anchor: !!this.anchorEl, anchorPaused: this.anchorEl?.paused,
+      audibleAgoMs: this.lastAudibleAt > 0 ? Math.round(now - this.lastAudibleAt) : -1,
+      drainAgoMs: this.lastDrainAt > 0 ? Math.round(now - this.lastDrainAt) : -1,
+      underruns: this.underruns, skips: this.skips, jitterMs: this.jitterMs,
+      stallRebuilds: this.stallRebuilds, workerOpen: this.workerOpen,
+      opusBroken: this.opusBroken, opusStuck: this.opusStuck, needsCodec: this.needsCodec,
+      muted: this._muted, volume: this._volume, squelch: this.squelchActive,
+      suspended: this.suspended,
+    };
+  }
+
   async resume() {
     if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
     if (this.mediaEl && this.mediaEl.paused) await this.mediaEl.play().catch(() => {});

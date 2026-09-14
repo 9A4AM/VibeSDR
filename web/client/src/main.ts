@@ -95,6 +95,9 @@ let step = 1000;                 // tuning step, Hz (restored from prefs on load
 let wheelTunes = false;
 let spec: SpectrumClient | null = null;
 let audio: AudioPlayer | null = null;
+// ★ A handle for drivers and bug reports: window.__vibeAudio.debugState() says where the audio
+//   stopped. Kept current by the getter below rather than copied at construction.
+Object.defineProperty(window, '__vibeAudio', { get: () => audio, configurable: true });
 let wf: Waterfall | null = null;
 /** Last config's frequency window — see onConfig, for the stale-history wipe. */
 let lastWindow: { lo: number; hi: number } | null = null;
