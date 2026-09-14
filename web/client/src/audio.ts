@@ -666,11 +666,11 @@ export class AudioPlayer {
     if (AudioPlayer.mediaPlayoutBroken) return false;
     if (location.hash.includes('nomsaudio')) return false;
     if (location.hash.includes('msaudio')) return AudioPlayer.isWebKit();
-    if (!AudioPlayer.isWebKit()) return false;
-    // ★★ OPT-IN. It was the default for two hours on 2026-09-14 and was not good enough: audio
-    //    that failed to start, lagged and hiccupped ("what is the point"). Web Audio with the
-    //    clock watchdog is what ships; this stays a switch for testing until it is proven.
-    try { return localStorage.getItem('vibesdr.mediaPlayout') === '1'; } catch { return false; }
+    // ★★★ NO USER-FACING SWITCH. It was the default for two hours on 2026-09-14, then a switch,
+    //     and Stuart tested it on the LAN to rule out the tunnel: "hyper unreliable now even on
+    //     local network". Only the #msaudio hash reaches it, for measurement. Web Audio with the
+    //     clock watchdog is the path.
+    return false;
   }
 
   private static _needsAnchor(): boolean {

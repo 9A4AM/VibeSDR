@@ -740,26 +740,6 @@ function visitSessionId(): string {
   } catch { return uuid(); }
 }
 
-const MEDIA_PLAYOUT_KEY = 'vibesdr.mediaPlayout';
-function prefersMediaPlayout(): boolean {
-  // Opt-in (unset = off). Mirrors AudioPlayer._useMediaPlayout.
-  try { return localStorage.getItem(MEDIA_PLAYOUT_KEY) === '1'; } catch { return false; }
-}
-/** The Safari media-playout row: offered on WebKit only, where it means something. */
-function refreshMediaPlayoutRow() {
-  const show = AudioPlayer.isWebKit();
-  const row = document.getElementById('mediaPlayoutRow');
-  const note = document.getElementById('mediaPlayoutNote');
-  const btn = document.getElementById('mediaPlayout');
-  if (row) row.hidden = !show;
-  if (note) note.hidden = !show;
-  if (btn) {
-    const on = prefersMediaPlayout();
-    btn.textContent = on ? 'ON' : 'OFF';
-    btn.classList.toggle('on', on);
-  }
-}
-
 function refreshRawAudioRow() {
   const show = srvUncompressed === 'choice' && !srvLocal;
   const row = document.getElementById('rawAudioRow');
@@ -10064,12 +10044,7 @@ function buildMenu() {
     location.reload();   // last tune and every other setting are restored on connect
   };
   refreshRawAudioRow();
-  // ★ Same shape: the output chain is decided once, at start(), so changing it means a reload.
-  $('mediaPlayout').onclick = () => {
-    try { localStorage.setItem(MEDIA_PLAYOUT_KEY, prefersMediaPlayout() ? '0' : '1'); } catch { /* private mode */ }
-    location.reload();
-  };
-  refreshMediaPlayoutRow();
+
   iqState = { on: false }; refreshIqRow();   // ★ the stream dies with the session
 
   // ── Display / Waterfall / Spectrum ───────────────────────────────────────
