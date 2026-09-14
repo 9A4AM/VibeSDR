@@ -3572,6 +3572,22 @@ static bool vsTicketOk(const std::string& ticket) {
 static bool isLoopback(const std::string& ip) {
     return ip.rfind("127.", 0) == 0 || ip == "::1" || ip == "::ffff:127.0.0.1";
 }
+/** ★★ Is this peer on the owner's OWN network — loopback, RFC 1918, link-local, ULA? Anyone else
+ *  reached us through the tunnel (or a port forward) and is spending the owner's UPLINK. Raw PCM
+ *  at ~187 KB/s is a LAN luxury and is never offered past this line (Stuart, 2026-09-14: "do we
+ *  allow Uncompressed audio over the tunnel? if so we need to not"). Every client decodes Opus. */
+static bool isOwnNetwork(const std::string& ipIn) {
+    std::string ip = ipIn;
+    if (ip.rfind("::ffff:", 0) == 0) ip = ip.substr(7);
+    if (isLoopback(ip)) return true;
+    if (ip.rfind("10.", 0) == 0 || ip.rfind("192.168.", 0) == 0 || ip.rfind("169.254.", 0) == 0) return true;
+    if (ip.rfind("172.", 0) == 0) {
+        int second = atoi(ip.c_str() + 4);
+        if (second >= 16 && second <= 31) return true;
+    }
+    if (ip.rfind("fe80:", 0) == 0 || ip.rfind("fc", 0) == 0 || ip.rfind("fd", 0) == 0) return true;
+    return false;
+}
 
 // ── ★★★ RAW IQ OUT — the listener's own channel, as an rtl_tcp stream ─────────────────────────
 //
@@ -13555,7 +13571,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // offer in its menu. Sent from here rather than over the audio socket because
             // the decision has to be made BEFORE that socket is opened — the codec is a
             // query parameter on the connect URL.
-            const int um = g_vsUncompressedAudio.load();
+            // ★ Reported as OFF to anyone off the owner's network — the menu must not offer a
+            //   switch the audio socket will refuse (see the needs_codec rule).
+            const int um = isOwnNetwork(sock->peerAddress()) ? g_vsUncompressedAudio.load() : 0;
             const bool loop = isLoopback(sock->peerAddress());
             // ★ Advertised so the client can OFFER the unlock box only where there is something
             // to unlock — an unlock prompt on a server with no admin password is a puzzle.
@@ -14795,7 +14813,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ Loopback is exempt IN EVERY MODE, including OFF — it is not a policy
         // exemption but a category error to apply the policy at all: this setting
         // rations the owner's UPLINK, and 127.0.0.1 does not touch it.
-        if (isAudio && !wantsOpus && g_vsUncompressedAudio.load() == 0
+        // ★★ AND NEVER PAST THE OWNER'S OWN NETWORK, whatever the mode: a tunnel visitor is
+        //    always Opus. The effective address is the visitor's real one (tunnel trust above).
+        if (isAudio && !wantsOpus
+            && (g_vsUncompressedAudio.load() == 0 || !isOwnNetwork(sock->peerAddress()))
             && !isLoopback(sock->peerAddress())) {
             LOGI("audio WS refused — uncompressed audio not allowed by the owner");
             static const char* kMsg = "{\"type\":\"needs_codec\",\"codec\":\"opus\"}";
