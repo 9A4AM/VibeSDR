@@ -8672,7 +8672,9 @@ function drawMpxEye() {
          *   the first alpha the stereo band alone bleached the middle of the plot and the cyan
          *   pilot underneath it could not be seen at all. Lower alpha keeps the HUES readable,
          *   which is the entire point of splitting them. */
-        const a = Math.pow(v / 63, 0.45);
+        // ★ Full brightness from 48 of 63: the top of the range is the pilot's own cells, and a
+        //   band that only reaches three-quarters of it must still read as a solid line.
+        const a = Math.pow(Math.min(1, v / 48), 0.45);
         const o = i * 4;
         px[o] = bnd.r; px[o + 1] = bnd.gr; px[o + 2] = bnd.b;
         px[o + 3] = Math.min(255, Math.round(255 * (0.03 + 0.52 * a)));
@@ -8804,18 +8806,24 @@ function drawMpxEye() {
     if (hold) { hold.style.left = `${hpct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
   }
 
-  g.font = '7px ui-monospace, monospace';
+  /* ★★ THE RETINA TREATMENT. The backing store is now clientWidth x devicePixelRatio, so
+   *  anything drawn in store pixels — this legend at 7px — came out at a third of its size on
+   *  a Mac (Stuart, 2026-09-14: "like you've shrunk everything down when you made it high
+   *  resolution and didn't scale it"). Everything with a size in it is multiplied by the
+   *  store-to-CSS ratio; the image itself is drawn to W x H and needs nothing. */
+  const kScale = W / Math.max(1, c.clientWidth || 180);
+  g.font = `${(7 * kScale).toFixed(1)}px ui-monospace, monospace`;
   g.textBaseline = 'top';
   const keys: Array<[string, string]> = [
     ['PILOT',  'rgba(80,230,255,0.95)'],
     ['STEREO', 'rgba(255,90,210,0.95)'],
-    ['RDS',    'rgba(170,110,255,0.95)'],
+    ['RDS',    'rgba(150,165,255,0.95)'],
   ];
-  let kx = 3;
+  let kx = 3 * kScale;
   for (const [txt, col] of keys) {
     g.fillStyle = col;
-    g.fillText(txt, kx, 2);
-    kx += g.measureText(txt).width + 6;
+    g.fillText(txt, kx, 2 * kScale);
+    kx += g.measureText(txt).width + 6 * kScale;
   }
   /* ★★ SAY WHAT YOU ARE LOOKING AT, THEN THE SCALE — not the scale alone.
    *  The plot autoscales, so without a figure it would look identical at every level; but a bare

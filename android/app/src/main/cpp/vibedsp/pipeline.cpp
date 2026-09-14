@@ -1292,7 +1292,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     for (int b = 0; b < kEyeBands; ++b) {
                         float bmx = 0.0f;
                         for (float v : eyeAcc_[b]) if (v > bmx) bmx = v;
-                        const float es = (bmx > 1e-6f && mx > 1e-6f) ? (255.0f / std::sqrt(bmx * mx)) : 0.0f;
+                        // ★ bmx^0.75 · mx^0.25: the geometric mean left Heart's stereo at 36/63 —
+                        //   persistent on the wire, but on a retina Safari faint enough that
+                        //   Stuart saw it only when a chorus pushed it to full ("flashes for a
+                        //   split second, no persistence"). Three-quarters own scale keeps the
+                        //   tone-vs-spread ordering while a band 3x below the leader draws at ~48.
+                        const float es = (bmx > 1e-6f && mx > 1e-6f)
+                                       ? (255.0f / (std::pow(bmx, 0.75f) * std::pow(mx, 0.25f))) : 0.0f;
                         for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
