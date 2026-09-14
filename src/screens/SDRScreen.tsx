@@ -1666,13 +1666,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const [dabActiveLogo, setDabActiveLogo] = useState<string | null>(null);   // the playing DAB service's logo
-  /* ★ THE LOCK-SCREEN CARD GETS THE STATION'S OWN PICTURE — the RDS logo on FM, the service's
-   *  logo in DAB. setStationLogo existed for FM-DX only; here it was never called, so the card
-   *  showed the generic art on FM and nothing station-specific in DAB (Stuart, 2026-09-14). */
-  useEffect(() => {
-    const url = dabOn ? (dabActiveLogo ?? '') : (status.mode === 'wfm' ? (liveLogo ?? '') : '');
-    (VibePowerModule as { setStationLogo?: (u: string) => void } | undefined)?.setStationLogo?.(url);
-  }, [dabOn, dabActiveLogo, liveLogo, status.mode]);
   const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
@@ -1808,6 +1801,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
+
+  /* ★ THE LOCK-SCREEN CARD GETS THE STATION'S OWN PICTURE — the RDS logo on FM, the service's
+   *  logo in DAB. setStationLogo existed for FM-DX only; here it was never called (2026-09-14).
+   *  ★★★ BELOW `status`, NOT ABOVE IT. The first version sat 140 lines earlier and read
+   *      `status.mode` in its dependency list; Hermes hoists a later `const` as undefined instead
+   *      of throwing, so every entry to the screen died with "Cannot read property 'mode' of
+   *      undefined" on iOS 288 and Android 462 — the same shape as the AdvRdsPanel `devGate`
+   *      crash earlier the same day. A hook must sit below every state it reads. */
+  useEffect(() => {
+    const url = dabOn ? (dabActiveLogo ?? '') : (status.mode === 'wfm' ? (liveLogo ?? '') : '');
+    (VibePowerModule as { setStationLogo?: (u: string) => void } | undefined)?.setStationLogo?.(url);
+  }, [dabOn, dabActiveLogo, liveLogo, status.mode]);
   // ★ Mirrored for the stuck-audio recovery, which is created once and cannot read state.
   useEffect(() => { tuneRef.current = { frequency: status.frequency, mode: status.mode }; },
             [status.frequency, status.mode]);
