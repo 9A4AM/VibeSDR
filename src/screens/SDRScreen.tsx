@@ -924,6 +924,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [fmAutoBw, setFmAutoBw] = useState(true);
   const [fmCeq, setFmCeq] = useState(true);
   const [fmNb,  setFmNb]  = useState(true);
+  const [fmNbx, setFmNbx] = useState(false);   // the audio-menu NOISE BLANKER (every mode but WFM); off until chosen, as the web
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
@@ -1217,7 +1218,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rc = hwClient();
     if (rc) rc.setHwAgc?.(on); else LocalHw?.setAgc?.(on);
   }, [LocalHw, hwClient]);
-  const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
+  // ★ Same shape as onHwPpm: a remote VibeServer's dongle is set over the wire, a local one here.
+  const onHwDirectSamp = useCallback((mode: number) => {
+    setHwDirectSamp(mode);
+    const rc = hwClient();
+    if (rc) rc.setHwDirectSampling?.(Math.max(0, Math.min(2, Math.round(mode))) as 0 | 1 | 2);
+    else LocalHw?.setDirectSampling?.(mode);
+  }, [LocalHw, hwClient]);
   // ★★★ THESE TWO WENT ONLY TO THE LOCAL MODULE, so on a networked server they did NOTHING —
   //   the call landed on this app's own idle shim while the SERVER did the decoding. Every other
   //   hardware control already had the `rc ? remote : local` branch; these were simply never given
@@ -1246,6 +1253,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [hwClient]);
   const onFmCeq = useCallback((on: boolean) => {
     setFmCeq(on); hwClient()?.setCeq?.(on);
+  }, [hwClient]);
+  const onFmNbx = useCallback((on: boolean) => {
+    setFmNbx(on); hwClient()?.setNoiseBlankerHf?.(on);
   }, [hwClient]);
   const onFmNb = useCallback((on: boolean) => {
     setFmNb(on); hwClient()?.setNoiseBlanker?.(on);
@@ -4346,6 +4356,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ Only when the server actually stated it — see the note on onFmDsp. A server that says
         //   nothing leaves the button where it is rather than being read as "off".
         if (typeof st.autobw === 'boolean') setFmAutoBw(st.autobw);
+        if (typeof st.nbx === 'boolean') setFmNbx(st.nbx);
       },
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
@@ -9361,6 +9372,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? onFmAutoBw : undefined}
         fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
         fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
+        nbx={fmNbx}   onNbx={vibeFmDsp ? onFmNbx : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         iq={iqState}

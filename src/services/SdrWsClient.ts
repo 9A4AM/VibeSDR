@@ -290,7 +290,7 @@ export interface SDRCallbacks {
    *  opinion" is not "off". The web client learned that the hard way: `!!msg.autobw` turned a
    *  missing field into a false one and pinned its AUTO BW button off for ever. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
-                      autobw?: boolean }) => void;
+                      autobw?: boolean; nbx?: boolean }) => void;
   /** ★★★ DAB, and it is a VIBESERVER-ONLY callback. `s` is the whole measured state of the
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */
@@ -1032,6 +1032,13 @@ export abstract class SdrWsClient {
   setCeq(on: boolean)      { this._sendCtl({ type: 'ceq', on }); }
   /** Noise blanker — impulse noise only. */
   setNoiseBlanker(on: boolean) { this._sendCtl({ type: 'nb', on }); }
+  /** ★ The audio-menu NOISE BLANKER — every mode but WFM (which has its own in the Broadcast FM
+   *  row). The web client has had it since the listener NB landed; the app did not (Stuart,
+   *  2026-09-15: "noise blanker missing"). Same wire word as the web: `nbx`. */
+  setNoiseBlankerHf(on: boolean) { this._sendCtl({ type: 'nbx', on }); }
+  /** ★ Direct sampling on a REMOTE RTL — the web's dsSeg. The app's handler went only to its own
+   *  local dongle, so on a networked server the control did nothing. 0 off, 1 I, 2 Q. */
+  setHwDirectSampling(v: 0 | 1 | 2) { this._sendCtl({ type: 'directSampling', value: v }); }
 
   /** ★★★ TELL THE SERVER SOMEONE IS ACTUALLY HERE — on BOTH sockets, on ACTIVITY.
    *
@@ -2395,6 +2402,7 @@ export abstract class SdrWsClient {
           wsp: msg.wsp !== false, ims: msg.ims !== false,
           ceq: msg.ceq !== false, nb: msg.nb !== false,
           autobw: typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
+          nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
         });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);

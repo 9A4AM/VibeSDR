@@ -251,6 +251,9 @@ export interface AudioSheetProps {
   onNr?: (mode: 'off' | 'nr' | 'nr2') => void;
   nb?:   boolean;
   onNb?: (on: boolean) => void;
+  /** ★ The audio-menu NOISE BLANKER (VibeServer, every mode but WFM) — the web's nbxBtn. */
+  nbx?:   boolean;
+  onNbx?: (on: boolean) => void;
 
   // Recording
   recording?:   boolean;
@@ -336,7 +339,7 @@ export interface AudioSheetProps {
 
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
-  nr = false, onNr, nb = false, onNb,
+  nr = false, onNr, nb = false, onNb, nbx = false, onNbx,
   recording = false, onRec, recSeconds = 0, onRecordings,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
@@ -529,6 +532,26 @@ export default function AudioSheet({
                 <Text style={{ color: notchOn ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {notchOn ? 'ON' : 'OFF'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★ NOISE BLANKER — impulse noise on your own channel (lightning crackle, power-line
+              hash, ignition, switch-mode supplies), every mode but broadcast FM, which has its own
+              NB in the row below. The web client has had this since the listener NB landed; the
+              app did not (Stuart, 2026-09-15: "noise blanker missing"). Same word, same place. */}
+          {onNbx && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>NOISE BLANKER</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity onPress={() => onNbx?.(!nbx)} hitSlop={8}
+                style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                         backgroundColor: nbx ? C.gold : 'transparent',
+                         borderWidth: 1, borderColor: nbx ? C.gold : C.muted }}>
+                <Text style={{ color: nbx ? '#000' : C.muted,
+                               fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                  {nbx ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
             </View>
