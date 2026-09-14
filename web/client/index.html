@@ -2026,7 +2026,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #rdsConstWrap { flex: 1 1 100%; min-width: 0; margin: 0 auto; }
   #rdsConst { width: 150px; height: 150px; }
   #rdsEye   { width: 150px; height: 44px; }
-  #rdsEyeMpx { width: 150px; height: 63px; }
+  .rdsEyeBox { width: 150px; height: 37px; }
 }
 @container decbox (max-width: 360px) {
   #rdsGrid { grid-template-columns: 1fr; }
@@ -2089,9 +2089,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    width/height ATTRIBUTES — and the moment drawMpxEye sized the backing store to the device
    (768x384) the element itself grew to 768x384 CSS px, a huge box of dead space under the panel
    (Stuart, 2026-09-14). CSS owns the layout size; the attributes own only the pixel store. */
-#rdsEyeMpx {
-  width: 180px; height: 76px; background: #000; display: block;
-  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 4px;
+.rdsEyeBox {
+  width: 180px; height: 44px; background: #000; display: block;
+  border: 1px solid var(--btn-border); border-radius: 3px; margin-top: 3px;
 }
 #decLogo {
   display: none; height: 16px; width: auto; max-width: 60px;
@@ -3034,7 +3034,13 @@ select.btn { padding: 6px 8px; }
              jitter. Two pilot cycles wide, so the 57 kHz RDS braids three times across each
              one. This is where overmodulation shows up as a flattened top — the one fault the
              spectrum and the constellation both hide (Stuart, 2026-09-13). -->
-        <canvas id="rdsEyeMpx" width="180" height="76"></canvas>
+        <!-- ★★ THREE BOXES, ONE PER COMPONENT. They were drawn additively in one box, and on a
+             music station the stereo braid became a wall that hid the pilot and the RDS whatever
+             the scaling did. Stuart, 2026-09-14: "one for each instead of joining them". Each
+             band fills its own box on its own scale, labelled with its own kHz. -->
+        <canvas id="rdsEyeMpx"  class="rdsEyeBox" width="180" height="44"></canvas>
+        <canvas id="rdsEyeMpxS" class="rdsEyeBox" width="180" height="44"></canvas>
+        <canvas id="rdsEyeMpxR" class="rdsEyeBox" width="180" height="44"></canvas>
         <!-- ★★ IT HAS TO EXPLAIN ITSELF. "composite eye · above 15 kHz · ±4 kHz" is three pieces
              of jargon and a number whose meaning is not obvious even once you know what it is
              (Stuart, 2026-09-13: "can we improve the reading of that a bit so that others will

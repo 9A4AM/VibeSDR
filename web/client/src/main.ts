@@ -8561,45 +8561,19 @@ const EYE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
  *  The grid arrives already accumulated with persistence, one printable character per cell.
  */
 function drawMpxEye() {
-  const c = $<HTMLCanvasElement>('rdsEyeMpx');
-  const g = c.getContext('2d');
-  if (!g) return;
-  /* ★★★ SIZE THE BACKING STORE TO THE DEVICE, NOT TO THE MARKUP. The canvas was a fixed
-   *   180x76 store stretched to whatever CSS width the panel had — so on a phone at DPR 3 a
-   *   180 px store was being blown up to ~900 device pixels, blurring and blocking the plot
-   *   twice over (once here, once from the coarse grid). Desktop hid it only because the panel
-   *   is small and the viewer is further away (Stuart, 2026-09-14).
-   * ★ Capped: past ~4x the grid width there is no more information to show, only fill cost. */
-  {
-    const wantW = Math.max(180, Math.min(768, Math.floor(c.clientWidth  * devicePixelRatio)));
-    const wantH = Math.max(76,  Math.min(384, Math.floor(c.clientHeight * devicePixelRatio)));
-    if (wantW > 0 && wantH > 0 && (c.width !== wantW || c.height !== wantH)) {
-      c.width = wantW; c.height = wantH;
-    }
-  }
-  const W = c.width, H = c.height;
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, W, H);
+  /* ★★★ THREE BOXES, ONE PER COMPONENT — see the markup. Each band is decoded from its own grid,
+   *   drawn alone into its own canvas at device resolution with smoothing off (the crisp look),
+   *   and labelled with its name and its measured deviation. Nothing is composited, so nothing
+   *   can hide anything: the pilot is always a full clean wave, the stereo a braid that fills
+   *   its box when loud, the RDS a small eye that reads by texture. */
   const ew = rdsExt?.eyeW ?? 0, eh = rdsExt?.eyeH ?? 0;
   const vd = $('rdsEyeVerdict');
-  /* ★★★ THREE COMPONENTS, ONE BOX, DRAWN ADDITIVELY. Stuart: "so it looks the same as it does
-   *   now, just made up of the 3 component colours" — and the reading that buys you: "if you see
-   *   little green speckles you know the RDS is getting scattered, but a strong amber line is
-   *   good stereo and a strong red line is good pilot". One plot, three verdicts at once.
-   * ★★ THE PALETTE IS THE COOL END ON PURPOSE. This panel already speaks green/amber/red for
-   *   QUALITY and its chrome is amber, so warm hues here would fight both — a strong red line
-   *   would read as a problem when it means a healthy pilot. Cyan and magenta are the most
-   *   legible and go to the two components judged by eye; RDS reads by SPECKLE TEXTURE more
-   *   than hue, so it takes the weaker violet. */
-  const bands: Array<{ g: string; r: number; gr: number; b: number; cells: Uint8Array | null }> = [
-    { g: rdsExt?.eyeP ?? '', r:  80, gr: 230, b: 255, cells: null },   // pilot  — cyan
-    { g: rdsExt?.eyeS ?? '', r: 255, gr:  90, b: 210, cells: null },   // stereo — magenta
-    { g: rdsExt?.eyeR ?? '', r: 150, gr: 165, b: 255, cells: null },   // RDS    — blue-lavender: violet at 170,110 vanished into the magenta (Stuart, 2026-09-14)
+  const amp = rdsExt?.eyeAmp ?? [0, 0, 0];
+  const bands: Array<{ id: string; name: string; g: string; r: number; gr: number; b: number; khz: number }> = [
+    { id: 'rdsEyeMpx',  name: 'PILOT',  g: rdsExt?.eyeP ?? '', r:  80, gr: 230, b: 255, khz: amp[0] },
+    { id: 'rdsEyeMpxS', name: 'STEREO', g: rdsExt?.eyeS ?? '', r: 255, gr:  90, b: 210, khz: amp[1] },
+    { id: 'rdsEyeMpxR', name: 'RDS',    g: rdsExt?.eyeR ?? '', r: 150, gr: 165, b: 255, khz: amp[2] },
   ];
-  /** ★★ DECODE THE RUN-LENGTH FORM — see the encoder in local_sdr_shim.cpp. A '.' means a run
-   *  of zeros whose length is the NEXT character (1..64); anything else is one literal cell.
-   *  That is what lets the grid be 96x48 per component without the wire cost tripling: the
-   *  picture is mostly empty and the empty space is nearly free. */
   const decodeEye = (src: string, want: number): Uint8Array | null => {
     if (!src) return null;
     const out = new Uint8Array(want);
@@ -8618,74 +8592,56 @@ function drawMpxEye() {
     }
     return o >= want ? out : null;
   };
-  for (const bnd of bands) bnd.cells = decodeEye(bnd.g, ew * eh);
-  const haveAny = bands.some((x) => x.cells !== null);
-  if (!haveAny || ew <= 0 || eh <= 0) {
-    if (vd) vd.textContent = '—';
-    return;
-  }
-  // The zero line, and the boundary between the two pilot cycles — the only two references
-  // that mean anything on a composite, and both are exact rather than estimated.
-  g.strokeStyle = 'rgba(255,160,60,0.30)';
-  g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
-  g.strokeStyle = 'rgba(255,160,60,0.18)';
-  g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
-  /* ★★★ ONE INTERPOLATED IMAGE, NOT ~4600 HARD-EDGED RECTS PER BAND. The grid is coarse by
-   *   design — it is sized to what the channel rate can actually fill — so drawing each cell as
-   *   a rectangle puts the SERVER's resolution on screen as visible mosaic blocks. On a phone,
-   *   where the panel is a far larger fraction of the display, that is all you see (Stuart,
-   *   2026-09-14: "really blocky and low res when looked at on mobile screens, on desktop its
-   *   hidden by the distance sat at").
-   * ★★ THE CURE IS THE RIGHT ONE BECAUSE A PERSISTENCE DISPLAY IS A CONTINUOUS FIELD. Each
-   *   cell is a COUNT of how often the trace passed through it, so the true picture between two
-   *   cells is an interpolation, not a step — bilinear upscaling shows more of the real signal
-   *   than the blocks do, it does not merely prettify them. Raising the grid instead would cost
-   *   server CPU on every box for something the client can do for free, and the eye already
-   *   burned us once by doing display work per audio block.
-   * ★ It is also CHEAPER: one composited drawImage per band instead of thousands of fillRect
-   *   calls, which is why the ARM boxes were the ones that felt sluggish. */
-  const prev = g.globalCompositeOperation;
-  g.globalCompositeOperation = 'lighter';
-  // ★ Built at grid resolution, then scaled up by the GPU with smoothing on.
-  if (!eyeTmp || eyeTmp.width !== ew || eyeTmp.height !== eh) {
+  if (!eyeTmp || eyeTmp.width !== Math.max(1, ew) || eyeTmp.height !== Math.max(1, eh)) {
     eyeTmp = document.createElement('canvas');
-    eyeTmp.width = ew; eyeTmp.height = eh;
+    eyeTmp.width = Math.max(1, ew); eyeTmp.height = Math.max(1, eh);
     eyeTmpCtx = eyeTmp.getContext('2d');
   }
-  const tg = eyeTmpCtx;
-  if (tg) {
-    // ★ Smoothing OFF: one crisp block per cell, as the app draws it. Bilinear made the
-    //   one-cell traces into blurred ribbons (Stuart, 2026-09-14: the XCover's look is the aim).
-    g.imageSmoothingEnabled = false;
-    // ★ 'high' asks for a better-than-bilinear filter where the browser has one; it is a hint.
-    (g as unknown as { imageSmoothingQuality?: string }).imageSmoothingQuality = 'high';
-    const img = tg.createImageData(ew, eh);
-    const px = img.data;
-    for (const bnd of bands) {
-      const cells = bnd.cells;
-      if (!cells) continue;
-      px.fill(0);
+  let haveAny = false;
+  for (const bnd of bands) {
+    const c = document.getElementById(bnd.id) as HTMLCanvasElement | null;
+    const g = c?.getContext('2d');
+    if (!c || !g) continue;
+    // ★ Backing store at device resolution; CSS owns the layout size (see .rdsEyeBox).
+    const wantW = Math.max(180, Math.min(768, Math.floor(c.clientWidth  * devicePixelRatio)));
+    const wantH = Math.max(44,  Math.min(224, Math.floor(c.clientHeight * devicePixelRatio)));
+    if (wantW > 0 && wantH > 0 && (c.width !== wantW || c.height !== wantH)) { c.width = wantW; c.height = wantH; }
+    const W = c.width, H = c.height;
+    const kScale = W / Math.max(1, c.clientWidth || 180);
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, W, H);
+    const cells = (ew > 0 && eh > 0) ? decodeEye(bnd.g, ew * eh) : null;
+    // The zero line, and the boundary between the two pilot cycles — both exact.
+    g.strokeStyle = 'rgba(255,160,60,0.30)';
+    g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+    g.strokeStyle = 'rgba(255,160,60,0.18)';
+    g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
+    const tg = eyeTmpCtx;
+    if (cells && tg) {
+      haveAny = true;
+      g.imageSmoothingEnabled = false;
+      const img = tg.createImageData(ew, eh);
+      const px = img.data;
       for (let i = 0; i < ew * eh; i++) {
         const v = cells[i];
         if (v <= 0) continue;
-        /* Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
-         * faint outliers are the whole point of a persistence display.
-         * ★ KEPT DELIBERATELY DIM. Three additive layers saturate to white far too easily — at
-         *   the first alpha the stereo band alone bleached the middle of the plot and the cyan
-         *   pilot underneath it could not be seen at all. Lower alpha keeps the HUES readable,
-         *   which is the entire point of splitting them. */
-        // ★ Full brightness from 48 of 63: the top of the range is the pilot's own cells, and a
-        //   band that only reaches three-quarters of it must still read as a solid line.
+        // Gamma on the intensity: the faint outliers are the point of a persistence display.
         const a = Math.pow(Math.min(1, v / 48), 0.45);
         const o = i * 4;
         px[o] = bnd.r; px[o + 1] = bnd.gr; px[o + 2] = bnd.b;
-        px[o + 3] = Math.min(255, Math.round(255 * (0.03 + 0.52 * a)));
+        px[o + 3] = Math.min(255, Math.round(255 * (0.06 + 0.94 * a)));
       }
       tg.putImageData(img, 0, 0);
       g.drawImage(eyeTmp, 0, 0, ew, eh, 0, 0, W, H);
     }
+    // The label: the band's name in its colour, and what it measures.
+    g.font = `${(7 * kScale).toFixed(1)}px ui-monospace, monospace`;
+    g.textBaseline = 'top';
+    g.fillStyle = `rgba(${bnd.r},${bnd.gr},${bnd.b},0.95)`;
+    const txt = bnd.khz > 0.05 ? `${bnd.name}  ${bnd.khz.toFixed(bnd.khz < 10 ? 1 : 0)} kHz` : bnd.name;
+    g.fillText(txt, 3 * kScale, 2 * kScale);
   }
-  g.globalCompositeOperation = prev;
+  if (!haveAny) { if (vd) vd.textContent = '—'; return; }
   /* ★ THE KEY, IN THE PLOT — three words in their own colours, which is the whole legend. A
    *  separate key would cost a row of the panel and be read once; this is read every time. */
   /* ★★ THE DEVIATION MONITOR — a BAR, because that is what a deviation monitor is. PILOT DEV
@@ -8808,25 +8764,6 @@ function drawMpxEye() {
     if (hold) { hold.style.left = `${hpct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
   }
 
-  /* ★★ THE RETINA TREATMENT. The backing store is now clientWidth x devicePixelRatio, so
-   *  anything drawn in store pixels — this legend at 7px — came out at a third of its size on
-   *  a Mac (Stuart, 2026-09-14: "like you've shrunk everything down when you made it high
-   *  resolution and didn't scale it"). Everything with a size in it is multiplied by the
-   *  store-to-CSS ratio; the image itself is drawn to W x H and needs nothing. */
-  const kScale = W / Math.max(1, c.clientWidth || 180);
-  g.font = `${(7 * kScale).toFixed(1)}px ui-monospace, monospace`;
-  g.textBaseline = 'top';
-  const keys: Array<[string, string]> = [
-    ['PILOT',  'rgba(80,230,255,0.95)'],
-    ['STEREO', 'rgba(255,90,210,0.95)'],
-    ['RDS',    'rgba(150,165,255,0.95)'],
-  ];
-  let kx = 3 * kScale;
-  for (const [txt, col] of keys) {
-    g.fillStyle = col;
-    g.fillText(txt, kx, 2 * kScale);
-    kx += g.measureText(txt).width + 6 * kScale;
-  }
   /* ★★ SAY WHAT YOU ARE LOOKING AT, THEN THE SCALE — not the scale alone.
    *  The plot autoscales, so without a figure it would look identical at every level; but a bare
    *  "±14 kHz" tells you how far the axis goes and nothing about whether that is good, which is
@@ -8909,11 +8846,8 @@ function drawMpxEye() {
       /* ★ EACH BAND ON ITS OWN SCALE NOW, so "scale ±N" would describe nothing on screen. The
        *  caption says what each component measures instead — the numbers the plot used to
        *  imply by height and now carries by brightness. */
-      const amp = rdsExt?.eyeAmp ?? [0, 0, 0];
-      const amps = (amp[0] > 0.05 || amp[1] > 0.05)
-        ? ` · pilot ${amp[0].toFixed(1)} · stereo ${amp[1].toFixed(0)} · RDS ${amp[2].toFixed(1)} kHz`
-        : ` · scale ±${d.toFixed(0)} kHz`;
-      vd.textContent = d > 0.1 ? `${what}${noise}${amps}` : '—';
+      // Each box carries its own kHz label now, so the caption is the plain-English reading only.
+      vd.textContent = d > 0.1 ? `${what}${noise}` : '—';
       vd.className = (snr > 0 && snr < 28) ? 'ok' : '';
     }
   }

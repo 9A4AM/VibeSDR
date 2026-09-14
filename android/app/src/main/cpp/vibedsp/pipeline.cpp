@@ -1245,7 +1245,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                      *   braid) — with the reference's brightness rule keeping the spread bands dim
                      *   under the pilot line. Heights no longer compare amplitudes; the caption's
                      *   three kHz figures do. */
-                    const float u0 = y0 * binv[0] * 0.75f, u1 = y1 * binv[1] * 0.55f, u2 = y2 * binv[2] * 0.35f;
+                    // ★ Three boxes now (web): each band fills its OWN box on its own scale.
+                    const float u0 = y0 * binv[0] * 0.85f, u1 = y1 * binv[1] * 0.85f, u2 = y2 * binv[2] * 0.85f;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
