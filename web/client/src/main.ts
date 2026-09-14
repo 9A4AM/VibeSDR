@@ -8807,13 +8807,23 @@ function drawMpxEye() {
     } else if (!locked) {
       vd.textContent = 'no pilot — untriggered, so this is noise not a trace';
       vd.className = 'bad';
-    } else if ((rdsExt?.mpxSnr ?? 0) > 0 && (rdsExt?.mpxSnr ?? 0) < 20) {
+    } else if ((rdsExt?.mpxSnr ?? 0) > 0 && !devGateOpen) {
       /* ★★★ AT LOW S/N THE SCALE IS MEASURING NOISE, SO THE LEVEL WORDS ARE MEANINGLESS.
        *   97.2 MHz at 7 dB MPX S/N with no RDS lock read "very strong · near full deviation ·
        *   ±60 kHz", and 107.4 at 16 dB read "strong stereo · ±48 kHz" — both mush, both called
        *   STRONG, because the autoscale tracks whatever is biggest and at that S/N that is the
        *   noise. The pilot is LOCKED on both, so the lock gate above does not catch it: this is
        *   the same fault one condition further along (Stuart's band sweep, 2026-09-13).
+       * ★★★ THE SAME LATCHED GATE AS THE DEVIATION METER ABOVE (10 dB in, 8 out) — NOT A HARD
+       *   20. Two readouts in one box must not contradict each other, and a hard 20 here did
+       *   exactly that: Saber's own FelineFM on 87.0 decoded RDS at 12.4 groups/s with an 80 %
+       *   AF score, a clean constellation at 14 % scatter and 71 kHz of deviation shown right
+       *   underneath, while this line called it "buried in noise". Stuart: "clearly wrong as
+       *   FelineFM is his own station and has the cleanest RDS constellation I've seen." A gate
+       *   that refuses a signal whose RDS is being decoded perfectly is measuring the wrong
+       *   thing. MPX S/N below 20 is common on a strong station — the 19 kHz-and-up region is
+       *   quiet by design — so 20 was never the right floor; 10/8 is, and it is already proven
+       *   on the meter. (Fourth outing for the one-threshold flap in this codebase.)
        * ★★ SAY WHAT THE PANEL ALREADY SAYS ELSEWHERE. "multipath not measurable at this S/N" and
        *   "signal too weak to equalise" are the house idiom for exactly this, and a readout that
        *   declines to answer is worth far more than one that answers confidently and wrongly. */
@@ -8834,7 +8844,7 @@ function drawMpxEye() {
        *  the fuzz. Stuart: "you can see it trying to form." True and misleading together, which
        *  is the worst kind of readout. The sharp-against-fuzzy contrast IS the S/N, so the
        *  verdict should name it rather than leave the plot to be read by eye. */
-      // ★ Below 20 dB is handled above — it is not a qualifier there, it is a refusal.
+      // ★ Below the gate is handled above — not a qualifier there, a refusal.
       const snr = rdsExt?.mpxSnr ?? 0;
       const noise = (snr > 0 && snr < 28) ? ' · noisy' : '';
       vd.textContent = d > 0.1 ? `${what}${noise} · scale ±${d.toFixed(0)} kHz` : '—';
