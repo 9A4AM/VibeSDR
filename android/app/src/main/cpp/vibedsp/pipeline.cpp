@@ -1238,7 +1238,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
                      *   it and clips at the edges when loud (which is information), RDS stays the
                      *   small braid it really is. Every station has a pilot at ~6.75 kHz, so the
                      *   scale barely moves and nothing breathes. */
-                    const float u0 = y0 * binv[0] * 0.75f, u1 = y1 * binv[0] * 0.75f, u2 = y2 * binv[0] * 0.75f;
+                    /* ★★★ AND THEN THE MUSIC STATION: Flex FM at 35 kHz of stereo on a pilot-sized
+                     *   axis clipped everywhere and filled the box white. The reference shot was
+                     *   SPEECH. So: each band on its own scale, at a FIXED share of the box — pilot
+                     *   0.75 (the wave), stereo 0.55 (a braid, never a wall), RDS 0.35 (a small
+                     *   braid) — with the reference's brightness rule keeping the spread bands dim
+                     *   under the pilot line. Heights no longer compare amplitudes; the caption's
+                     *   three kHz figures do. */
+                    const float u0 = y0 * binv[0] * 0.75f, u1 = y1 * binv[1] * 0.55f, u2 = y2 * binv[2] * 0.35f;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
