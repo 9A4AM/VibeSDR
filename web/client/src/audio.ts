@@ -481,8 +481,14 @@ function webmInit(channels: number): Uint8Array {
   const info = ebml(0x1549A966, [
     ...ebmlUint(0x2AD7B1, 1000000), ...ebmlStr(0x4D80, 'vibesdr'), ...ebmlStr(0x5741, 'vibesdr'),
   ]);
+  /* ★★★ DefaultDuration IS LOAD-BEARING. A SimpleBlock carries no duration; without this the
+   *  demuxer GUESSES one, and Safari's guess made the element's timeline run ~6 % faster than
+   *  the audio inside the packets (the cushion grew 60 ms every second on a steady stream,
+   *  2026-09-14, and every attempt to hold it produced stutter — "the audio is really
+   *  unstable"). 20 ms per block, exactly what the encoder cuts (960 samples at 48 kHz). */
   const track = ebml(0xAE, [
     ...ebmlUint(0xD7, 1), ...ebmlUint(0x73C5, 1), ...ebmlUint(0x83, 2), ...ebmlStr(0x86, 'A_OPUS'),
+    ...ebmlUint(0x23E383, 20_000_000),
     ...ebmlUint(0x56AA, 6500000), ...ebmlUint(0x56BB, 80000000), ...ebml(0x63A2, opusHead(channels)),
     ...ebml(0xE1, [...ebmlFloat(0xB5, 48000), ...ebmlUint(0x9F, channels)]),
   ]);
@@ -1607,6 +1613,10 @@ export class AudioPlayer {
   private omProgressAt = 0;         // last time the element's clock moved while playing
   private omLastTime = -1;
   private omStartedAt = 0;
+  /** buffered-end advance ÷ packet seconds over the last window — 1.000 means the timeline is
+   *  honest. Watched because a wrong guess here is what made the first build unplayable. */
+  private omRatio = 0;
+  private omRatioEnd = 0; private omRatioPk = 0;
   /** Playout cushion behind the live edge, seconds — ADAPTIVE, like the worklet's jitter buffer:
    *  starts here and grows on every stall (a tunnel delivers in bursts; the LAN does not), up to
    *  OM_CUSHION_MAX. Never shrinks within a session: a link that stalled once will stall again. */
@@ -1763,6 +1773,13 @@ export class AudioPlayer {
         if (b.length) {
           const end = b.end(b.length - 1);
           const lag = end - el.currentTime;
+          // The status row's "buf" figure is the cushion on this path, not the worklet's.
+          this.jitterMs = Math.round(lag * 1000);
+          if (this.omRatioPk === 0) { this.omRatioEnd = end; this.omRatioPk = this.omSeq; }
+          else if (this.omSeq - this.omRatioPk >= 250) {
+            this.omRatio = (end - this.omRatioEnd) / ((this.omSeq - this.omRatioPk) * 0.02);
+            this.omRatioEnd = end; this.omRatioPk = this.omSeq;
+          }
           /* ★★★ RATE, NOT SEEKS. The server's clock and the Mac's audio clock differ by a few
            *  hundred ppm, so the cushion creeps; the first version SKIPPED half a second whenever
            *  it passed 0.75 s — an audible jump every twenty seconds ("the audio is flapping on
@@ -2264,7 +2281,14 @@ export class AudioPlayer {
   }
 
   /** True when the browser is holding playback until a user gesture. */
-  get suspended(): boolean { return !!this.ctx && this.ctx.state === 'suspended'; }
+  /** ★ On the media path "suspended" means the element is blocked waiting for a tap: Safari
+   *  will not play() outside a gesture, and without this the page's TAP TO START badge never
+   *  showed — "the audio will sit silent until I touch a control" (Stuart, 2026-09-14). Only once
+   *  packets have arrived, so a connecting page is not told to tap for nothing. */
+  get suspended(): boolean {
+    if (this.omEl) return this.omEl.paused && this.omSeq > 0 && !this._muted;
+    return !!this.ctx && this.ctx.state === 'suspended';
+  }
 
   /** True while audio frames are actually arriving. */
   get streaming(): boolean { return this.workerOpen || this.ws?.readyState === WebSocket.OPEN; }
@@ -2488,6 +2512,7 @@ export class AudioPlayer {
       mediaPlayout: !!om,
       mediaTime: om?.currentTime, mediaPaused: om?.paused, mediaReady: om?.readyState,
       mediaBufferedAheadS: omBuffered, mediaTargetS: this.omTarget, mediaStalls: this.omStalls,
+      mediaTimelineRatio: this.omRatio,
       mediaRate: om?.playbackRate, mediaPackets: this.omSeq, mediaChannels: this.omCh,
       mediaManaged: this.omManaged,
       ctxState: this.ctx?.state, ctxTime: this.ctx?.currentTime, ctxRate: this.ctx?.sampleRate,
