@@ -1655,6 +1655,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
+  const [dabActiveLogo, setDabActiveLogo] = useState<string | null>(null);   // the playing DAB service's logo
+  /* ★ THE LOCK-SCREEN CARD GETS THE STATION'S OWN PICTURE — the RDS logo on FM, the service's
+   *  logo in DAB. setStationLogo existed for FM-DX only; here it was never called, so the card
+   *  showed the generic art on FM and nothing station-specific in DAB (Stuart, 2026-09-14). */
+  useEffect(() => {
+    const url = dabOn ? (dabActiveLogo ?? '') : (status.mode === 'wfm' ? (liveLogo ?? '') : '');
+    (VibePowerModule as { setStationLogo?: (u: string) => void } | undefined)?.setStationLogo?.(url);
+  }, [dabOn, dabActiveLogo, liveLogo, status.mode]);
   const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
@@ -8947,6 +8955,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           error={dabError}
           blockIndex={dabBlock}
           onService={(sid) => client.current?.dabService?.(sid)}
+          onActiveLogo={setDabActiveLogo}
           lastAudioAt={() => lastAudioAtRef.current}
           audioRunStartAt={() => audioRunStartRef.current}
           onClose={() => setDabBoxOpen(false)}
@@ -9741,7 +9750,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           onBytes={(n: number) => {
             audioBytes.current += n;
             const now = Date.now();
-            if (now - lastAudioAtRef.current > 400) audioRunStartRef.current = now;
+            /* ★★★ 1200 ms, NOT 400. The native iOS pump reports its byte count every 500 ms, so
+             *  a 400 ms gap rule declared a NEW audio run on every single report — the run was
+             *  never a second old, `audioClean` in DabPanel never became true, and "Tuning in —
+             *  waiting for the audio to run clean" sat on a perfectly playing station (Stuart,
+             *  2026-09-14, on the Mac). The JS path reports per packet, where 1200 still marks a
+             *  real gap: a stall of a second is a stall. */
+            if (now - lastAudioAtRef.current > 1200) audioRunStartRef.current = now;
             lastAudioAtRef.current = now;
           }}
           raw={rawAudio && rawAudioPolicy === 'choice'}

@@ -154,6 +154,9 @@ export interface RdsExt {
   eyeP: string;
   eyeS: string;
   eyeR: string;
+  /** The eye's own per-band deviation estimate, kHz [pilot, stereo, rds] — only the stereo
+   *  figure is quoted (pilot and RDS have coherent measurements of their own). */
+  eyeAmp: number[];
   eyeW: number;
   eyeH: number;
   eyeDev: number;
@@ -2253,6 +2256,7 @@ export abstract class SdrWsClient {
         eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
         eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
         eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
+        eyeAmp: Array.isArray(msg.eyeAmp) ? (msg.eyeAmp as unknown[]).map((v) => num(v, 0)) : [0, 0, 0],
         mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],

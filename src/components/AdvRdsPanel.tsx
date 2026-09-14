@@ -371,38 +371,6 @@ const Eye = React.memo(function Eye({ xy, width, height }: { xy: number[]; width
   );
 });
 
-/** ★★ THE SYMBOL TRACE — the "two lines" read, and the one most people find easier than the
- *  constellation. Symbol value against time: two clean bands with a clear gap means every bit
- *  is being decided with margin; a filled gap means bits are landing near the threshold, and
- *  the block errors follow. Same de-rotation and scale as the constellation — |x| after
- *  de-rotation is the wanted component. */
-const SymbolTrace = React.memo(function SymbolTrace({ xy, width, height }: { xy: number[]; width: number; height: number }) {
-  const pts = useMemo(() => {
-    const out: { x: number; y: number }[] = [];
-    if (xy.length < 4) return out;
-    const rot = constellationAngle(xy);
-    const cr = Math.cos(rot), sr = Math.sin(rot);
-    const k = constellationScale(xy, height) * 0.9;   // same scale, a touch of headroom
-    const mid = height / 2;
-    const n = xy.length / 2;
-    for (let i = 0; i < n; i++) {
-      const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;
-      out.push({ x: (i / (n - 1)) * (width - 2) + 1, y: mid - x * k });
-    }
-    return out;
-  }, [xy, width, height]);
-  return (
-    <Canvas style={{ width, height }}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
-      {/* The decision threshold — the line a symbol must not stray across. */}
-      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.35)" />
-      {/* ★ Same fix as the constellation above — one node, not one per symbol. */}
-      <Points points={pts} mode="points" style="stroke" strokeWidth={1.8}
-              strokeCap="round" color="rgba(120,255,140,0.85)" />
-    </Canvas>
-  );
-});
-
 /** ★ THE MPX SPECTRUM — everything the FM demodulator produces, DC to 100 kHz.
  *  ★★ LABELLED AT THE LANDMARKS, because a spectrum of a signal most listeners have never seen
  *  plotted is otherwise just a wiggly line: L+R audio at the bottom, the 19 kHz PILOT, the L−R
@@ -495,51 +463,36 @@ const EYE_COLOURS: Array<[number, number, number]> = [
   [150, 165, 255],   // RDS    — blue-lavender: violet at 170,110 vanished into the magenta (Stuart, 2026-09-14)
 ];
 
-const MpxEye = React.memo(function MpxEye(
-  { eyeP, eyeS, eyeR, ew, eh, width, height }:
-  { eyeP: string; eyeS: string; eyeR: string; ew: number; eh: number;
-    width: number; height: number }) {
+/** ★★★ SCOPE VIEW — three boxes, one per component, each band drawn ALONE from its own grid in
+ *  the colour of the panel's verdict for it (the web's drawMpxEye, ported 2026-09-14 after the
+ *  app was found still on the overlaid composite: "wrong scope in the app"). Nothing is
+ *  composited, so nothing can hide anything; the server already scales each band to its own
+ *  peak, so the client only paints. One SkImage per box, never a rect per cell. */
+const ScopeBox = React.memo(function ScopeBox(
+  { grid, ew, eh, width, height, colour }:
+  { grid: string; ew: number; eh: number; width: number; height: number; colour: [number, number, number] }) {
   const img = useMemo(() => {
     if (ew <= 0 || eh <= 0) return null;
     const n = ew * eh;
-    const grids = [decodeEye(eyeP, n), decodeEye(eyeS, n), decodeEye(eyeR, n)];
-    if (!grids.some((x) => x)) return null;
+    const cells = decodeEye(grid, n);
+    if (!cells) return null;
     const px = new Uint8Array(n * 4);
     for (let i = 0; i < n; i++) {
-      // ★★ ADDITIVE, summed straight into the pixel: where components coincide the cell goes
-      //    pale, which is what preserves the composite's shape while the colour says what is
-      //    making each part of it.
-      let r = 0, g2 = 0, b = 0;
-      for (let k = 0; k < 3; k++) {
-        const cells = grids[k];
-        if (!cells) continue;
-        const v = cells[i];
-        if (v <= 0) continue;
-        // Gamma: a linear ramp buries everything but the densest trace, and the faint outliers
-        // are the whole point of a persistence display.
-        const a = 0.03 + 0.52 * Math.pow(v / 63, 0.45);
-        r += EYE_COLOURS[k][0] * a; g2 += EYE_COLOURS[k][1] * a; b += EYE_COLOURS[k][2] * a;
-      }
+      const v = cells[i];
+      if (v <= 0) continue;
+      const a = 0.10 + 0.90 * Math.pow(v / 63, 0.55);
       const o = i * 4;
-      const mx = Math.max(r, g2, b);
-      if (mx <= 0) { px[o + 3] = 0; continue; }
-      // Scale the hue to full brightness and carry the level in alpha, so a faint cell keeps its
-      // colour instead of fading to grey.
-      const k2 = 255 / Math.max(255, mx);
-      px[o]     = Math.min(255, Math.round(r * k2 * (255 / Math.min(255, mx))));
-      px[o + 1] = Math.min(255, Math.round(g2 * k2 * (255 / Math.min(255, mx))));
-      px[o + 2] = Math.min(255, Math.round(b * k2 * (255 / Math.min(255, mx))));
-      px[o + 3] = Math.min(255, Math.round(mx));
+      px[o] = colour[0]; px[o + 1] = colour[1]; px[o + 2] = colour[2];
+      px[o + 3] = Math.min(255, Math.round(255 * a));
     }
     return Skia.Image.MakeImage(
       { width: ew, height: eh, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpremul },
       Skia.Data.fromBytes(px), ew * 4);
-  }, [eyeP, eyeS, eyeR, ew, eh]);
+  }, [grid, ew, eh, colour]);
   return (
     <Canvas style={{ width, height }}>
       <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
       {img && <SkiaImage image={img} x={0} y={0} width={width} height={height} fit="fill" />}
-      {/* The zero line, and the boundary between the two pilot cycles — both exact, not estimated. */}
       <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.30)" />
       <Rect x={width / 2 - 0.5} y={0} width={1} height={height} color="rgba(255,160,60,0.18)" />
     </Canvas>
@@ -555,7 +508,22 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const plotMpx = useThrottledPoints(x?.mpx);
   /** ★ SAY WHAT FULL SCALE IS. The eye autoscales — a quiet passage genuinely shrinks the
    *  composite — so without this it would look identical at every level. */
-  const eyeDevTxt = (x?.eyeDev ?? 0) > 0.1 ? ` · ±${Math.round(x!.eyeDev)} kHz` : '';
+  /* ★ Colour is the VERDICT, not the identity — the same thresholds and colours as the readouts
+   *  and the web (main.ts drawMpxEye): pilot green in 6.0–7.5 kHz and locked; RDS green 1.5–5.8,
+   *  amber weak, red absent/over spec; stereo by MPX S/N (mono is legitimate). */
+  const scopeBands = useMemo(() => {
+    const GOOD: [number, number, number] = [125, 255, 154], WARN: [number, number, number] = [255, 212, 121], BAD: [number, number, number] = [255, 138, 125];
+    const pdev = x?.pilotDev ?? 0, rdev = x?.rdsDev ?? 0, snr = x?.mpxSnr ?? 0;
+    const pilotCol  = (x && !x.pilotLock) ? WARN : (pdev >= 6.0 && pdev <= 7.5) ? GOOD : WARN;
+    const rdsCol    = (rdev <= 0.2 || rdev > 5.8) ? BAD : rdev < 1.5 ? WARN : GOOD;
+    const stereoCol = snr >= 28 ? GOOD : snr >= 10 ? WARN : BAD;
+    const amp = x?.eyeAmp ?? [0, 0, 0];
+    return [
+      { name: 'PILOT',  g: x?.eyeP ?? '', colour: pilotCol,  khz: pdev },
+      { name: 'STEREO', g: x?.eyeS ?? '', colour: stereoCol, khz: amp[1] ?? 0 },
+      { name: 'RDS',    g: x?.eyeR ?? '', colour: rdsCol,    khz: rdev },
+    ];
+  }, [x?.eyeP, x?.eyeS, x?.eyeR, x?.pilotDev, x?.rdsDev, x?.mpxSnr, x?.pilotLock, x?.eyeAmp]);
   /* ★★ THE SAME PLAIN-ENGLISH READING THE WEB CLIENT GIVES. A bare scale says how far the axis
    *  goes and nothing about whether that is good, which is the only question anyone has.
    *  ★ THREE PILOT STATES, and the middle one is the point of the plot: a pilot that is PRESENT
@@ -1093,11 +1061,15 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             <View style={{ flex: 1 }}>
               <Text style={s.plotLbl}>MPX</Text>
               <Mpx mpx={plotMpx} width={180} height={72} />
-              <Text style={[s.plotLbl, { marginTop: 4 }]}>
-                COMPOSITE EYE{eyeDevTxt}
-              </Text>
-              <MpxEye eyeP={x?.eyeP ?? ''} eyeS={x?.eyeS ?? ''} eyeR={x?.eyeR ?? ''}
-                      ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={72} />
+              <Text style={[s.plotLbl, { marginTop: 4 }]}>SCOPE VIEW · PILOT · STEREO · RDS</Text>
+              {scopeBands.map((b) => (
+                <View key={b.name} style={{ marginBottom: 3 }}>
+                  <ScopeBox grid={b.g} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={40} colour={b.colour} />
+                  <Text style={[s.scopeLbl, { color: `rgb(${b.colour[0]},${b.colour[1]},${b.colour[2]})` }]}>
+                    {b.name}{b.khz > 0.05 ? `  ${b.khz.toFixed(1)} kHz` : ''}
+                  </Text>
+                </View>
+              ))}
               <Text style={[s.verdict, { color: eyeVerdict.c, minHeight: 30 }]}>
                 {eyeVerdict.t}
               </Text>
@@ -1117,17 +1089,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 26 }]}>
                 {mpxDevInfo.t}
               </Text>
-              <Text style={[s.plotLbl, { marginTop: 4 }]}>EYE</Text>
-              <Eye xy={plotXy} width={180} height={44} />
             </View>
           </View>
-          {/* ★ THE SYMBOL TRACE, full width — the "two lines" read, and the one most people
-              find easier than the constellation. It was missing entirely (Stuart, 2026-07-27),
-              which mattered because it is the plot that actually explains the error rate:
-              two clean bands = every bit decided with margin, a filled gap = bits landing on
-              the threshold and the block errors that follow. */}
-          <Text style={s.plotLbl}>SYMBOL TRACE</Text>
-          <SymbolTrace xy={plotXy} width={310} height={80} />
+          {/* ★ ONE SYMBOL PLOT, full width — the web's EYE. The app carried this AND a second
+              "SYMBOL TRACE" of the same data (Stuart, 2026-09-14: "there is 2 symbol trace
+              lines"); the wide one stays. Two clean bands = every bit decided with margin. */}
+          <Text style={s.plotLbl}>SYMBOL EYE</Text>
+          <Eye xy={plotXy} width={310} height={70} />
           <Text style={s.plotNote}>
             Two clear bands = every bit decided with margin. A filled gap means symbols are
             landing on the decision line, and the errors follow.
@@ -1191,17 +1159,18 @@ const s = StyleSheet.create({
   row:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   // ★ The label column is FIXED and the value WRAPS. Letting the label wrap instead was what
   // pushed text off the panel in the browser and made the whole thing scroll sideways.
-  lbl:   { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, width: 108 },
-  val:   { fontFamily: FONT, fontSize: 12, color: C.value, flex: 1 },
+  lbl:   { fontFamily: FONT, fontSize: 11, letterSpacing: 1, color: C.muted, width: 112 },
+  val:   { fontFamily: FONT, fontSize: 13, color: C.value, flex: 1 },
   section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
-  plotLbl: { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
-  verdict: { fontFamily: FONT, fontSize: 11, marginTop: 3 },
+  plotLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
+  scopeLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, marginTop: 1 },
+  verdict: { fontFamily: FONT, fontSize: 12, marginTop: 3 },
   // ★ BRIGHTER THAN THE LABELS, deliberately. This is the sentence that TEACHES the plot — "two
   //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
   //   be glanced at, and it is the longest run of small text sitting over a live waterfall.
   //   Stuart asked for the titles and then "including the text about the constellation etc".
-  plotNote: { fontFamily: FONT, fontSize: 11, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 15 },
+  plotNote: { fontFamily: FONT, fontSize: 12, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 16 },
   logoWrap: { alignItems: 'center', marginTop: 10 },
 });

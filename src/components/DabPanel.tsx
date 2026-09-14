@@ -369,6 +369,8 @@ export interface DabPanelProps {
    *  lock-screen skip, all in SDRScreen. A prop nothing reads is the "written and never read"
    *  trap this repo keeps finding — so it is gone rather than left for later. */
   onService: (sid: number) => void;
+  /** The logo of the service that is PLAYING, as it resolves — for the OS Now Playing card. */
+  onActiveLogo?: (uri: string | null) => void;
   /** Date.now() of the last audio packet the app received, read on demand — for the "tuning in"
    *  line: a picked station stays marked as loading until sound has arrived SINCE the press. */
   lastAudioAt?: () => number;
@@ -488,6 +490,10 @@ export default function DabPanel(p: DabPanelProps) {
    *  numbers is how a stale reading gets believed. */
   const eid = d?.eid ?? -1;
   React.useEffect(() => { setPane('stations'); }, [eid]);
+  // ★ The playing service's artwork, for the lock-screen card — same three sources as its row.
+  const activeSv = d ? d.services.find(x => x.sid === d.sid) : undefined;
+  const activeLogo = useServiceLogo(p.base, d, activeSv);
+  React.useEffect(() => { p.onActiveLogo?.(activeLogo); }, [activeLogo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const block = p.blockIndex >= 0 ? DAB_BLOCKS[p.blockIndex] : undefined;
   const muxTitle = d?.label || (d && !d.locked ? 'searching…' : block ? block.name : DASH);
