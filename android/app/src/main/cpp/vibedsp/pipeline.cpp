@@ -1229,10 +1229,16 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     const float a0 = std::fabs(y0), a1 = std::fabs(y1), a2 = std::fabs(y2);
                     if (a0 > bpk[0]) bpk[0] = a0;  if (a1 > bpk[1]) bpk[1] = a1;  if (a2 > bpk[2]) bpk[2] = a2;
                     // Each band against ITS OWN peak — see eyeBandPk_. 0.92 keeps the crest inside the box.
-                    // ★ RDS at HALF height: it is a data-modulated carrier, so its trace is a filled
-                    //   eye by nature, and at full height it strobed the whole box blue (Stuart:
-                    //   "looks like a disco light"). It reads by texture, not by amplitude.
-                    const float u0 = y0 * binv[0] * 0.92f, u1 = y1 * binv[1] * 0.92f, u2 = y2 * binv[2] * 0.46f;
+                    /* ★★★ ONE AXIS, SCALED BY THE PILOT. Three scalings were tried today: the
+                     *   composite's own peak (a loud stereo passage squashed the pilot to a white
+                     *   line), and each band to its own peak (RDS, a filled eye by nature, strobed
+                     *   the box — "a disco light"). What Stuart pointed at as the aim was the
+                     *   2026-09-13 BBC Northampton shot, which by accident was pilot-scaled: the
+                     *   pilot fills three quarters of the box, stereo draws at its TRUE size against
+                     *   it and clips at the edges when loud (which is information), RDS stays the
+                     *   small braid it really is. Every station has a pilot at ~6.75 kHz, so the
+                     *   scale barely moves and nothing breathes. */
+                    const float u0 = y0 * binv[0] * 0.75f, u1 = y1 * binv[0] * 0.75f, u2 = y2 * binv[0] * 0.75f;
                     // Deviation: the whole composite, audio included, through the 66 kHz cascade.
                     const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
                     // ★ UNSIGNED compare: a NaN casts to INT_MIN, and "hb >= N" would let it through
@@ -1351,10 +1357,11 @@ void RxPipeline::feed(const cf32* iq, int n) {
                          *  stereo a 4.4 kHz pilot looked weak when it was healthy. Nominals in
                          *  composite kHz: pilot 6.75, stereo 25 (typical peak L−R), RDS 2.5. RDS is
                          *  capped at 0.6 so it stays a texture behind the two waves. */
-                        static const float kNomKHz[3] = { 6.75f, 25.0f, 2.5f };
-                        static const float kCap[3]    = { 1.0f, 1.0f, 0.6f };
-                        const float rel = (eyeBandPk_[b] / eyeHpGain_[b] * 75.0f) / kNomKHz[b];
-                        const float strength = std::min(kCap[b], std::max(0.3f, std::sqrt(std::max(0.0f, rel))));
+                        // The 5.5.5 brightness rule the reference shot was drawn with: each band on
+                        // its own maximum, lifted at most 4x above the shared one.
+                        float mxAll = 1e-6f;
+                        for (int k = 0; k < kEyeBands; ++k) mxAll = std::max(mxAll, eyeBmxSm_[k]);
+                        const float strength = std::min(1.0f, 4.0f * bmx / mxAll);
                         // ★ bmx^0.75 · mx^0.25: the geometric mean left Heart's stereo at 36/63 —
                         //   persistent on the wire, but on a retina Safari faint enough that
                         //   Stuart saw it only when a chorus pushed it to full ("flashes for a
@@ -1531,6 +1538,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
                 for (int b = 0; b < kEyeBands; ++b) x.eyeBandKHz[b] = eyeBandPk_[b] / eyeHpGain_[b] * 75.0f;
+                // Full scale is the pilot's peak over 0.75 — the shared axis the plot is drawn on.
+                x.eyeDevKHz = (eyeBandPk_[0] / 0.75f) / eyeHpGain_[0] * 75.0f;
                 x.mpxDevKHz     = mpxDevOut_  * 75.0f;
                 x.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
                 x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
