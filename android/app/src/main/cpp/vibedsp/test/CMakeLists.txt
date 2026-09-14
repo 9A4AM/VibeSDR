@@ -98,6 +98,12 @@ add_executable(vibedsp_bench_channelizer bench_channelizer.cpp ${DSP_SRC})
 target_include_directories(vibedsp_bench_channelizer PRIVATE ${DSP})
 target_compile_options(vibedsp_bench_channelizer PRIVATE -O2 -Wall)
 
+# ★ The eye + deviation monitor through the real feed(): CPU with the panel open and closed, and
+#   the deviation readout against a KNOWN composite as IQ noise rises. See bench_eye.cpp.
+add_executable(vibedsp_bench_eye bench_eye.cpp ${DSP_SRC})
+target_include_directories(vibedsp_bench_eye PRIVATE ${DSP})
+target_compile_options(vibedsp_bench_eye PRIVATE -O2 -Wall)
+
 add_executable(vibedsp_bench_wfm bench_wfm.cpp ${DSP_SRC})
 target_include_directories(vibedsp_bench_wfm PRIVATE ${DSP})
 target_compile_options(vibedsp_bench_wfm PRIVATE -O2 -Wall)

@@ -161,6 +161,8 @@ export interface RdsExt {
    *  mpxDev is averaged on the panel's clock, mpxHold is the slow peak-hold tick. */
   mpxDev: number;
   mpxHold: number;
+  /** What the deviation bar removed as noise, kHz rms in its measurement band (0 = not measured). */
+  mpxNoise: number;
   // ── The weak-signal readings (VibeServer 3.1) ──────────────────────────────────────────────
   /** Pilot against the transmitted-silence gap at 15-19 kHz, dB. NOT a calibrated SNR — the
    *  measuring filter's own leakage caps it near 34 — but the figure that drives NR, and directly
@@ -2251,7 +2253,7 @@ export abstract class SdrWsClient {
         eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
         eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
         eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
-        mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0),
+        mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
         oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({

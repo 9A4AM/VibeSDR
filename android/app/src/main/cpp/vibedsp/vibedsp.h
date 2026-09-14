@@ -1851,6 +1851,10 @@ public:
             /** ★ The PEAK HOLD — a much slower decay, so a brief excursion is still there when
              *  you look up. The bar follows mpxDevKHz; this is the tick that remembers. */
             float mpxDevHoldKHz;
+            /** ★ The NOISE the deviation reading had to remove, in kHz rms in its own
+             *  measurement band — see mpxDevNoise_. Zero when the guard band cannot be measured.
+             *  Shown so a corrected reading can say what it corrected for. */
+            float mpxDevNoiseKHz;
         };
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
@@ -2251,19 +2255,20 @@ private:
      *  ★★ So the grids are RUN-LENGTH ENCODED instead of shrunk. An eye grid is mostly empty, so
      *  the zeros compress hard and the picture is paid for out of the empty space rather than out
      *  of its own detail. See the encoder in local_sdr_shim.cpp. */
-    /** ★★★ THE GRID WIDTH IS SIZED TO THE CHANNEL RATE, because the eye is a HISTOGRAM and its
-     *  quality depends on how many samples land in one sweep. The x-axis spans two pilot cycles
-     *  — about 105 us — so a sweep contains chFs_/9500 samples: ~34 on a 320 kHz channel but
-     *  only ~21 on a 200 kHz one. With a fixed 96 columns most are empty on any given sweep and
-     *  fill only as the phase drifts, which on the narrower channel read as a faint band that
-     *  took an age to build. Stuart, on the Pi's V4 at 33 dB MPX S/N and 3 % multipath: "the eye
-     *  isnt doing much ... it seems to take ages to draw in" — emphatically not the signal, and
-     *  not CPU either (41 % of a core there, with no drops).
-     *  ★★ 96 WAS CHOSEN AGAINST THE RSP AND NEVER CHECKED ON A NARROWER CHANNEL. That is the
-     *  actual mistake, and it is the same shape as every other constant this file has been
-     *  bitten by: true in the one condition it was measured in.
-     *  ★ kEyeWMax bounds the allocation; eyeW_ is what is used and sent. The wire already
-     *  carries eyeW, so clients need no change — they size themselves from it already. */
+    /** ★★★ THE GRID IS 96 COLUMNS, FIXED — AND IT WAS BRIEFLY SIZED TO THE CHANNEL RATE, WHICH
+     *  WAS A MISTAKE (5.5.7/5.5.8). The reasoning was that a sweep spans two pilot cycles and so
+     *  carries only chFs_/9500 samples (~32 on a 300 kHz channel), and that asking for more columns
+     *  than that leaves most of them empty. That is true of ONE sweep and irrelevant to the plot: it
+     *  is a persistence display, ~14000 sweeps fall inside its 1.5 s window, and the sample phase
+     *  drifts across every column because chFs_ is not a multiple of 9.5 kHz. What the sizing
+     *  actually did was cut the grid to 30 columns on both the RSP1A and the V4, painting the
+     *  pilot as eight fat blocks per cycle — Stuart, 2026-09-14: "composite eye is now really low
+     *  resolution". Measured on the wire, not inferred: eyeW=30 from both boxes.
+     *  ★★ RESOLUTION NOW COMES FROM SPLATTING, NOT FROM MORE CELLS. Each sample is deposited into
+     *  the four cells around its exact (x, y) with bilinear weights, so the grid carries sub-cell
+     *  position and the client's bilinear upscale reconstructs a smooth trace from it. Four adds
+     *  per band per sample instead of one; measured, not guessed — see bench_eye.
+     *  ★ kEyeWMax bounds the allocation; eyeW_ is what is sent, and the wire carries it. */
     static constexpr int kEyeWMax = 96, kEyeH = 48;
     int eyeW_ = kEyeWMax;
     /** ★★★ THE EYE IS SPLIT INTO ITS THREE COHERENT COMPONENTS so the plot can be drawn in three
@@ -2299,7 +2304,6 @@ private:
      *  The PILOT reads correctly at the same moment because it is measured COHERENTLY and
      *  ignores noise; a broadband peak cannot. Three cascaded one-poles at 110 kHz keep the
      *  composite and drop what is above it. */
-    float mpxLpA_ = 0.0f, mpxLp1_ = 0.0f, mpxLp2_ = 0.0f, mpxLp3_ = 0.0f;
     double                     mpxDevSettle_ = 0.0;  // seconds since retune; the transient is not the station
     float                      mpxDevSm_ = 0.0f;     // the bar — see RdsExt::mpxDevKHz
     float                      mpxDevHold_ = 0.0f;   // the tick — see RdsExt::mpxDevHoldKHz
@@ -2322,6 +2326,28 @@ private:
             a1 = (float)(-2.0 * std::cos(w0) / a0);
             a2 = (float)((1.0 - alpha) / a0);
             x1 = x2 = y1 = y2 = 0.0f;
+        }
+        /** Low-pass section (RBJ), for the deviation cascade. Q per section from the Butterworth
+         *  table; three sections at 0.5176, 0.7071 and 1.9319 make a 6th-order response. */
+        void designLp(double fs, double f0, double q) {
+            if (!(fs > 0.0) || !(f0 > 0.0) || f0 >= fs * 0.5) { b0 = b1 = b2 = a1 = a2 = 0; return; }
+            const double w0 = 2.0 * M_PI * f0 / fs;
+            const double c = std::cos(w0), alpha = std::sin(w0) / (2.0 * q);
+            const double a0 = 1.0 + alpha;
+            b0 = (float)((1.0 - c) * 0.5 / a0);
+            b1 = (float)((1.0 - c) / a0);
+            b2 = b0;
+            a1 = (float)(-2.0 * c / a0);
+            a2 = (float)((1.0 - alpha) / a0);
+            x1 = x2 = y1 = y2 = 0.0f;
+        }
+        /** |H(e^{jw})|² of this section — for the noise integrals, computed once at design time. */
+        double mag2(double w) const {
+            const double c1 = std::cos(w), s1 = std::sin(w), c2 = std::cos(2 * w), s2 = std::sin(2 * w);
+            const double nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+            const double dr = 1.0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+            const double dd = dr * dr + di * di;
+            return dd > 0.0 ? (nr * nr + ni * ni) / dd : 0.0;
         }
         inline float step(float x) {
             const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
@@ -2348,7 +2374,51 @@ private:
      *  rate is nothing next to the FFT beside it. */
     EyeBiquad eyeBand_[kEyeBands][2];
     double    eyeBandFs_ = 0.0;                      // what they were designed for
-    std::vector<float> eyeBandBuf_[kEyeBands];       // the filtered copies the folds read
+    /** ★★★ 6th-ORDER BUTTERWORTH AT 66 kHz, NOT THREE ONE-POLES AT 110. The one-poles were
+     *  −1.5 dB at 38 kHz and −2.7 dB at 53 — they shaved the L−R sidebands off the peak they
+     *  were measuring — while passing 1.2–1.9x the noise power of an ideal 66 kHz wall (computed
+     *  against FM's triangular noise spectrum, 2026-09-14). Three biquads are flat to −0.3 dB at
+     *  53 kHz and pass 1.1x. 66 kHz is what MPXtool measures with, so the two agree by design. */
+    EyeBiquad mpxLp_[3];
+    double    mpxLpFs_ = 0.0;                        // what mpxLp_ and mpxGuard_ were designed for
+    /** ★★★ THE STATISTIC IS THE MAXIMUM OVER A FIXED 50 ms WINDOW, NOT OVER WHATEVER BLOCK THE
+     *  RADIO HANDED US. It was the per-block maximum, and the block is the radio's business:
+     *  168 samples from an RTL at 2.4 MS/s, something else again from an SDRplay. Simulated on the
+     *  same 75 kHz composite, an average of 10 ms maxima reads 63 kHz and an average of
+     *  168-sample maxima reads 55 — two radios on one station gave two answers, and neither was
+     *  the deviation. A window measured in TIME is the same instrument on every radio. */
+    int    devWinN_   = 0;                           // samples per window (chFs_ * 0.05)
+    int    devWinCnt_ = 0;
+    /** ★★★ THE 99.97th PERCENTILE OF |LP| IN THE WINDOW, NOT ITS MAXIMUM. Below the FM threshold
+     *  the discriminator's noise stops being Gaussian and becomes CLICKS — a 2π phase slip is a
+     *  spike of most of full scale, a few samples wide after the 66 kHz low-pass — and a maximum
+     *  reports the tallest click in the window as deviation, which no noise-power subtraction can
+     *  undo (bench: +17 kHz left at 7 dB in-channel CNR with the max). Ignoring the top 0.03 % of
+     *  samples — 5 of a 50 ms window — drops a few clicks per window and nothing else: a
+     *  processed composite sits at its peak for far more than that. Bench, spiky multi-tone:
+     *  +2.1/+3.6/+8.5 kHz at 13/9/7 dB in-channel CNR against the max's +2.5/+6.7/+17, for
+     *  4 kHz under the max on a clean spiky signal and ~0 on a processed one. Skipping 0.1 %
+     *  held to +1.9 at 9 dB but sat 8 kHz under the max, which would move Saber's six exact
+     *  stations. A 512-bin histogram of |x| makes it one increment per sample and a short walk
+     *  per window. */
+    static constexpr int kDevHistN = 512;            // bins over 0..1.28 of full scale (0.19 kHz each)
+    std::vector<uint32_t> devHist_;                  // the window's histogram of |LP(x)|
+    double devWinGp_  = 0.0;                         // running guard-band power in this window
+    /** ★★★ THE NOISE IS MEASURED, THEN REMOVED IN QUADRATURE. The maximum of signal+noise is
+     *  biased high, and Saber's 12-station MPXtool dataset showed the bias tracking received
+     *  level: exact above −60 dBFS, +19 and +24 kHz at −70 — two compliant stations reported as
+     *  overmodulated. Simulated with the real statistic the bias fits sqrt(P² + (c·σ)²) − P with
+     *  c ≈ 4.5 across processing styles and S/N, NOT a linear c·σ (it grows with σ²; at 0.75 kHz
+     *  rms it is 0.1 kHz, at 7.5 it is 11).
+     *  ★★ σ comes from a GUARD BAND at 80 kHz where nothing is broadcast, folded through the
+     *  triangular (∝ f²) noise law and both filters' responses: σ² = P_guard · K / G, where K and
+     *  G are ∫ f²|H|² df for the measurement low-pass and the guard band-pass, computed
+     *  numerically from the digital filters at design time. No fitted constant except c. */
+    EyeBiquad mpxGuard_[3];                          // band-pass at 80 kHz, Q 12, three sections
+    float  devNoiseK_  = 0.0f;                       // K/G — 0 when the guard band is off the channel
+    float  mpxNoiseSm_ = 0.0f;                       // guard power, smoothed on the panel's clock
+    float  mpxDevNoise_ = 0.0f;                      // σ in the measurement band, ±1 = ±75 kHz
+    float  mpxDevOut_  = 0.0f;                       // the corrected bar value the wire gets
     // ★★★ THE EYE IS TAKEN ABOVE THE AUDIO. L+R has no fixed relationship to the pilot, so
     //     folding the FULL composite onto the pilot phase smears the audio into a featureless
     //     band and buries the three things that ARE coherent with the trigger — the 19 kHz
@@ -2358,7 +2428,8 @@ private:
     //     never demodBuf_, so audio and every other measurement are untouched.
     float eyeHpA_ = 0.0f;                          // one-pole coefficient for the cascade
     float eyeHp1_ = 0.0f, eyeHp2_ = 0.0f, eyeHp3_ = 0.0f;   // the three low-pass states
-    std::vector<float> eyeHp_;                     // the filtered COPY the eye is folded from
+    // ★ No filtered copy any more: high-pass, bands, deviation and fold run in ONE pass per
+    //   sample (see the eye block in pipeline.cpp) — five sweeps over the block became one.
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};

@@ -162,6 +162,8 @@ export interface RdsExt {
   mpxDev: number;
   /** The peak-hold tick — a much slower decay than mpxDev, so a brief excursion is still shown. */
   mpxHold: number;
+  /** What the deviation bar removed as noise, kHz rms in its 66 kHz measurement band. 0 = not measured. */
+  mpxNoise: number;
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -1093,6 +1095,7 @@ export class SpectrumClient {
           eyeDev: Number(msg.eyeDev ?? 0),
           mpxDev: Number(msg.mpxDev ?? 0),
           mpxHold: Number(msg.mpxHold ?? 0),
+          mpxNoise: Number(msg.mpxNoise ?? 0),
         });
         break;
       case 'sig':

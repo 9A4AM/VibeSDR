@@ -458,7 +458,8 @@ void RxPipeline::rebuildAudio() {
              * ★ Cleared here AND held off briefly below, because the transient outlasts the
              *   reconfigure itself. */
             mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxDevSettle_ = 0.0;
-            mpxLp1_ = mpxLp2_ = mpxLp3_ = 0.0f;
+            mpxNoiseSm_ = 0.0f; mpxDevOut_ = 0.0f; mpxDevNoise_ = 0.0f;
+            devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
             ceq_.configure(9); ceqOut_.configure(chFs_);
             ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
             shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
@@ -1068,17 +1069,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    Three cycles would leave one sweep in sixteen starting at the wrong phase and
             //    smear the whole picture.
             if (wantRds && cb_.rdsExt) {
-                /* ★★ SIZE THE GRID TO WHAT THE CHANNEL CAN FILL — see the note on eyeW_.
-                 *  A sweep spans two pilot cycles, so it carries chFs_/9500 samples; asking for
-                 *  more columns than that leaves most of them empty on every sweep and the
-                 *  picture builds far too slowly. Aim for roughly TWO samples per column so each
-                 *  one is actually populated, bounded to something drawable. */
-                {
-                    int w = (chFs_ > 0.0) ? (int)(chFs_ / 9500.0 / 2.0) * 2 : kEyeWMax;
-                    if (w > kEyeWMax) w = kEyeWMax;
-                    if (w < 16) w = 16;
-                    if (w != eyeW_) { eyeW_ = w; for (auto& g : eyeAcc_) g.clear(); }
-                }
+                // ★★ 96 COLUMNS, FIXED. The grid was sized to the channel rate for one release
+                //    and came out at 30 columns on every radio — see the note on eyeW_ for why
+                //    the argument was wrong and what the wire measured.
+                eyeW_ = kEyeWMax;
                 for (int b = 0; b < kEyeBands; ++b) {
                     if ((int)eyeAcc_[b].size() != eyeW_ * kEyeH) {
                         eyeAcc_[b].assign((size_t)eyeW_ * kEyeH, 0.0f);
@@ -1096,179 +1090,188 @@ void RxPipeline::feed(const cf32* iq, int n) {
                     }
                     eyeBandFs_ = chFs_;
                 }
-                // ★ Maintenance runs at ~12 Hz, not per block — see eyeSince_. The ACCUMULATION
-                //   below is per block; only the display work is gated.
+                /* ★★★ THE DEVIATION FILTERS, AND THE TWO NOISE INTEGRALS — see mpxLp_ and
+                 *   devNoiseK_ in the header. Designed once per channel rate. K and G are the
+                 *   noise power each filter passes from FM's triangular (∝ f²) noise, so the
+                 *   guard band's measured power scales to the measurement band's by K/G with no
+                 *   fitted number in it. The guard sits at 80 kHz (between the US SCA slots at
+                 *   67 and 92) and needs the channel to be flat there, so it is only trusted on
+                 *   a channel wider than 180 kHz — narrower, the reading goes uncorrected, which
+                 *   errs on the side it always did. */
+                if (mpxLpFs_ != chFs_) {
+                    static const double kBw6[3] = { 0.51763809, 0.70710678, 1.93185165 };
+                    for (int k = 0; k < 3; ++k) {
+                        mpxLp_[k].designLp(chFs_, 66000.0, kBw6[k]);
+                        mpxGuard_[k].design(chFs_, 80000.0, 12.0);
+                    }
+                    devNoiseK_ = 0.0f;
+                    if (chFs_ > 180000.0) {
+                        double K = 0.0, G = 0.0;
+                        const int nGrid = 2048;
+                        for (int g = 1; g < nGrid; ++g) {
+                            const double f = 0.5 * chFs_ * g / nGrid, w = 2.0 * M_PI * f / chFs_;
+                            double hl = 1.0, hg = 1.0;
+                            for (int k = 0; k < 3; ++k) { hl *= mpxLp_[k].mag2(w); hg *= mpxGuard_[k].mag2(w); }
+                            K += f * f * hl; G += f * f * hg;
+                        }
+                        devNoiseK_ = (G > 0.0) ? (float)(K / G) : 0.0f;
+                    }
+                    devWinN_ = (int)(chFs_ * 0.05);          // 50 ms, whatever the block size
+                    devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
+                    mpxLpFs_ = chFs_;
+                }
+                // ★ Maintenance runs at the send rate, not per block — see eyeSince_. The
+                //   ACCUMULATION below is per block; only the display work is gated.
                 eyeSince_ += nc;
-                /* ★★ AT THE SEND RATE, NOT TWICE IT. With a 1.5 s time constant there is nothing
-                 *  to gain from maintaining faster than frames go out — the extra pass was
-                 *  computed and thrown away. Stuart, on matching the panel's averaging: "also may
-                 *  save a little CPU too." It halves the 13824-cell pass. */
                 const bool eyeMaint = (chFs_ > 0.0) && (eyeSince_ >= chFs_ / 6.0);
-                // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
-                //   passage genuinely shrinks the composite, and a fixed full scale would hide
-                //   the structure instead of magnifying it (Stuart, 2026-09-13).
-                // ── High-pass a COPY, above the audio (see the note on eyeHpA_) ──────────
+                // ── High-pass above the audio (see the note on eyeHpA_) ─────────────────
                 if (eyeHpA_ <= 0.0f && chFs_ > 0.0)
                     eyeHpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 15000.0 / chFs_));
-                if ((int)eyeHp_.size() < nc) eyeHp_.resize((size_t)nc);
                 // ★ Same reasoning as the biquads: a one-pole that goes non-finite stays there.
                 if (!std::isfinite(eyeHp1_) || !std::isfinite(eyeHp2_) || !std::isfinite(eyeHp3_))
                     eyeHp1_ = eyeHp2_ = eyeHp3_ = 0.0f;
+                if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevHold_) || !std::isfinite(mpxNoiseSm_)
+                    || !std::isfinite(devWinGp_))
+                    { mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0; }
+                if ((int)devHist_.size() != kDevHistN) devHist_.assign(kDevHistN, 0u);
+                if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
+                // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
+                //   passage genuinely shrinks the composite, and a fixed full scale would hide
+                //   the structure instead of magnifying it (Stuart, 2026-09-13).
+                // ★ The scale used for THIS block is last block's peak (after its decay) — one
+                //   block of lag on a 0.995/block autoscale is nothing, and it is what lets the
+                //   whole thing run as one pass. A sample above it lands on the top row.
+                // ★★ DECAY IN TIME, NOT PER BLOCK. 0.995 per block was 0.1 s on an RTL's 168-sample
+                //    blocks and many seconds on a bench feeding 8192 at a time — the same
+                //    block-size trap the deviation window fell into. 0.5 s is the constant.
+                eyePeak_ *= (chFs_ > 0.0) ? (float)std::exp(-(double)nc / chFs_ / 0.5) : 1.0f;
+                const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
+                float blockPk = eyePeak_;
+                // ★★ NO fmod. A fractional part is floor-and-subtract; working in TURNS (0..1)
+                //    rather than radians removes the division too. bitClk = (cycle*2pi+phase)/16,
+                //    so bitClk * 16/(4pi) is the position in two-pilot-cycle units.
+                const float kTurns = (float)(16.0 / (2.0 * 2.0 * M_PI));
+                const float halfH  = 0.5f * (float)kEyeH;
+                float* acc0 = eyeAcc_[0].data(); float* acc1 = eyeAcc_[1].data(); float* acc2 = eyeAcc_[2].data();
+                double devGp = devWinGp_;
+                uint32_t* hist = devHist_.data();
+                const float kHistScale = (float)kDevHistN / 1.28f;
+                /* ★★★ ONE PASS. This was five sweeps over the block — high-pass into a copy,
+                 *   three band-passes into three more copies, a peak scan, the deviation
+                 *   low-pass, then the fold reading them all back. Every one of those is a serial
+                 *   IIR, and the earlier NEON/SSE attempt proved four lanes cannot help a chain
+                 *   like that (measured 0.96x — see the memory of 2026-09-13). What DOES help is
+                 *   letting the three independent band chains, the deviation chain and the guard
+                 *   chain sit in one loop body, where the core's out-of-order window overlaps
+                 *   them for free instead of finishing one chain before starting the next.
+                 * ★★★ BILINEAR SPLAT. Each sample lands at an exact (x, y) inside the grid and is
+                 *   shared between the four cells around it by distance — that is the sub-cell
+                 *   information the old nearest-cell deposit threw away, and it is what makes 96
+                 *   columns draw as a smooth trace rather than a staircase. x wraps (the sweep is
+                 *   periodic in the pilot), y clamps. */
                 for (int i = 0; i < nc; ++i) {
                     const float x = demodBuf_[i];
                     eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
                     eyeHp2_ += eyeHpA_ * (h1 - eyeHp2_);      const float h2 = h1 - eyeHp2_;
-                    eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      eyeHp_[i] = h2 - eyeHp3_;
-                }
-                // ★ The three components, from the same high-passed copy the scale is taken
-                //   from — so their sum is what the single-colour eye drew, and the picture
-                //   keeps its shape while gaining colour.
-                for (int b = 0; b < kEyeBands; ++b) {
-                    if ((int)eyeBandBuf_[b].size() < nc) eyeBandBuf_[b].resize((size_t)nc);
-                    for (int i = 0; i < nc; ++i)
-                        eyeBandBuf_[b][i] = eyeBand_[b][1].step(eyeBand_[b][0].step(eyeHp_[i]));
-                }
-                eyePeak_ *= 0.995f;
-                for (int i = 0; i < nc; ++i) {
-                    const float a = std::fabs(eyeHp_[i]);
-                    if (a > eyePeak_) eyePeak_ = a;
-                }
-                /* ★★ TOTAL PEAK DEVIATION — the WHOLE composite, audio included, which is the
-                 *  headline broadcast number and the one thing the eye has been drawing (a
-                 *  flattened top) while nothing measured it. Taken from demodBuf_ rather than the
-                 *  high-passed copy precisely BECAUSE the audio belongs in it.
-                 * ★ A slower decay than the eye's scale: this is a peak-hold, and the point of a
-                 *  deviation monitor is that a brief excursion is not missed between glances. */
-                // ★ Band-limit to where the composite actually lives before taking a peak —
-                //   see the note on mpxLpA_. Without this the reading counts noise as deviation.
-                if (!std::isfinite(mpxLp1_) || !std::isfinite(mpxLp2_) || !std::isfinite(mpxLp3_))
-                    mpxLp1_ = mpxLp2_ = mpxLp3_ = 0.0f;
-                if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevHold_))
-                    { mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; }
-                if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
-                if (mpxLpA_ <= 0.0f && chFs_ > 0.0)
-                    mpxLpA_ = (float)(1.0 - std::exp(-2.0 * M_PI * 110000.0 / chFs_));
-                float blockPk = 0.0f;
-                for (int i = 0; i < nc; ++i) {
-                    mpxLp1_ += mpxLpA_ * (demodBuf_[i] - mpxLp1_);
-                    mpxLp2_ += mpxLpA_ * (mpxLp1_ - mpxLp2_);
-                    mpxLp3_ += mpxLpA_ * (mpxLp2_ - mpxLp3_);
-                    const float a = std::fabs(mpxLp3_);
-                    if (a > blockPk) blockPk = a;
-                }
-                // ★ Attack is instant, decay is timed — see the note on mpxDevSm_.
-                const double dt = (chFs_ > 0.0) ? (double)nc / chFs_ : 0.0;
-                // ★★ IGNORE THE FIRST 1.5 s AFTER A RETUNE — see the note at the reconfigure.
-                //    The excursion is real output but it belongs to the tune, not the station.
-                if (mpxDevSettle_ < 1.5) { mpxDevSettle_ += dt; blockPk = 0.0f;
-                                           mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; }
-                const float kSm   = (float)std::exp(-dt / 1.5);   // the panel's clock
-                const float kHold = (float)std::exp(-dt / 6.0);   // the tick lingers
-                /* ★★★ THE BAR IS AVERAGED, NOT PEAK-HELD. It had INSTANT ATTACK with a 1.5 s
-                 *   decay, which is not averaging at all: one noisy sample threw it to the top
-                 *   and it walked back down, so on a weak signal it bounced continuously
-                 *   (Stuart, 2026-09-13: "its the weaker signals it is struggling on ... if it
-                 *   isn't already set then average it the same as the other measurements").
-                 *   Every other reading on this panel is smoothed in BOTH directions over
-                 *   ~1.5 s, which is exactly why they sit still — [[panel_readouts_need_one_clock]].
-                 * ★★ THE TICK KEEPS FAST ATTACK AND SLOW DECAY, because that IS a peak hold and
-                 *   catching the excursion is its entire job. Two different instruments on one
-                 *   bar: a smoothed level, and a maximum that remembers. */
-                const float aSm = 1.0f - kSm;
-                mpxDevSm_  += aSm * (blockPk - mpxDevSm_);
-                /* ★★ THE HOLD TRACKS THE AVERAGED VALUE, NOT THE RAW BLOCK PEAK. A peak-hold
-                 *  meter holds the maximum of THE THING THE BAR SHOWS — same quantity, different
-                 *  ballistics — which is why the tick normally sits just above the bar and drifts
-                 *  down. Holding the raw per-block maximum instead made it a different
-                 *  measurement entirely, so on a noisy signal it sat far away from the bar and
-                 *  the gap reported NOISE rather than programme dynamics (Stuart, 2026-09-13:
-                 *  "massively away from the bar ... if it was a peak hold meter it would be a lot
-                 *  closer"). */
-                mpxDevHold_ = (mpxDevSm_ > mpxDevHold_) ? mpxDevSm_ : mpxDevHold_ * kHold;
-                const float inv = (eyePeak_ > 1e-6f) ? (1.0f / eyePeak_) : 0.0f;
-                // ★★ NO fmod. It shipped as a double-precision std::fmod per sample at the
-                //    channel rate, which is the most expensive thing that was in this loop and
-                //    entirely avoidable: a fractional part is floor-and-subtract. Working in
-                //    TURNS (0..1) instead of radians removes the division too, leaves one
-                //    multiply and one floor per sample, and is straightforwardly vectorisable
-                //    if it ever needs to be (Stuart asked what it costs, 2026-09-13).
-                // bitClk = (cycle*2pi + phase)/16, so bitClk * 16/(4pi) is the position in
-                // two-pilot-cycle units; its fractional part is the sweep position.
-                const float kTurns = (float)(16.0 / (2.0 * 2.0 * M_PI));
-                // ★★ ONE x FOR ALL THREE — they share the trigger, which is the whole point:
-                //    the components line up on the same axis and their relationship is visible.
-                for (int i = 0; i < nc; ++i) {
+                    eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      const float h  = h2 - eyeHp3_;
+                    const float ah = std::fabs(h);
+                    if (ah > blockPk) blockPk = ah;
+                    const float u0 = eyeBand_[0][1].step(eyeBand_[0][0].step(h)) * inv;
+                    const float u1 = eyeBand_[1][1].step(eyeBand_[1][0].step(h)) * inv;
+                    const float u2 = eyeBand_[2][1].step(eyeBand_[2][0].step(h)) * inv;
+                    // Deviation: the whole composite, audio included, through the 66 kHz cascade.
+                    const float d = mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
+                    int hb = (int)(std::fabs(d) * kHistScale);
+                    if (hb >= kDevHistN) hb = kDevHistN - 1;
+                    ++hist[hb];
+                    const float g = mpxGuard_[2].step(mpxGuard_[1].step(mpxGuard_[0].step(x)));
+                    devGp += (double)g * g;
+                    // The fold — one x for all three bands: they share the trigger.
                     const float t = bitClkBuf_[i] * kTurns;
-                    const float frac = t - std::floor(t);     // 0..1 across two pilot cycles
-                    int cx = (int)(frac * (float)eyeW_);
-                    if (cx < 0) cx = 0; else if (cx >= eyeW_) cx = eyeW_ - 1;
-                    for (int b = 0; b < kEyeBands; ++b) {
+                    const float fx = (t - std::floor(t)) * (float)eyeW_ - 0.5f;
+                    int x0 = (int)fx; if (fx < (float)x0) --x0;
+                    const float wx = fx - (float)x0;
+                    int xa = x0, xb = x0 + 1;
+                    if (xa < 0) xa += eyeW_; if (xb >= eyeW_) xb -= eyeW_;
+                    auto splat = [&](float* acc, float u) {
                         // Row 0 is the TOP, so +full scale is at the top like a scope.
-                        const float u = eyeBandBuf_[b][i] * inv;   // -1..+1, shared scale
-                        int cy = (int)((1.0f - u) * 0.5f * (float)kEyeH);
-                        if (cy < 0) cy = 0; else if (cy >= kEyeH) cy = kEyeH - 1;
-                        eyeAcc_[b][(size_t)cy * eyeW_ + cx] += 1.0f;
-                    }
+                        float fy = (1.0f - u) * halfH - 0.5f;
+                        if (fy < 0.0f) fy = 0.0f; else if (fy > (float)(kEyeH - 1)) fy = (float)(kEyeH - 1);
+                        const int y0 = (int)fy;
+                        const int y1 = (y0 + 1 < kEyeH) ? y0 + 1 : y0;
+                        const float wy = fy - (float)y0;
+                        float* r0 = acc + (size_t)y0 * eyeW_;
+                        float* r1 = acc + (size_t)y1 * eyeW_;
+                        r0[xa] += (1.0f - wx) * (1.0f - wy);  r0[xb] += wx * (1.0f - wy);
+                        r1[xa] += (1.0f - wx) * wy;           r1[xb] += wx * wy;
+                    };
+                    splat(acc0, u0); splat(acc1, u1); splat(acc2, u2);
                 }
-                /* ★★★ ONE NORMALISATION ACROSS ALL THREE, not one each. Scaling every band to
-                 *   its own maximum would make a dead RDS carrier look exactly as bright as a
-                 *   healthy pilot — destroying the reading the colours exist to give ("a strong
-                 *   line is good, speckle is scatter"). They are judged against each other, so
-                 *   they must share a scale. */
+                eyePeak_ = blockPk;
+                devWinGp_ = devGp; devWinCnt_ += nc;
+                /* ★★ THE 50 ms WINDOW CLOSES — see devWinN_. The bar is the AVERAGE of window
+                 *  maxima on the panel's 1.5 s clock (Stuart: "average it the same as the other
+                 *  measurements"); the tick is a slow peak-hold of the same corrected value. */
+                if (devWinN_ > 0 && devWinCnt_ >= devWinN_) {
+                    const double dtW = (double)devWinCnt_ / chFs_;
+                    // The 99.97th percentile — walk down from the top until 0.03 % of the window
+                    // has been passed. The bin's UPPER edge, so a clean tone is not read low.
+                    float pk = 0.0f;
+                    {
+                        // 0.3 per mille = 5 samples of a 50 ms window. Bench, spiky multi-tone at 75 kHz:
+                        //   max: +2.5/+6.7/+17 kHz at in-channel CNR 13/9/7 dB; this: +2.1/+3.6/+8.5,
+                        //   for 4 kHz below the max on a clean spiky signal and ~0 on a processed one.
+                        const uint32_t skip = (uint32_t)(devWinCnt_ * 0.0003);
+                        uint32_t seen = 0; int b = kDevHistN - 1;
+                        for (; b > 0; --b) { seen += hist[b]; if (seen > skip) break; }
+                        pk = (float)(b + 1) / kHistScale;
+                        devHist_.assign(kDevHistN, 0u);
+                    }
+                    float gp = (float)(devWinGp_ / (double)devWinCnt_);
+                    devWinCnt_ = 0; devWinGp_ = 0.0;
+                    // ★★ IGNORE THE FIRST 1.5 s AFTER A RETUNE — see the note at the reconfigure.
+                    if (mpxDevSettle_ < 1.5) { mpxDevSettle_ += dtW; pk = 0.0f; gp = 0.0f;
+                                               mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; }
+                    const float aSm = 1.0f - (float)std::exp(-dtW / 1.5);
+                    mpxDevSm_   += aSm * (pk - mpxDevSm_);
+                    mpxNoiseSm_ += aSm * (gp - mpxNoiseSm_);
+                    // σ² in the measurement band, then the quadrature removal — see devNoiseK_.
+                    const float sig2 = mpxNoiseSm_ * devNoiseK_;
+                    mpxDevNoise_ = std::sqrt(std::max(0.0f, sig2));
+                    const float kC = 4.5f;   // fitted on the bench (bench_eye), see devNoiseK_
+                    const float s2 = mpxDevSm_ * mpxDevSm_ - kC * kC * sig2;
+                    mpxDevOut_ = (s2 > 0.0f) ? std::sqrt(s2) : 0.0f;
+                    const float kHold = (float)std::exp(-dtW / 6.0);
+                    mpxDevHold_ = (mpxDevOut_ > mpxDevHold_) ? mpxDevOut_ : mpxDevHold_ * kHold;
+                }
                 /* ★★★ CONVERT WHAT WAS ACCUMULATED, *THEN* DECAY — order matters, and getting it
-                 *   wrong is invisible in code review. It first read decay -> accumulate -> convert,
-                 *   so every frame sent was a freshly faded grid plus ONE audio block: everything
-                 *   gathered between ticks was wiped by the next decay before it was ever
-                 *   converted. On air that is a plot which sits nearly flat and only occasionally,
-                 *   when the timing happens to line up, shows the waveform properly before fading
-                 *   again — Stuart, 2026-09-13: "it looks like a proper waveform for a split second
-                 *   then decays back to this look". The pilot is a pure tone locked to the trigger;
-                 *   it should draw a steady sine at ALL times, and a plot that flickers is the
-                 *   display sampling itself at the wrong moment, not the signal coming and going. */
+                 *   wrong is invisible in code review (it shipped the other way round and the
+                 *   plot flickered; Stuart, 2026-09-13). */
                 if (eyeMaint) {
                     eyeSince_ = 0.0;
-                        /* ★★★ SIZE STAYS SHARED, BRIGHTNESS DOES NOT — and the difference matters.
-                     *   A weak component was penalised TWICE: small, because the vertical scale
-                     *   is set by the strongest band, AND dim, because the intensity scale was
-                     *   too. So weak stereo vanished entirely — Stuart, hearing it come and go on
-                     *   air: "I'm not seeing the pink in the eye moving as I can hear the stereo
-                     *   kicking in and out ... it almost looks like it needs to crop in more when
-                     *   the signal is weak to see the weak stereo forming."
-                     * ★★ VERTICAL EXTENT still comes from the shared scale, so a weak component
-                     *   still LOOKS weak and the three remain comparable — that honesty is the
-                     *   whole reason the colours are worth having. Only the BRIGHTNESS is lifted
-                     *   per band, and only up to 4x, so a faint trace becomes visible without
-                     *   being flattered into looking healthy. A truly dead band has nothing to
-                     *   lift and stays dark.
-                     */
-                    float mx = 0.0f;
-                    for (int b = 0; b < kEyeBands; ++b)
-                        for (float v : eyeAcc_[b]) if (v > mx) mx = v;
-                    if (mx <= 1e-6f) mx = 1.0f;
+                    /* ★★★ EACH BAND ON ITS OWN BRIGHTNESS. A shared intensity scale let the pilot
+                     *   — a pure tone that lands in the same cells on every one of ~14000 sweeps —
+                     *   set the scale for everything, and the stereo, spread across its envelope,
+                     *   came out at a mean of 3.5/63 with fewer than one cell in 1440 changing
+                     *   per frame (measured from the Pi's wire, 2026-09-14). That is the plot
+                     *   Stuart described as not responding. A 4x lift cap had been tried; it was
+                     *   not enough by a factor of five.
+                     * ★★ STRENGTH IS STILL HONEST, because the VERTICAL scale stays shared: a weak
+                     *   component draws small, and a DEAD one draws as a flat bright line at zero
+                     *   (its noise is tiny against the shared axis) — which is exactly what
+                     *   "nothing there" should look like. Scatter still reads as fuzz. */
                     for (int b = 0; b < kEyeBands; ++b) {
                         float bmx = 0.0f;
                         for (float v : eyeAcc_[b]) if (v > bmx) bmx = v;
-                        // Its own scale, but never more than 4x the shared one.
-                        const float es = (bmx > 1e-6f)
-                                       ? std::min(255.0f / bmx, 4.0f * 255.0f / mx)
-                                       : 0.0f;
+                        const float es = (bmx > 1e-6f) ? (255.0f / bmx) : 0.0f;
                         for (size_t j = 0; j < eyeAcc_[b].size(); ++j) {
                             const int v = (int)(eyeAcc_[b][j] * es);
                             eyeOut_[b][j] = (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v));
                         }
                     }
-                    /* ★★★ PERSISTENCE ON THE SAME CLOCK AS THE REST OF THE PANEL.
-                     *   Fade AFTER publishing, so the next interval builds on a softened version
-                     *   of what was just shown rather than on nothing.
-                     * ★★ 0.889 at 6 Hz is a time constant of about 1.5 SECONDS, deliberately
-                     *   matching the smoothing already applied to pilotDev, rdsDev, coherence and
-                     *   drift. It first shipped at 0.72 — about 0.3 s — which left the eye five
-                     *   times twitchier than every number printed beside it. Stuart: "maybe need
-                     *   to employ averaging like the rest of the metrics, as we had false RDS DEV
-                     *   readings until the averaging went in."
-                     * ★ [[panel_readouts_need_one_clock]]: a panel that mixes timescales invites
-                     *   the reader to compare two things measured over different windows, which
-                     *   has produced wrong diagnoses on this very panel before. */
+                    /* ★★★ PERSISTENCE ON THE SAME CLOCK AS THE REST OF THE PANEL: 0.889 at 6 Hz
+                     *   is ~1.5 s, matching pilotDev, rdsDev, coherence and drift
+                     *   ([[panel_readouts_need_one_clock]]). Fade AFTER publishing. */
                     for (int b = 0; b < kEyeBands; ++b)
                         for (float& v : eyeAcc_[b]) v *= 0.889f;
                 }
@@ -1430,7 +1433,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eyeW = haveEye ? eyeW_ : 0;
                 x.eyeH = haveEye ? kEyeH : 0;
                 x.eyeDevKHz = eyePeak_ * 75.0f;
-                x.mpxDevKHz     = mpxDevSm_   * 75.0f;
+                x.mpxDevKHz     = mpxDevOut_  * 75.0f;
+                x.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
                 x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);

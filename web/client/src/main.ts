@@ -8772,7 +8772,13 @@ function drawMpxEye() {
         const verdict = overRange ? 'implausible — not a real FM figure'
                       : pk > 82 ? 'OVERMODULATED'
                       : pk > 75 ? 'over the limit' : 'nominal';
-        dv.textContent = `deviation ${pk.toFixed(0)} kHz · ${verdict}`;
+        /* ★ SAY WHAT WAS REMOVED. The server measures the noise in the reading's own band from a
+         *  guard band at 80 kHz and takes it out in quadrature (see mpxDevNoise_ in vibedsp.h);
+         *  on a weak station that can be a large correction, and a reader comparing against
+         *  another analyser should know it happened. Only worth a word once it reaches 1 kHz. */
+        const nz = rdsExt?.mpxNoise ?? 0;
+        const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed` : '';
+        dv.textContent = `deviation ${pk.toFixed(0)} kHz · ${verdict}${nzTxt}`;
         dv.className = (overRange || pk > 82) ? 'bad' : pk > 75 ? 'ok' : 'good';
       }
     }

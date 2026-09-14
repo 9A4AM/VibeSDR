@@ -4740,6 +4740,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         float rdsEyeDev = 0.0f;                // kHz deviation that full scale represents
         float rdsMpxDev = 0.0f;                // TOTAL peak deviation, kHz — see RdsExt::mpxDevKHz
         float rdsMpxDevHold = 0.0f;            // the peak-hold tick
+        float rdsMpxDevNoise = 0.0f;           // the noise the bar had removed, kHz rms
         std::atomic<bool> stereoDetected{false};
         // Last values pushed to THIS listener (change-detect, to avoid marquee re-trigger).
         float lastSentSig_ = -999.0f;
@@ -8777,6 +8778,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsEyeDev = x.eyeDevKHz;
         st.rdsMpxDev = x.mpxDevKHz;
         st.rdsMpxDevHold = x.mpxDevHoldKHz;
+        st.rdsMpxDevNoise = x.mpxDevNoiseKHz;
         st.rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
         st.rdsRtpArtist = x.rtpArtist ? x.rtpArtist : "";
         st.rdsLongPs = x.longPs ? x.longPs : "";
@@ -17560,14 +17562,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp, afAll; std::vector<unsigned char> afAllOk;
         std::vector<float> pts, mpx;
-        std::vector<unsigned char> eye[3]; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f, mpxDev = 0.0f, mpxHold = 0.0f;
+        std::vector<unsigned char> eye[3]; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f, mpxDev = 0.0f, mpxHold = 0.0f, mpxNoise = 0.0f;
         { std::lock_guard<std::mutex> lk(R.rdsMtx);
           pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
           ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
           ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
           af = R.rdsAf; afAll = R.rdsAfAll; afAllOk = R.rdsAfAllOk; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
           for (int b = 0; b < 3; ++b) eye[b] = R.rdsEye[b];
-          eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; mpxDev = R.rdsMpxDev; mpxHold = R.rdsMpxDevHold;
+          eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; mpxDev = R.rdsMpxDev; mpxHold = R.rdsMpxDevHold; mpxNoise = R.rdsMpxDevNoise;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
@@ -17750,6 +17752,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { char b[32]; snprintf(b, sizeof b, "%.1f", eyeDev); j += ",\"eyeDev\":"; j += b; }
         { char b[32]; snprintf(b, sizeof b, "%.1f", mpxDev); j += ",\"mpxDev\":"; j += b; }
         { char b[32]; snprintf(b, sizeof b, "%.1f", mpxHold); j += ",\"mpxHold\":"; j += b; }
+        // ★ What the deviation bar REMOVED as noise (kHz rms in its 66 kHz measurement band), so a
+        //   corrected reading can say so — see mpxDevNoise_ in vibedsp.h.
+        { char b[32]; snprintf(b, sizeof b, "%.1f", mpxNoise); j += ",\"mpxNoise\":"; j += b; }
         /* ★★ THREE GRIDS, ONE PER COMPONENT — pilot, stereo L-R, RDS. Drawn additively they
          *  reproduce the composite picture the single grid used to draw, with the colour saying
          *  what is making each part of it. 48x24x3 lands near where one 64x32 grid was rather
