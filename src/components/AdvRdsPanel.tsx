@@ -562,6 +562,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  but repeatedly almost locking shows as a trace that forms and collapses, which no single
    *  number reports. And the level wording is suppressed entirely at low S/N, because the
    *  autoscale then tracks NOISE and would call mush "very strong". */
+  /* ★★★ DECLARED BEFORE THE EYE VERDICT THAT READS IT. It sat below, next to the deviation
+   *  readout it belongs to, and the eye's useMemo above referenced it — a `const` in the
+   *  temporal dead zone, so the first frame with a LOCKED pilot and a positive S/N threw
+   *  "Cannot access 'devGate' before initialization" and the whole SDR screen unmounted back
+   *  to the directory (Stuart, 2026-09-14: "opening the advanced RDS box in the app crashes
+   *  back to the directory screen"). Every other branch was fine, which is why it survived a
+   *  typecheck: TypeScript does not flag use-before-declare inside a closure. */
+  const devGate = useRef(false);
   const eyeVerdict = useMemo(() => {
     const d = x?.eyeDev ?? 0;
     const snr = x?.mpxSnr ?? 0;
@@ -592,7 +600,6 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  multipath threshold, the RF AGC window narrower than one LNA step, and this readout), so
    *  the two figures deliberately cannot meet.
    *  ★ A ref rather than state: it must not trigger a re-render, only colour the next one. */
-  const devGate = useRef(false);
   const mpxDevInfo = useMemo(() => {
     const md = x?.mpxDev ?? 0;
     const snr = x?.mpxSnr ?? 0;
