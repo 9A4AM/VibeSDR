@@ -301,7 +301,17 @@ void RxPipeline::rebuildAudio() {
         int d = chDecim_;
         while (d > 1) {
             int f = 1;
-            for (int p = 8; p >= 2; --p) if (d % p == 0) { f = p; break; }
+            /* ★★★ SMALL FACTORS, LARGEST-SMALL FIRST. This took the biggest factor up to 8, so a
+             *   2.4 MS/s RTL feeding a 300 kHz WFM channel got ONE stage of 8 — and the last stage
+             *   carries the deep-stopband Blackman design with the channel's own transition, which
+             *   at the full input rate is 264 taps: a 264-tap complex FIR at 2.4 MS/s, 36 % of the
+             *   Pi's V4 child in perf (2026-09-14) with the NEON dot product already in place.
+             *   4 then 2 puts a 20-tap anti-alias stage at the input rate and the 66-tap deep
+             *   stage at 600 kHz: ~32M MACs/s against ~79M. (2 then 4 is worse — 51M — because the
+             *   deep stage then runs at 1.2 MS/s.) Factors above 4 are only used when nothing
+             *   smaller divides what is left. */
+            for (int p = 4; p >= 2; --p) if (d % p == 0) { f = p; break; }
+            if (f == 1) for (int p = 8; p >= 5; --p) if (d % p == 0) { f = p; break; }
             if (f == 1) { stages.push_back(d); break; }   // awkward prime: one stage
             stages.push_back(f);
             d /= f;
