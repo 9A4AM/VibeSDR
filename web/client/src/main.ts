@@ -8574,10 +8574,23 @@ function drawMpxEye() {
   const ew = rdsExt?.eyeW ?? 0, eh = rdsExt?.eyeH ?? 0;
   const vd = $('rdsEyeVerdict');
   const amp = rdsExt?.eyeAmp ?? [0, 0, 0];
+  /* ★★★ COLOUR IS THE VERDICT NOW, not the identity — the boxes are separate and labelled, so
+   *   the hue is free to say good / average / bad the way the panel's text does (Stuart,
+   *   2026-09-14: "colour code them for good average bad like the text"). The SAME thresholds
+   *   and the SAME three colours as the readouts, so the trace and its number cannot disagree:
+   *   pilot green inside 6.0–7.5 kHz and locked, amber otherwise; RDS green 1.5–5.8, amber weak,
+   *   red over spec or absent; stereo has no "bad" — mono is legitimate — so it is judged by the
+   *   MPX S/N alone: green at 28 dB and above, amber below, red under the meter's own gate. */
+  const GOOD = [125, 255, 154], WARN = [255, 212, 121], BAD = [255, 138, 125];
+  const pdev = rdsExt?.pilotDev ?? 0, rdev = rdsExt?.rdsDev ?? 0, snr = rdsExt?.mpxSnr ?? 0;
+  const plk = rdsExt?.pilotLock;
+  const pilotCol  = (plk === false) ? WARN : (pdev >= 6.0 && pdev <= 7.5) ? GOOD : WARN;
+  const rdsCol    = (rdev <= 0.2 || rdev > 5.8) ? BAD : rdev < 1.5 ? WARN : GOOD;
+  const stereoCol = snr >= 28 ? GOOD : snr >= 10 ? WARN : BAD;
   const bands: Array<{ id: string; name: string; g: string; r: number; gr: number; b: number; khz: number }> = [
-    { id: 'rdsEyeMpx',  name: 'PILOT',  g: rdsExt?.eyeP ?? '', r:  80, gr: 230, b: 255, khz: amp[0] },
-    { id: 'rdsEyeMpxS', name: 'STEREO', g: rdsExt?.eyeS ?? '', r: 255, gr:  90, b: 210, khz: amp[1] },
-    { id: 'rdsEyeMpxR', name: 'RDS',    g: rdsExt?.eyeR ?? '', r: 150, gr: 165, b: 255, khz: amp[2] },
+    { id: 'rdsEyeMpx',  name: 'PILOT',  g: rdsExt?.eyeP ?? '', r: pilotCol[0],  gr: pilotCol[1],  b: pilotCol[2],  khz: amp[0] },
+    { id: 'rdsEyeMpxS', name: 'STEREO', g: rdsExt?.eyeS ?? '', r: stereoCol[0], gr: stereoCol[1], b: stereoCol[2], khz: amp[1] },
+    { id: 'rdsEyeMpxR', name: 'RDS',    g: rdsExt?.eyeR ?? '', r: rdsCol[0],    gr: rdsCol[1],    b: rdsCol[2],    khz: amp[2] },
   ];
   const decodeEye = (src: string, want: number): Uint8Array | null => {
     if (!src) return null;
