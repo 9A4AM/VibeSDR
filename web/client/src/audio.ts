@@ -2307,7 +2307,11 @@ export class AudioPlayer {
    *  packets have arrived, so a connecting page is not told to tap for nothing. */
   get suspended(): boolean {
     if (this.omEl) return this.omEl.paused && this.omSeq > 0 && !this._muted;
-    return !!this.ctx && this.ctx.state === 'suspended';
+    if (!this.ctx) return false;
+    if (this.ctx.state === 'suspended' || (this.ctx.state as string) === 'interrupted') return true;
+    // ★ Safari: the context can be running while the element that carries its output is still
+    //   paused — silent, and only a tap can play it. That is a gate to show, not a mystery.
+    return !!this.mediaEl && !!this.streamDest && this.mediaEl.paused && !this._muted;
   }
 
   /** True while audio frames are actually arriving. */
@@ -2554,10 +2558,21 @@ export class AudioPlayer {
     };
   }
 
+  /** ★★★ THE ELEMENT FIRST, INSIDE THE GESTURE. On Safari the audio leaves through a media
+   *  element fed by the context (Now Playing needs it). This used to AWAIT ctx.resume() and only
+   *  then call play() — and Safari treats that await as the end of the user activation, so the
+   *  play() was refused and the page sat silent until the NEXT tap did it synchronously. Stuart,
+   *  2026-09-14: "often safari needs a second click to get the audio flowing… I have to click
+   *  start audio and then tune or interact with the page". Now every play() is issued before any
+   *  await, and the context resumes alongside. `interrupted` (Safari's third state) counts too. */
   async resume() {
-    if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
-    if (this.mediaEl && this.mediaEl.paused) await this.mediaEl.play().catch(() => {});
-    if (this.omEl && this.omEl.paused) await this.omEl.play().catch(() => {});
+    const plays: Promise<unknown>[] = [];
+    if (this.mediaEl && this.mediaEl.paused) plays.push(this.mediaEl.play().catch(() => {}));
+    if (this.omEl && this.omEl.paused) plays.push(this.omEl.play().catch(() => {}));
+    const ctxP = (this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed')
+      ? this.ctx.resume().catch(() => {}) : null;
+    await Promise.all(plays);
+    if (ctxP) await ctxP;
   }
 
   set volume(v: number) {
