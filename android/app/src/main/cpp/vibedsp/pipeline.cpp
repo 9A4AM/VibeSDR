@@ -442,9 +442,24 @@ void RxPipeline::rebuildAudio() {
             useDeemph_ = (tau > 0.0);
             if (useDeemph_) { deemph_.configure(tau, audFs_); deemph_.reset();
                               deemphR_.configure(tau, audFs_); deemphR_.reset(); }
-            const double cut = 15000.0 / chFs_;
-            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
-            lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_);
+            // ★ Two stages when the decimation is even — see RealFir2. The half-band stage only
+            //   has to protect 15 kHz from what folds at chFs/2, so its transition is enormous
+            //   and it is 9 taps; the deep 15 kHz design then runs at half the rate.
+            auto makeAudioLpf = [&]() {
+                if (audioDecim_ >= 2 && (audioDecim_ % 2) == 0) {
+                    const double preCut = 15000.0 / chFs_;
+                    const double preTrans = std::max((chFs_ * 0.5 - 15000.0) / chFs_ - preCut, preCut * 0.5);
+                    const double cut2 = 15000.0 / (chFs_ * 0.5);
+                    return std::make_unique<RealFir2>(
+                        std::make_unique<RealFir>(designLowpass(preCut, preTrans, /*deepStop=*/false), 2),
+                        std::make_unique<RealFir>(designLowpass(cut2, cut2 * 0.4, /*deepStop=*/true), audioDecim_ / 2));
+                }
+                const double cut = 15000.0 / chFs_;
+                return std::make_unique<RealFir2>(nullptr,
+                        std::make_unique<RealFir>(designLowpass(cut, cut * 0.4, /*deepStop=*/true), audioDecim_));
+            };
+            audioLpf_ = makeAudioLpf();
+            lmrLpf_   = makeAudioLpf();
             pll_.configure(19000.0, chFs_); pll_.reset();
             stereoBlend_ = 0.0f;               // new tune starts mono, blends up
             // ★ The noise meter reads the MPX at the CHANNEL rate (where 17 kHz still exists),

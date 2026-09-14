@@ -1020,6 +1020,31 @@ private:
     int decim_, phase_, K_;
 };
 
+/** ★★★ A REAL FIR IN TWO STAGES — a cheap anti-alias decimate-by-2 in front of the deep one.
+ *  The 15 kHz audio low-pass with its 6 kHz transition is 275 Blackman taps when designed at a
+ *  300 kHz channel rate, and it runs twice (L+R and L−R). On the XCover that was 14 % of the
+ *  app's core (simpleperf, 2026-09-14) with the NEON dot product already in place. A 9-tap
+ *  Hamming half-band decimator first, then the same deep filter designed at half the rate
+ *  (138 taps) and decimating the rest of the way, is ~11.7M MACs/s per filter against 20.6M —
+ *  the same shape of win as the channel cascade. Same API as RealFir so call sites do not change.
+ *  ★ Only used when the audio decimation is even; otherwise it degrades to one stage. */
+class RealFir2 {
+public:
+    RealFir2(std::unique_ptr<RealFir> pre, std::unique_ptr<RealFir> main)
+        : pre_(std::move(pre)), main_(std::move(main)) {}
+    int maxOut(int n) const { return main_->maxOut(pre_ ? pre_->maxOut(n) : n); }
+    int process(const float* in, int n, float* out) {
+        if (!pre_) return main_->process(in, n, out);
+        tmp_.resize((size_t)pre_->maxOut(n));
+        const int m = pre_->process(in, n, tmp_.data());
+        return main_->process(tmp_.data(), m, out);
+    }
+    void reset() { if (pre_) pre_->reset(); main_->reset(); }
+private:
+    std::unique_ptr<RealFir> pre_, main_;
+    std::vector<float> tmp_;
+};
+
 // ── Stereo pilot PLL ─────────────────────────────────────────────────────--
 // Locks to the 19 kHz FM stereo pilot in the MPX and generates phase-coherent
 // 38 kHz (for L-R coherent detection) and 57 kHz (for RDS) references. Reports
@@ -2195,14 +2220,14 @@ public:
     /** Increments once per fault ONSET — a change means a new event, not a continuing one. */
     unsigned faultSeq() const { return faultSeq_; }
 private:
-    std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz (L+R / mono) LPF
+    std::unique_ptr<RealFir2> audioLpf_;    // WFM: 15 kHz (L+R / mono) LPF, two stages
     Deemphasis deemph_;                     // mono / L+R de-emphasis
     bool useDeemph_ = false;
     std::unique_ptr<RationalResampler> resamp_;     // mono / left
     // WFM stereo
     bool stereo_ = false;
     StereoPLL pll_;
-    std::unique_ptr<RealFir> lmrLpf_;       // L-R 15 kHz LPF after 38 kHz mix
+    std::unique_ptr<RealFir2> lmrLpf_;      // L-R 15 kHz LPF after 38 kHz mix, two stages
     Deemphasis deemphR_;
     std::unique_ptr<RationalResampler> resampR_;    // right channel
     std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
