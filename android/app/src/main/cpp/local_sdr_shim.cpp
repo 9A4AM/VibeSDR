@@ -10929,6 +10929,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   shared dial should always obey the person tuning it, that is why we added the
                  *   chat feature to ask for tuning". Tune, mode and block changes never had such
                  *   a guard; leaving DAB now has none either. */
+                std::vector<std::shared_ptr<net::Socket>> socks;   // everyone is told DAB is off
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
