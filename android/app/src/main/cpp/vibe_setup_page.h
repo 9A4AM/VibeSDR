@@ -349,7 +349,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <option value="2">Only as a fallback for old browsers</option>
         </select>
         <div class="hint" id="uncompHint">Raw audio is about twenty times the bandwidth of Opus,
-          out of your upload.</div></label>
+          out of your upload. Listeners arriving through the Cloudflare tunnel always get Opus,
+          whatever you choose here — raw audio is less reliable over the tunnel and outside its
+          usage terms. Your own network, and direct connections to a port you forward yourself,
+          follow this setting.</div></label>
       </div>
 
       <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK

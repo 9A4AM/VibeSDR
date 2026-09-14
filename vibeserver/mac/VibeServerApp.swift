@@ -2091,10 +2091,13 @@ struct SettingsView: View {
                     Text("Listener's choice").tag(1)
                     Text("Compatibility only").tag(2)
                 }
-                Text("Compressed audio is about 10 KB/s per listener; uncompressed is nearer "
+                Text("Compressed audio is about 12 KB/s per listener; uncompressed is nearer "
                    + "187 KB/s out of YOUR connection. OFF turns it away with an explanation, "
                    + "LISTENER'S CHOICE offers it, COMPATIBILITY ONLY gives it only to clients "
-                   + "that cannot decode the compressed stream.")
+                   + "that cannot decode the compressed stream. Listeners arriving through the "
+                   + "Cloudflare tunnel always get Opus, whatever you choose: raw audio is less "
+                   + "reliable over the tunnel and outside its usage terms. Your own network and "
+                   + "direct connections to a port you forward yourself follow this setting.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Advertise on local network", isOn: Binding(
                     get: { server.advertise },

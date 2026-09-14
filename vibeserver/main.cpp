@@ -282,7 +282,8 @@ void usage() {
         "                        receiver reachable from the internet.\n"
         "  --session-limit MIN   per-listener time limit; 0 = unlimited\n"
         "  --force-idle-saver    listeners may not switch idle power-saving off\n"
-        "  --uncompressed MODE   off | choice | compat  (raw audio is ~20x the bytes)\n");
+        "  --uncompressed MODE   off | choice | compat  (raw audio is ~20x the bytes;\n"
+        "                        the Cloudflare tunnel always gets Opus; LAN and direct follow it)\n");
 }
 
 bool parse(int argc, char** argv, Opts& o) {

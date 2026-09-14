@@ -1641,6 +1641,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 onPress={() => { setUncomp(v as 0 | 1 | 2); AsyncStorage.setItem(K.uncomp, String(v));
                                  if (runningRef.current) setVibeServerUncompressedAudio(v as 0 | 1 | 2); }} />
             ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+              Whatever you choose, listeners arriving through the Cloudflare tunnel always get Opus:
+              raw audio is about twenty times the bytes, less reliable over the tunnel, and outside
+              its usage terms. Your own network, and direct connections to a port you forward
+              yourself, follow this setting.
+            </Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               This phone always gets uncompressed audio from its own server — the setting rations
               your UPLINK, and listening on the same device never touches it.
