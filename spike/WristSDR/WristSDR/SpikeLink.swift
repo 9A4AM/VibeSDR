@@ -179,6 +179,8 @@ final class SpikeLink: ObservableObject {
   private var sessionNoticeUntil: Double = 0
   /// The owner's limit, announced once per connection.
   @Published var sessionNotice: String? = nil
+  /// The soft-limit 'time is up' notice has been posted for this session — see updateSessionPill.
+  private var sessionExpiredSaid = false
   private var sessionNoticeDone = false
   /// ★ The slot has RUN OUT. The server ends the session either way; this exists so
   /// the ending is EXPLAINED. Being dropped back to a list with no word for it is
@@ -274,8 +276,15 @@ final class SpikeLink: ObservableObject {
     if left == 0 && !sessionEnded {
       if sessionLimitSoft {
         showSessionPill = true
-        sessionNotice = "Your guaranteed time is up — you keep the radio until somebody else wants it."
-        sessionNoticeUntil = now + 12
+        // ★★ SAID ONCE. This ran every tick while `left == 0` — which on a soft limit is the rest
+        //    of the session — re-posting the notice and pushing its expiry 12 s out each time, so
+        //    it never went and a tap cleared it for exactly one tick (Stuart, 2026-09-15: "the
+        //    blue warning never goes anymore when it used to").
+        if !sessionExpiredSaid {
+          sessionExpiredSaid = true
+          sessionNotice = "Your guaranteed time is up — you keep the radio until somebody else wants it."
+          sessionNoticeUntil = now + 12
+        }
       } else {
         sessionEnded = true
         showSessionPill = true
@@ -555,7 +564,7 @@ final class SpikeLink: ObservableObject {
     adminArmed = false; adminArmFailed = false
     sessionSecsLeft = -1; sessionLimitMin = 0; sessionLimitSoft = false
     sessionShownMarks.removeAll(); sessionNoticeDone = false
-    sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
+    sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false; sessionExpiredSaid = false
     sessionDeadline = nil; lastServerSecs = -1; sessionNoticeUntil = 0
     evicted = false
     client?.goIdle()

@@ -504,7 +504,9 @@ link.setAutoContrast(wfAutoContrast)
                   ? (link.sessionSecsLeft == 0 ? "checkmark.shield" : "shield.lefthalf.filled")
                   : "hourglass")
               .font(.system(size: 10, weight: .bold))
-            Text(link.sessionLimitSoft && link.sessionSecsLeft == 0 ? "OPEN" : link.sessionLeftText)
+            // ★ "YOURS", not "OPEN": the guaranteed time has passed and the radio stays with you.
+            //   "OPEN" beside a shield read as a button that did nothing (Stuart, 2026-09-15).
+            Text(link.sessionLimitSoft && link.sessionSecsLeft == 0 ? "YOURS" : link.sessionLeftText)
               .font(.system(size: 12, weight: .semibold, design: .rounded))
           }
           .foregroundStyle(.white)
