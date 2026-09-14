@@ -3492,6 +3492,7 @@ final class VibeSpatialOutput {
   private var anchored = false
   private(set) var isRunning = false
   private(set) var isPlaying = false
+  private var loggedFirst = false
 
   var volume: Float {
     get { renderer.volume }
@@ -3523,10 +3524,12 @@ final class VibeSpatialOutput {
   /** The engine's start(): from here on buffers are accepted. */
   func start() throws { isRunning = true }
 
-  /** The player's play(): the clock runs. */
+  /** The player's play(): the clock runs. Also accepts buffers from here on, so a play() with
+   *  no start() (the module's flush path) can never leave the output deaf. */
   func play() {
     if sync.rate == 0 { sync.setRate(1.0, time: sync.currentTime()) }
     isPlaying = true
+    isRunning = true
   }
 
   /** The player's pause(): the clock holds, queued audio stays. */
@@ -3536,13 +3539,17 @@ final class VibeSpatialOutput {
   }
 
   /** The player's stop() AND the engine's stop(): queued audio is discarded, the clock holds.
-   *  The module calls both back to back on a flush and on release; either alone is complete. */
+   *  The module calls both back to back on a flush and on release; either alone is complete.
+   *  ★★★ isRunning STAYS TRUE. The first cut cleared it here, and the module's retune flush is
+   *      `player.stop(); player.play()` with no engine.start() in between — so after the first
+   *      tune every buffer met the isRunning guard in scheduleBuffer and was dropped: iOS 289
+   *      connected and played NOTHING (Stuart, 2026-09-15 01:15). A stop is a flush, not a
+   *      teardown; the object is simply released when the module rebuilds. */
   func stop() {
     renderer.flush()
     sync.rate = 0
     q.sync { anchored = false }
     isPlaying = false
-    isRunning = false
   }
 
   /** One buffer onto the timeline. `completionHandler` fires when its last frame is due. */
@@ -3596,6 +3603,15 @@ final class VibeSpatialOutput {
                                sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
           let sb = sample else { completionHandler?(); return }
     renderer.enqueue(sb)
+    // ★ Say so ONCE, and say if the renderer has failed — the one place a silent device speaks.
+    if !loggedFirst {
+      loggedFirst = true
+      NSLog("[VibeSpatialOutput] first buffer enqueued: %d frames, %d ch, rate %.0f, sync rate %.1f, status %ld",
+            frames, channels, format.sampleRate, sync.rate, renderer.status.rawValue)
+    }
+    if renderer.status == .failed, let e = renderer.error {
+      NSLog("[VibeSpatialOutput] renderer FAILED: %@", e.localizedDescription)
+    }
     if let done = completionHandler {
       // Fire when the last frame is due — the same moment the player node reported.
       let secs = max(0.0, CMTimeGetSeconds(CMTimeSubtract(CMTimeAdd(pts, dur), sync.currentTime())))
