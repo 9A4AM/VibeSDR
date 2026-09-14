@@ -6731,6 +6731,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     int occupantWarned = 0;
     /** address -> monotonic time the cooldown ends. Pruned lazily on lookup. */
     std::map<std::string, double> cooldownUntil;
+    std::map<std::string, std::deque<double>> connectStorm;   // recent socket opens per address — see the storm guard
 
     /** ★★★ WHOSE TURN IS IT, AND WHEN DID IT START — KEYED ON THE ADDRESS, NOT THE SESSION.
      *
@@ -14392,6 +14393,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    receiver is doing, or to stop it.
             if (!isLoopback(sock->peerAddress()) && !adminAuthed) {
                 const double now = Impl::nowSecs();
+                /* ★★★ A SESSION STORM IS REFUSED, NOT SERVED. On 2026-09-14 one address opened a
+                 *   fresh session on every Pi radio about twice a second for hours — 4,982 on the
+                 *  V4L in a day, each one "landing", restarting the audio chain and counting as
+                 *   the occupant, so a real listener from the same address arrived to TIME UP
+                 *   the moment they connected. A person cannot reload thirty times a minute; a
+                 *   runaway page can. Past 30 new sockets in a minute the address gets the
+                 *   ordinary cooldown, which the clients already render honestly, and the log
+                 *   names it. Loopback and admins are exempt exactly as the cooldown is. */
+                {
+                    auto& hits = connectStorm[sock->peerAddress()];
+                    hits.push_back(now);
+                    while (!hits.empty() && hits.front() < now - 60.0) hits.pop_front();
+                    if (hits.size() > 30) {
+                        LOGE("session storm from %s — %zu new sockets in a minute, refusing for %ds",
+                             sock->peerAddress().c_str(), hits.size(), (int)kSessionCooldownSec * 2);
+                        cooldownUntil[sock->peerAddress()] = now + kSessionCooldownSec * 2;
+                        hits.clear();
+                    }
+                }
                 const auto it = cooldownUntil.find(sock->peerAddress());
                 if (it != cooldownUntil.end()) {
                     if (it->second > now) {
