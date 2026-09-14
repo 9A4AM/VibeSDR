@@ -397,7 +397,7 @@ export interface DabPanelProps {
 
 export default function DabPanel(p: DabPanelProps) {
   const [pane, setPane] = React.useState<'stations' | 'signal'>('stations');
-  const { height: winH } = useWindowDimensions();
+  const { height: winH, width: winW } = useWindowDimensions();
   /* ★★★ THE PANEL MUST NOT GROW UP INTO THE TOP CHIPS, AND THE REASON IS TOUCH, NOT LOOKS.
    *  A full multiplex is ~20 services, which made the panel tall enough to reach the "Servers"
    *  chip, the session timer and the listener count — and those are drawn ABOVE it and swallow
@@ -405,7 +405,11 @@ export default function DabPanel(p: DabPanelProps) {
    *  perfectly and did nothing at all (measured on the Xcover on 11A, 2026-09-08, where the taps
    *  fell through to the list instead).
    *  ★ So the BODY is capped to what is left after the chips, and the list scrolls inside it. */
-  const maxBody = p.tall ? Math.max(140, winH - p.bottomOffset - 190) : 230;
+  /* ★ 280 px of headroom on a PHONE, not 190: the tall box grows upward from the bottom, and on
+   *  the iPhone its header rode over the GUARANTEED TIME card top-right (Stuart's screenshot,
+   *  2026-09-14 23:52). The card sits below the server name, itself below the safe area; 280
+   *  clears it on every notched phone. Tablets and the Mac keep the tighter reserve. */
+  const maxBody = p.tall ? Math.max(140, winH - p.bottomOffset - (winW < 500 ? 280 : 190)) : 230;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const txLines = useMemo(() => (d ? rememberTransmitters(d) : []), [d]);
@@ -445,12 +449,16 @@ export default function DabPanel(p: DabPanelProps) {
   {
     const v = typeof d?.pcmPushed === 'number' ? d.pcmPushed : -1, now = Date.now();
     if (v >= 0 && v !== pcm.current.last) {
-      if (pcm.current.last >= 0 && v > pcm.current.last) { if (now - pcm.current.roseAt > 1500) pcm.current.runStart = now; pcm.current.roseAt = now; }
+      /* ★ 3000 ms between rises before it counts as a NEW run (the web uses 1500). The phone
+       *  receives DAB state less often than the browser and a report that is late by a few hundred
+       *  ms restarted the run on every rise, so "waiting for the decoder to run clean" never
+       *  cleared on a playing station (iPhone, 2026-09-14 23:52). A real stall is seconds. */
+      if (pcm.current.last >= 0 && v > pcm.current.last) { if (now - pcm.current.roseAt > 3000) pcm.current.runStart = now; pcm.current.roseAt = now; }
       pcm.current.last = v;
     }
   }
   const decoderFlowing = pcm.current.runStart >= pickedAt && pcm.current.roseAt >= pickedAt + 400
-    && pcm.current.roseAt - pcm.current.runStart >= 1000 && Date.now() - pcm.current.roseAt < 1500;
+    && pcm.current.roseAt - pcm.current.runStart >= 1000 && Date.now() - pcm.current.roseAt < 3500;
   /* ★★★ AND THIS IS WHY THE APP NEVER SETTLED. Stuart, 2026-09-13: "its rare on the browser by
    *     the way, but the app never seems to settle."
    *
