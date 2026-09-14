@@ -9347,9 +9347,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 monoBuf[i] = (int16_t)(((int)pcm[i*2] + (int)pcm[i*2+1]) / 2);
             pcm = monoBuf.data(); ch = 1;
         }
+        // ★★★ ONE STREAM SHAPE FOR THE LIFE OF THE SOCKET: Opus is ALWAYS STEREO unless the client
+        //     asked for mono. Every mode change that flipped mono↔stereo (AM→FM, the DAB switch)
+        //     made the client tear down and rebuild its decoder, and on Safari that is where the
+        //     audio dropped (Stuart, 2026-09-14: "usually on the DAB transition"). Opus codes
+        //     stereo as mid+side, so a duplicated mono costs a few kb/s, not double. Stuart's
+        //     call: "upscale everything to stereo Opus so no audio changes will ever be required".
+        const int contentCh = ch;              // the bitrate follows the CONTENT, not the wrapper
+        std::vector<int16_t> upBuf;
+        if (ch == 1 && !c->forceMono && c->wantsOpus) {
+            upBuf.resize((size_t)count * 2);
+            for (int i = 0; i < count; i++) { upBuf[i*2] = pcm[i]; upBuf[i*2+1] = pcm[i]; }
+            pcm = upBuf.data(); ch = 2;
+        }
 #ifdef VIBE_HAVE_OPUS
         if (c->wantsOpus) {
-            c->opus.setBitrate(opusBitrateFor(ch));
+            c->opus.setBitrate(opusBitrateFor(contentCh));
             std::vector<std::vector<uint8_t>> packets;
             c->opus.encode(pcm, count, ch, packets);
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;
@@ -9396,12 +9409,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 monoBuf[i] = (int16_t)(((int)pcm[i*2] + (int)pcm[i*2+1]) / 2);
             pcm = monoBuf.data(); ch = 1;
         }
+        // ★ Same rule as the per-client path: the Opus stream is always stereo unless mono was asked.
+        const int contentCh = ch;              // the bitrate follows the CONTENT, not the wrapper
+        std::vector<int16_t> upBuf;
+        if (ch == 1 && !audioForceMono.load() && audioWantsOpus.load()) {
+            upBuf.resize((size_t)count * 2);
+            for (int i = 0; i < count; i++) { upBuf[i*2] = pcm[i]; upBuf[i*2+1] = pcm[i]; }
+            pcm = upBuf.data(); ch = 2;
+        }
 
 #ifdef VIBE_HAVE_OPUS
         // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
         // current web client — is never sent it, so nothing breaks; it gets PCM below.
         if (audioWantsOpus.load()) {
-            opusEnc.setBitrate(opusBitrateFor(ch));
+            opusEnc.setBitrate(opusBitrateFor(contentCh));
             std::vector<std::vector<uint8_t>> packets;
             opusEnc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;   // always 48 kHz
