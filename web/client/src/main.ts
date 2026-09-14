@@ -2593,8 +2593,13 @@ let rdsPi = -1;
 let devGateOpen = false;
 /* ★ Scratch canvas for the composite eye, at GRID resolution — the smoothed upscale to the
  *  display happens in drawImage. Kept at module scope so it is allocated once, not per frame. */
-let eyeTmp: HTMLCanvasElement | null = null;
-let eyeTmpCtx: CanvasRenderingContext2D | null = null;
+/* ★★★ ONE SCRATCH CANVAS PER BAND. With one shared scratch, Safari handed the pilot box the
+ *  STEREO band's image (an 8-lobe pattern in the pilot box, the boxes flashing each other's
+ *  colours) — drawImage straight after putImageData on the same canvas is not synchronous
+ *  there. Chromium never showed it. Stuart, 2026-09-14: "the pilot is flashing different
+ *  colours". The server's grids were verified clean on the wire. */
+const eyeTmp: Array<HTMLCanvasElement | null> = [null, null, null];
+const eyeTmpCtx: Array<CanvasRenderingContext2D | null> = [null, null, null];
 let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
 let rdsSig = -99;   // 57 kHz level vs pilot, dB
 let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
@@ -8592,13 +8597,15 @@ function drawMpxEye() {
     }
     return o >= want ? out : null;
   };
-  if (!eyeTmp || eyeTmp.width !== Math.max(1, ew) || eyeTmp.height !== Math.max(1, eh)) {
-    eyeTmp = document.createElement('canvas');
-    eyeTmp.width = Math.max(1, ew); eyeTmp.height = Math.max(1, eh);
-    eyeTmpCtx = eyeTmp.getContext('2d');
-  }
   let haveAny = false;
-  for (const bnd of bands) {
+  for (let bi = 0; bi < bands.length; bi++) {
+    const bnd = bands[bi];
+    let tmp = eyeTmp[bi];
+    if (!tmp || tmp.width !== Math.max(1, ew) || tmp.height !== Math.max(1, eh)) {
+      tmp = document.createElement('canvas');
+      tmp.width = Math.max(1, ew); tmp.height = Math.max(1, eh);
+      eyeTmp[bi] = tmp; eyeTmpCtx[bi] = tmp.getContext('2d');
+    }
     const c = document.getElementById(bnd.id) as HTMLCanvasElement | null;
     const g = c?.getContext('2d');
     if (!c || !g) continue;
@@ -8616,8 +8623,8 @@ function drawMpxEye() {
     g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
     g.strokeStyle = 'rgba(255,160,60,0.18)';
     g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
-    const tg = eyeTmpCtx;
-    if (cells && tg) {
+    const tg = eyeTmpCtx[bi];
+    if (cells && tg && tmp) {
       haveAny = true;
       g.imageSmoothingEnabled = false;
       const img = tg.createImageData(ew, eh);
@@ -8632,7 +8639,7 @@ function drawMpxEye() {
         px[o + 3] = Math.min(255, Math.round(255 * (0.06 + 0.94 * a)));
       }
       tg.putImageData(img, 0, 0);
-      g.drawImage(eyeTmp, 0, 0, ew, eh, 0, 0, W, H);
+      g.drawImage(tmp, 0, 0, ew, eh, 0, 0, W, H);
     }
     // The label: the band's name in its colour, and what it measures.
     g.font = `${(7 * kScale).toFixed(1)}px ui-monospace, monospace`;
