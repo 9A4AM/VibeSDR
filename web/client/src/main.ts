@@ -2591,6 +2591,10 @@ let rdsPi = -1;
 /** ★ Whether the deviation readout is currently answering — latched, with hysteresis, so a
  *  station sitting near the S/N threshold does not make it blink. See the note at its use. */
 let devGateOpen = false;
+/* ★ Scratch canvas for the composite eye, at GRID resolution — the smoothed upscale to the
+ *  display happens in drawImage. Kept at module scope so it is allocated once, not per frame. */
+let eyeTmp: HTMLCanvasElement | null = null;
+let eyeTmpCtx: CanvasRenderingContext2D | null = null;
 let rdsBer = -1;    // block error rate %, -1 = decoder has no full window yet
 let rdsSig = -99;   // 57 kHz level vs pilot, dB
 let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
@@ -8560,6 +8564,19 @@ function drawMpxEye() {
   const c = $<HTMLCanvasElement>('rdsEyeMpx');
   const g = c.getContext('2d');
   if (!g) return;
+  /* ★★★ SIZE THE BACKING STORE TO THE DEVICE, NOT TO THE MARKUP. The canvas was a fixed
+   *   180x76 store stretched to whatever CSS width the panel had — so on a phone at DPR 3 a
+   *   180 px store was being blown up to ~900 device pixels, blurring and blocking the plot
+   *   twice over (once here, once from the coarse grid). Desktop hid it only because the panel
+   *   is small and the viewer is further away (Stuart, 2026-09-14).
+   * ★ Capped: past ~4x the grid width there is no more information to show, only fill cost. */
+  {
+    const wantW = Math.max(180, Math.min(768, Math.floor(c.clientWidth  * devicePixelRatio)));
+    const wantH = Math.max(76,  Math.min(384, Math.floor(c.clientHeight * devicePixelRatio)));
+    if (wantW > 0 && wantH > 0 && (c.width !== wantW || c.height !== wantH)) {
+      c.width = wantW; c.height = wantH;
+    }
+  }
   const W = c.width, H = c.height;
   g.fillStyle = '#000';
   g.fillRect(0, 0, W, H);
@@ -8613,18 +8630,41 @@ function drawMpxEye() {
   g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
   g.strokeStyle = 'rgba(255,160,60,0.18)';
   g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
-  const cw = W / ew, ch = H / eh;
-  /* ★★ ADDITIVE, so the components BLEND where they coincide rather than the last one drawn
-   *  winning. That is what keeps the composite's shape: the sum of the three bands is what the
-   *  single-colour eye used to draw, and where all three land together the cell goes pale. */
+  /* ★★★ ONE INTERPOLATED IMAGE, NOT ~4600 HARD-EDGED RECTS PER BAND. The grid is coarse by
+   *   design — it is sized to what the channel rate can actually fill — so drawing each cell as
+   *   a rectangle puts the SERVER's resolution on screen as visible mosaic blocks. On a phone,
+   *   where the panel is a far larger fraction of the display, that is all you see (Stuart,
+   *   2026-09-14: "really blocky and low res when looked at on mobile screens, on desktop its
+   *   hidden by the distance sat at").
+   * ★★ THE CURE IS THE RIGHT ONE BECAUSE A PERSISTENCE DISPLAY IS A CONTINUOUS FIELD. Each
+   *   cell is a COUNT of how often the trace passed through it, so the true picture between two
+   *   cells is an interpolation, not a step — bilinear upscaling shows more of the real signal
+   *   than the blocks do, it does not merely prettify them. Raising the grid instead would cost
+   *   server CPU on every box for something the client can do for free, and the eye already
+   *   burned us once by doing display work per audio block.
+   * ★ It is also CHEAPER: one composited drawImage per band instead of thousands of fillRect
+   *   calls, which is why the ARM boxes were the ones that felt sluggish. */
   const prev = g.globalCompositeOperation;
   g.globalCompositeOperation = 'lighter';
-  for (const bnd of bands) {
-    const cells = bnd.cells;
-    if (!cells) continue;
-    for (let y = 0; y < eh; y++) {
-      for (let x = 0; x < ew; x++) {
-        const v = cells[y * ew + x];
+  // ★ Built at grid resolution, then scaled up by the GPU with smoothing on.
+  if (!eyeTmp || eyeTmp.width !== ew || eyeTmp.height !== eh) {
+    eyeTmp = document.createElement('canvas');
+    eyeTmp.width = ew; eyeTmp.height = eh;
+    eyeTmpCtx = eyeTmp.getContext('2d');
+  }
+  const tg = eyeTmpCtx;
+  if (tg) {
+    g.imageSmoothingEnabled = true;
+    // ★ 'high' asks for a better-than-bilinear filter where the browser has one; it is a hint.
+    (g as unknown as { imageSmoothingQuality?: string }).imageSmoothingQuality = 'high';
+    const img = tg.createImageData(ew, eh);
+    const px = img.data;
+    for (const bnd of bands) {
+      const cells = bnd.cells;
+      if (!cells) continue;
+      px.fill(0);
+      for (let i = 0; i < ew * eh; i++) {
+        const v = cells[i];
         if (v <= 0) continue;
         /* Gamma on the intensity: a linear ramp buries everything but the densest trace, and the
          * faint outliers are the whole point of a persistence display.
@@ -8633,9 +8673,12 @@ function drawMpxEye() {
          *   pilot underneath it could not be seen at all. Lower alpha keeps the HUES readable,
          *   which is the entire point of splitting them. */
         const a = Math.pow(v / 63, 0.45);
-        g.fillStyle = `rgba(${bnd.r},${bnd.gr},${bnd.b},${(0.03 + 0.52 * a).toFixed(3)})`;
-        g.fillRect(x * cw, y * ch, Math.ceil(cw) , Math.ceil(ch));
+        const o = i * 4;
+        px[o] = bnd.r; px[o + 1] = bnd.gr; px[o + 2] = bnd.b;
+        px[o + 3] = Math.min(255, Math.round(255 * (0.03 + 0.52 * a)));
       }
+      tg.putImageData(img, 0, 0);
+      g.drawImage(eyeTmp, 0, 0, ew, eh, 0, 0, W, H);
     }
   }
   g.globalCompositeOperation = prev;
