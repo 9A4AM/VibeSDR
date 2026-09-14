@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreMedia
 import CoreLocation
 import MediaPlayer
 import UIKit
@@ -128,8 +129,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var opusDecoder:       OpaquePointer?
   private var decoderSampleRate: Int32 = 0
   private var decoderChannels:   Int32 = 0
-  private var audioEngine:       AVAudioEngine?
-  private var playerNode:        AVAudioPlayerNode?
+  /* ★★★ ONE OBJECT BEHIND TWO NAMES. The playout used to be an AVAudioEngine with an
+   *  AVAudioPlayerNode; it is now VibeSpatialOutput (at the foot of this file), which drives
+   *  AVSampleBufferAudioRenderer — Apple's media renderer, the ONLY playout iOS and macOS
+   *  will spatialise ("Spatial Audio: Not Available" on both with the engine, 2026-09-14).
+   *  Both names point at the same instance so every call site below reads as it always did:
+   *  `engine.start()/stop()/isRunning`, `player.play()/pause()/stop()/isPlaying/volume/
+   *  scheduleBuffer`. */
+  private var audioEngine:       VibeSpatialOutput?
+  private var playerNode:        VibeSpatialOutput?
   private var audioFormat:       AVAudioFormat?
 
   // FIXED-FORMAT ENGINE (half-speed FM bug 2026-06-12): the server flips
@@ -2268,42 +2276,31 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
      *   VibeSilentAudio — which is exactly the sort of contention that produces stutter and
      *   dropouts, and it never stopped while Buddy was on the wrist. */
     vibeSetRealAudioPlaying(true)
-    let engine = AVAudioEngine()
-    let player = AVAudioPlayerNode()
-    engine.attach(player)
     guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                   sampleRate: ENGINE_RATE,
                                   channels: ENGINE_CH,
                                   interleaved: false) else {
       NSLog("[VibePowerModule] AVAudioFormat init failed"); return
     }
-    engine.connect(player, to: engine.mainMixerNode, format: fmt)
+    guard let out = VibeSpatialOutput(format: fmt) else {
+      NSLog("[VibePowerModule] spatial output init failed"); return
+    }
+    let engine = out, player = out
     do {
       try engine.start()
       player.play()
-      NSLog("[VibePowerModule] engine started %.0fHz %dch", ENGINE_RATE, Int(ENGINE_CH))
-      notePath("engine started")
+      NSLog("[VibePowerModule] spatial output started %.0fHz %dch", ENGINE_RATE, Int(ENGINE_CH))
+      notePath("spatial output started")
     } catch {
-      NSLog("[VibePowerModule] engine start error: %@", error.localizedDescription)
-      notePath("engine START FAILED \(error.localizedDescription)"); return
+      NSLog("[VibePowerModule] output start error: %@", error.localizedDescription)
+      notePath("output START FAILED \(error.localizedDescription)"); return
     }
     audioEngine = engine
     playerNode  = player
     audioFormat = fmt
 
-    // Route changes (AirPods connect etc.) still need an engine restart, but
-    // the format is fixed so a restart can never disagree with the decoder.
-    NotificationCenter.default.addObserver(
-      forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-    ) { [weak self] _ in
-      guard let self, self.isRunning else { return }
-      NSLog("[VibePowerModule] config change — restarting")
-      DispatchQueue.main.async {
-        self.playerNode?.stop(); self.audioEngine?.stop()
-        self.playerNode = nil;   self.audioEngine = nil; self.audioFormat = nil
-        self.startEngine()
-      }
-    }
+    // ★ No configuration-change observer any more: the sample-buffer renderer follows a route
+    //   change (AirPods in/out) itself, with no restart and no format to disagree about.
   }
 
   // MARK: - Packet parsing
@@ -3458,5 +3455,151 @@ enum VibeCrashLog {
   /// FIRST thing written on a launch and it records how we were launched.
   @objc static func session(_ why: String) {
     log("──────── LAUNCH (\(why)) build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") ────────")
+  }
+}
+
+
+// MARK: - VibeSpatialOutput — playout through Apple's media renderer
+
+/** ★★★ THE PLAYOUT iOS AND macOS WILL SPATIALISE.
+ *
+ *  AVAudioEngine ends in a raw output unit, and the system offers "Spatialise Stereo" only to
+ *  audio going through its media renderer — AVPlayer, or this: AVSampleBufferAudioRenderer with
+ *  `allowedAudioSpatializationFormats` declared. Measured 2026-09-14: the engine build showed
+ *  "Spatial Audio · Not Available" on the iPhone AND on the Mac; the web client's media-element
+ *  route on the same Mac made it selectable. Same playout path as a streaming service.
+ *
+ *  The surface mirrors what VibePowerModule already called on AVAudioEngine + AVAudioPlayerNode
+ *  so the rest of the module is unchanged: start/stop/isRunning, play/pause/isPlaying, volume,
+ *  scheduleBuffer(_:completionHandler:). Buffers are the module's own float32 planar 48 kHz
+ *  stereo AVAudioPCMBuffers; each becomes one CMSampleBuffer on a running timeline.
+ *
+ *  ★ TIMELINE. The synchronizer's clock runs from play(); each buffer is stamped at the end of
+ *    the previous one. If arrival has fallen behind the clock (a source gap — exactly what the
+ *    module's 220 ms pre-roll exists for) the next buffer is re-anchored a little ahead of NOW,
+ *    which is the same "re-arm the cushion" the player node path did by stopping and playing.
+ *  ★ COMPLETIONS. The renderer has no per-buffer callback, so the completion the module uses
+ *    to account `queuedSeconds` is fired from a timer at the buffer's scheduled END — the same
+ *    moment the player node reported. */
+final class VibeSpatialOutput {
+  private let renderer = AVSampleBufferAudioRenderer()
+  private let sync     = AVSampleBufferRenderSynchronizer()
+  private let format: AVAudioFormat
+  private let fmtDesc: CMAudioFormatDescription
+  private let channels: Int
+  private let q = DispatchQueue(label: "vibe.spatial.timeline")
+  private var nextPts = CMTime.zero
+  private var anchored = false
+  private(set) var isRunning = false
+  private(set) var isPlaying = false
+
+  var volume: Float {
+    get { renderer.volume }
+    set { renderer.volume = max(0, min(1, newValue)) }
+  }
+
+  init?(format: AVAudioFormat) {
+    self.format = format
+    self.channels = Int(format.channelCount)
+    var asbd = AudioStreamBasicDescription(
+      mSampleRate: format.sampleRate, mFormatID: kAudioFormatLinearPCM,
+      mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+      mBytesPerPacket: UInt32(4 * channels), mFramesPerPacket: 1,
+      mBytesPerFrame: UInt32(4 * channels), mChannelsPerFrame: UInt32(channels),
+      mBitsPerChannel: 32, mReserved: 0)
+    var desc: CMAudioFormatDescription?
+    let st = CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: &asbd,
+                                            layoutSize: 0, layout: nil, magicCookieSize: 0,
+                                            magicCookie: nil, extensions: nil,
+                                            formatDescriptionOut: &desc)
+    guard st == noErr, let d = desc else { return nil }
+    fmtDesc = d
+    if #available(iOS 15.0, macOS 12.0, *) {
+      renderer.allowedAudioSpatializationFormats = .monoStereoAndMultichannel
+    }
+    sync.addRenderer(renderer)
+  }
+
+  /** The engine's start(): from here on buffers are accepted. */
+  func start() throws { isRunning = true }
+
+  /** The player's play(): the clock runs. */
+  func play() {
+    if sync.rate == 0 { sync.setRate(1.0, time: sync.currentTime()) }
+    isPlaying = true
+  }
+
+  /** The player's pause(): the clock holds, queued audio stays. */
+  func pause() {
+    sync.rate = 0
+    isPlaying = false
+  }
+
+  /** The player's stop() AND the engine's stop(): queued audio is discarded, the clock holds.
+   *  The module calls both back to back on a flush and on release; either alone is complete. */
+  func stop() {
+    renderer.flush()
+    sync.rate = 0
+    q.sync { anchored = false }
+    isPlaying = false
+    isRunning = false
+  }
+
+  /** One buffer onto the timeline. `completionHandler` fires when its last frame is due. */
+  func scheduleBuffer(_ buf: AVAudioPCMBuffer, completionHandler: (() -> Void)? = nil) {
+    let frames = Int(buf.frameLength)
+    guard frames > 0, let src = buf.floatChannelData, isRunning else { completionHandler?(); return }
+    // Planar → interleaved packed float32.
+    let bytes = frames * channels * 4
+    var block: CMBlockBuffer?
+    guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
+                                             blockLength: bytes, blockAllocator: kCFAllocatorDefault,
+                                             customBlockSource: nil, offsetToData: 0,
+                                             dataLength: bytes, flags: 0,
+                                             blockBufferOut: &block) == noErr,
+          let bb = block else { completionHandler?(); return }
+    var dataPtr: UnsafeMutablePointer<Int8>?
+    var lengthAtOffset = 0, totalLength = 0
+    guard CMBlockBufferGetDataPointer(bb, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset,
+                                      totalLengthOut: &totalLength, dataPointerOut: &dataPtr) == noErr,
+          let raw = dataPtr else { completionHandler?(); return }
+    raw.withMemoryRebound(to: Float.self, capacity: frames * channels) { dst in
+      if channels == 1 {
+        dst.update(from: src[0], count: frames)
+      } else {
+        for c in 0..<channels {
+          let s = src[min(c, Int(buf.format.channelCount) - 1)]
+          var o = c
+          for i in 0..<frames { dst[o] = s[i]; o += channels }
+        }
+      }
+    }
+    let dur = CMTime(value: CMTimeValue(frames), timescale: CMTimeScale(format.sampleRate))
+    var pts = CMTime.zero
+    q.sync {
+      let now = sync.currentTime()
+      let floor = CMTimeAdd(now, CMTime(value: 1, timescale: 50))         // 20 ms ahead of the clock
+      if !anchored || CMTimeCompare(nextPts, floor) < 0 {
+        // First buffer, or arrival fell behind the clock: re-anchor just ahead of now.
+        nextPts = CMTimeAdd(now, CMTime(value: 1, timescale: 20))         // 50 ms
+        anchored = true
+      }
+      pts = nextPts
+      nextPts = CMTimeAdd(nextPts, dur)
+    }
+    var timing = CMSampleTimingInfo(duration: dur, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+    var sample: CMSampleBuffer?
+    guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: bb, dataReady: true,
+                               makeDataReadyCallback: nil, refcon: nil, formatDescription: fmtDesc,
+                               sampleCount: frames, sampleTimingEntryCount: 1,
+                               sampleTimingArray: &timing, sampleSizeEntryCount: 0,
+                               sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
+          let sb = sample else { completionHandler?(); return }
+    renderer.enqueue(sb)
+    if let done = completionHandler {
+      // Fire when the last frame is due — the same moment the player node reported.
+      let secs = max(0.0, CMTimeGetSeconds(CMTimeSubtract(CMTimeAdd(pts, dur), sync.currentTime())))
+      q.asyncAfter(deadline: .now() + secs) { done() }
+    }
   }
 }
