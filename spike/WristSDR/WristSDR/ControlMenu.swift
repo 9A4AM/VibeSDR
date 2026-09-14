@@ -1059,6 +1059,13 @@ struct HardwareSheet: View {
               fmCell("CEQ", on: radio.fmCeq) { radio.setFmCeq(!radio.fmCeq) }
               fmCell("NB",  on: radio.fmNb)  { radio.setFmNb(!radio.fmNb) }
             }
+            // ★ The OTHER noise blanker — every mode but broadcast FM (the phone's audio-menu
+            //   NOISE BLANKER, the web's nbxBtn). Found missing on the phone 2026-09-15; it was
+            //   missing here too. Its own heading so it is not read as a fifth FM treatment.
+            Text("NOISE BLANKER · ALL OTHER MODES").font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.5)).padding(.top, 4)
+            HStack(spacing: 6) {
+              fmCell("NB",  on: radio.fmNbx) { radio.setFmNbx(!radio.fmNbx) }
+            }
           }.padding(.top, 3)
         }
 

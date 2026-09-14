@@ -508,6 +508,9 @@ final class UberClient: ObservableObject {
   @Published var fmIms = true
   @Published var fmCeq = true
   @Published var fmNb  = true
+  /// ★ The audio-menu NOISE BLANKER (every mode but WFM) — the phone and web's `nbx`. Off until
+  ///   chosen, as on both of them; reported by the server once it exists there.
+  @Published var fmNbx = false
   /// True once the server has reported any of them — an older VibeServer never does, and Jr then
   /// draws no controls rather than offering ones that cannot work.
   @Published var hasFmDsp = false
@@ -532,6 +535,7 @@ final class UberClient: ObservableObject {
       fmIms = (j["ims"] as? Bool) ?? true
       fmCeq = (j["ceq"] as? Bool) ?? true
       fmNb  = (j["nb"]  as? Bool) ?? true
+      if let b = j["nbx"] as? Bool { fmNbx = b }
     }
     if let b = j["adminSet"] as? Bool { adminSet = b }
     if let b = j["adminOk"] as? Bool { adminOk = b }
@@ -1144,6 +1148,7 @@ final class UberClient: ObservableObject {
   func setFmIms(_ on: Bool) { guard isVibe else { return }; fmIms = on; specSock.send(json: ["type": "ims", "on": on]) }
   func setFmCeq(_ on: Bool) { guard isVibe else { return }; fmCeq = on; specSock.send(json: ["type": "ceq", "on": on]) }
   func setFmNb(_ on: Bool)  { guard isVibe else { return }; fmNb = on;  specSock.send(json: ["type": "nb", "on": on]) }
+  func setFmNbx(_ on: Bool) { guard isVibe else { return }; fmNbx = on; specSock.send(json: ["type": "nbx", "on": on]) }
 
   // ── Published state (the UI mirrors this and nothing else) ────────────────
   @Published var status = "starting"
