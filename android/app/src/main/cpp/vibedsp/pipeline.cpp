@@ -1205,25 +1205,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
                      *   below the grid. The PLL can hand out a NaN clock briefly after a mode
                      *   change (here AM 648 kHz → WFM 96.6). Skip the sample; never index on it. */
                     if (!std::isfinite(t)) continue;
-                    const float fx = (t - std::floor(t)) * (float)eyeW_ - 0.5f;
-                    int x0 = (int)fx; if (fx < (float)x0) --x0;
-                    const float wx = fx - (float)x0;
-                    int xa = x0, xb = x0 + 1;
-                    if (xa < 0) xa += eyeW_; if (xb >= eyeW_) xb -= eyeW_;
-                    auto splat = [&](float* acc, float u) {
+                    /* ★★★ ONE CELL PER HIT, NOT A BILINEAR SPLAT. The splat was tried today and it is
+                     *   what made the traces fat: every hit spread over four cells, then bilinear
+                     *   upscaling softened them again, and the pilot came out as a thick blurred
+                     *   ribbon. The XCover's app eye — one cell per hit at 96x48 — is the look
+                     *   Stuart pointed at: "this older look is the aim". Crisp beats smooth here. */
+                    int cx = (int)((t - std::floor(t)) * (float)eyeW_);
+                    if (cx < 0) cx = 0; else if (cx >= eyeW_) cx = eyeW_ - 1;
+                    auto deposit = [&](float* acc, float u) {
                         // Row 0 is the TOP, so +full scale is at the top like a scope.
-                        float fy = (1.0f - u) * halfH - 0.5f;
-                        // ★ Written so a NaN u lands on row 0 rather than at INT_MIN.
-                        if (!(fy >= 0.0f)) fy = 0.0f; else if (fy > (float)(kEyeH - 1)) fy = (float)(kEyeH - 1);
-                        const int y0 = (int)fy;
-                        const int y1 = (y0 + 1 < kEyeH) ? y0 + 1 : y0;
-                        const float wy = fy - (float)y0;
-                        float* r0 = acc + (size_t)y0 * eyeW_;
-                        float* r1 = acc + (size_t)y1 * eyeW_;
-                        r0[xa] += (1.0f - wx) * (1.0f - wy);  r0[xb] += wx * (1.0f - wy);
-                        r1[xa] += (1.0f - wx) * wy;           r1[xb] += wx * wy;
+                        float fy = (1.0f - u) * halfH;
+                        if (!(fy >= 0.0f)) fy = 0.0f;                       // NaN lands on row 0
+                        int cy = (int)fy; if (cy >= kEyeH) cy = kEyeH - 1;
+                        acc[(size_t)cy * eyeW_ + cx] += 1.0f;
                     };
-                    splat(acc0, u0); splat(acc1, u1); splat(acc2, u2);
+                    deposit(acc0, u0); deposit(acc1, u1); deposit(acc2, u2);
                 }
                 eyePeak_ = blockPk;
                 devWinGp_ = devGp; devWinCnt_ += nc;

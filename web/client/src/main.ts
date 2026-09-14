@@ -8654,7 +8654,9 @@ function drawMpxEye() {
   }
   const tg = eyeTmpCtx;
   if (tg) {
-    g.imageSmoothingEnabled = true;
+    // ★ Smoothing OFF: one crisp block per cell, as the app draws it. Bilinear made the
+    //   one-cell traces into blurred ribbons (Stuart, 2026-09-14: the XCover's look is the aim).
+    g.imageSmoothingEnabled = false;
     // ★ 'high' asks for a better-than-bilinear filter where the browser has one; it is a hint.
     (g as unknown as { imageSmoothingQuality?: string }).imageSmoothingQuality = 'high';
     const img = tg.createImageData(ew, eh);
