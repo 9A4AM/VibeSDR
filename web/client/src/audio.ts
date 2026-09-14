@@ -1609,14 +1609,19 @@ export class AudioPlayer {
   private static readonly OM_CUSHION = 0.25;
 
   private async _startMediaPlayout(): Promise<boolean> {
+    /* ★★★ PLAIN MediaSource FIRST. A ManagedMediaSource does not open until the element has
+     *  actually started playing, and start() runs at connect time, not from a tap — so on the
+     *  Mac (measured 2026-09-14) the managed one sat "closed" for the 4 s timeout while a plain
+     *  one was "open" at once. The iPhone has ONLY the managed kind; there the source opens on
+     *  the first tap (resume() plays the element), and we queue packets until it does. */
     const Managed = (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
-    const MS: typeof MediaSource | undefined =
-      Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
+    const Plain: typeof MediaSource | undefined = typeof MediaSource !== 'undefined' ? MediaSource : undefined;
+    const MS = Plain ?? Managed;
     const mime = 'audio/webm; codecs="opus"';
     let ok = false;
     try { ok = !!MS && MS.isTypeSupported(mime); } catch { ok = false; }
     if (!MS || !ok) { console.warn('[audio] media playout: no MediaSource for ' + mime); return false; }
-    this.omManaged = !!Managed && MS === Managed;
+    this.omManaged = !Plain && !!Managed;
     this.omStreaming = false; this.omSawStreaming = false;
     return await new Promise<boolean>((resolve) => {
       const el = document.createElement('audio');
@@ -1645,6 +1650,7 @@ export class AudioPlayer {
             if (!this.omSawStreaming) { this.omManaged = false; this._mediaDrain(); }
           }, 1500);
           this.omEl = el; this.omSrc = ms; this.omBuf = sb;
+          // Packets queued before the source opened start again from a fresh init segment.
           this.omCh = 0; this.omSeq = 0; this.omQueue = [];
           this.omStartedAt = performance.now(); this.omProgressAt = 0; this.omLastTime = -1;
           el.addEventListener('timeupdate', () => {
@@ -1668,20 +1674,23 @@ export class AudioPlayer {
           if (!settled) { settled = true; resolve(false); }
         }
       }, { once: true });
+      /* ★ Not open yet is not a failure: a managed source waits for the tap. Keep the element,
+       *   say so, and let the packets queue — the watchdog hands back to Web Audio only if the
+       *   element is FED and never plays, which cannot trigger before the source opens. */
       setTimeout(() => {
         if (!settled) {
           settled = true;
-          console.warn('[audio] media playout: source never opened (readyState ' + ms.readyState + ')');
-          el.remove();
-          resolve(false);
+          console.info('[audio] media playout: source not open yet (readyState ' + ms.readyState + ') — waiting for a tap');
+          this.omEl = el; this.omSrc = ms;
+          resolve(true);
         }
-      }, 4000);
+      }, 1500);
     });
   }
 
   /** One Opus wire frame ([0]=ch [1]=3 [2..5]=rate, then the packet) → one WebM cluster. */
   private _mediaFeed(buf: ArrayBuffer) {
-    if (!this.omBuf || buf.byteLength < 7) return;
+    if (!this.omEl || buf.byteLength < 7) return;
     const ch = new DataView(buf).getUint8(0) || 1;
     if (ch !== this.omCh) {
       // A new initialisation segment on the same buffer: same codec, new channel count.
@@ -2439,8 +2448,16 @@ export class AudioPlayer {
     const st = this.streamDest?.stream;
     const tr = st ? st.getAudioTracks()[0] : null;
     const el = this.mediaEl;
+    const om = this.omEl;
+    let omBuffered = -1;
+    try { if (om && om.buffered.length) omBuffered = om.buffered.end(om.buffered.length - 1) - om.currentTime; } catch { /* between states */ }
     return {
       path: this.worker ? 'worker' : (this.ws ? 'main' : 'none'),
+      // Media playout (Safari): the element IS the output chain — no context below.
+      mediaPlayout: !!om,
+      mediaTime: om?.currentTime, mediaPaused: om?.paused, mediaReady: om?.readyState,
+      mediaBufferedAheadS: omBuffered, mediaPackets: this.omSeq, mediaChannels: this.omCh,
+      mediaManaged: this.omManaged,
       ctxState: this.ctx?.state, ctxTime: this.ctx?.currentTime, ctxRate: this.ctx?.sampleRate,
       baseLatency: this.ctx?.baseLatency,
       mediaStream: !!this.streamDest, streamActive: st?.active,
