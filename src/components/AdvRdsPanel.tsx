@@ -492,7 +492,7 @@ function decodeEye(src: string, want: number): Uint8Array | null {
 const EYE_COLOURS: Array<[number, number, number]> = [
   [ 80, 230, 255],   // pilot  — cyan
   [255,  90, 210],   // stereo — magenta
-  [170, 110, 255],   // RDS    — violet
+  [150, 165, 255],   // RDS    — blue-lavender: violet at 170,110 vanished into the magenta (Stuart, 2026-09-14)
 ];
 
 const MpxEye = React.memo(function MpxEye(

@@ -8594,7 +8594,7 @@ function drawMpxEye() {
   const bands: Array<{ g: string; r: number; gr: number; b: number; cells: Uint8Array | null }> = [
     { g: rdsExt?.eyeP ?? '', r:  80, gr: 230, b: 255, cells: null },   // pilot  — cyan
     { g: rdsExt?.eyeS ?? '', r: 255, gr:  90, b: 210, cells: null },   // stereo — magenta
-    { g: rdsExt?.eyeR ?? '', r: 170, gr: 110, b: 255, cells: null },   // RDS    — violet
+    { g: rdsExt?.eyeR ?? '', r: 150, gr: 165, b: 255, cells: null },   // RDS    — blue-lavender: violet at 170,110 vanished into the magenta (Stuart, 2026-09-14)
   ];
   /** ★★ DECODE THE RUN-LENGTH FORM — see the encoder in local_sdr_shim.cpp. A '.' means a run
    *  of zeros whose length is the NEXT character (1..64); anything else is one literal cell.
