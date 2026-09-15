@@ -682,6 +682,37 @@ static void dabGainLoadLocked() {
         if (!g_dabGainMem.empty()) LOGI("[DAB] %zu block gain(s) remembered from %s", g_dabGainMem.size(), g_dabGainFile.c_str());
     }
 }
+/* ★★★ THE RSP'S OWN PER-BLOCK MEMORY: THE LNA STATE A MULTIPLEX LAST RAN CLEAN AT. Stuart,
+ *  2026-09-15: "like the RTL-SDRs we remember the RF gain once a multiplex runs clean". Learned
+ *  after 10 s of perfect decoding, applied in ONE write on the next visit to the block, and
+ *  persisted as "dab-lna.txt" beside dab-gains.txt. Same mutex. */
+static std::map<int, int>  g_dabLnaMem;               // block index -> LNA state that decoded it
+static std::string         g_dabLnaFile;
+static bool                g_dabLnaLoaded = false;
+static void dabLnaLoadLocked() {
+    if (g_dabLnaLoaded) return;
+    g_dabLnaLoaded = true;
+    if (g_dabLnaFile.empty()) return;
+    if (FILE* f = std::fopen(g_dabLnaFile.c_str(), "r")) {
+        char name[16]; int st;
+        while (std::fscanf(f, "%15s %d", name, &st) == 2)
+            for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+                if (std::strcmp(vibedab::kBandIII[i].name, name) == 0) { g_dabLnaMem[(int)i] = st; break; }
+        std::fclose(f);
+        if (!g_dabLnaMem.empty()) LOGI("[DAB] %zu block RF gain(s) remembered from %s", g_dabLnaMem.size(), g_dabLnaFile.c_str());
+    }
+}
+static void dabLnaSaveLocked() {
+    if (g_dabLnaFile.empty()) return;
+    const std::string tmp = g_dabLnaFile + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        for (const auto& kv : g_dabLnaMem)
+            if (kv.first >= 0 && (size_t)kv.first < vibedab::kBandIIICount)
+                std::fprintf(f, "%s %d\n", vibedab::kBandIII[kv.first].name, kv.second);
+        std::fclose(f);
+        std::rename(tmp.c_str(), g_dabLnaFile.c_str());
+    }
+}
 static void dabGainSaveLocked() {
     if (g_dabGainFile.empty()) return;
     const std::string tmp = g_dabGainFile + ".tmp";
@@ -2958,86 +2989,71 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     alone; a weak or unlocked one gets an RF rung UP while the IF still has room to absorb
      *     it (reduction ≤ 52 dB), one rung per settle floor, MER re-read after each; a pinned IF
      *     with the level over target still takes the rung DOWN through the rail path below. */
+    /* ★★★ A PINNED AGC IS NOT A SILENT ONE. The tick used to be gated on the AGC having reported
+     *     since our last write — and an AGC parked at 59 dB reports nothing because nothing
+     *     changes, so with the ADC 28 dB over target the loop never ran at all (7D, 2026-09-15,
+     *     not one gain line in an hour). No report is only disqualifying when the peak does not
+     *     confirm a rail. */
+    {
+        const double pk = sdrp->adcPeakDbfs();
+        const int    am = sdrp->ifAgcSetPointDbfs();
+        const bool railSays = std::isfinite(pk) &&
+            ((mean >= 57.0 && pk > am + 3.0) || (mean <= 22.0 && pk < am - 3.0));
+        if (!sdrp->ifAgcReporting() && !railSays) { outMs = 0; outDir = 0; return; }
+    }
+    /* ★★★ DAB: THE SAME IF-DRIVEN RULE, QUICKER, WITH A MEMORY PER MULTIPLEX. Stuart, 2026-09-15:
+     *     "revert it back to being tied to the IF auto gain and just speed it up a little in DAB
+     *     mode using the multiplex stats as the guide. But like the RTL-SDRs we remember the RF
+     *     gain once a multiplex runs clean." So: entering a block that ran clean before is ONE
+     *     write to the remembered LNA state; a block decoding perfectly for 10 s is remembered
+     *     and left alone; otherwise the 30-50 window rule steers with a 2 s sustain instead of
+     *     the FM curve (the 6 s settle floor between writes stands — it is what keeps the API
+     *     alive). */
+    bool dabQuick = false;
     if (g_dabMode.load(std::memory_order_relaxed)) {
-        /* ★★★ ONE CONSIDERED MOVE PER TUNE, THEN HANDS OFF. Stuart: "we take a quick snapshot of
-         *     the multiplex when tuning to it, work out the rough gain then set it in one move,
-         *     then let the IF take over" — and "do not hammer the RF gain, it locks up the API".
-         *     Every LNA write restarts the tuner's AGC, so rung-by-rung stepping is exactly the
-         *     hammering. Here: a new multiplex starts a snapshot timer; 8 s after the AGC has
-         *     settled the IF reduction, the ADC peak and the decoder's verdict are read ONCE and
-         *     turned into a rung count — over target at the rail: rungs DOWN by (peak − target) /
-         *     ~20 dB; weak or unlocked with IF headroom: rungs UP by (59 − reduction − 6) / ~20 dB,
-         *     at least one — applied in a single write. After that the IF AGC owns it; the ensemble
-         *     is re-read every 20 s and corrected by at most ONE rung if still wrong. */
-        static double  dabCentreSeen = 0.0;
-        static auto    dabTuneAt     = std::chrono::steady_clock::time_point{};
-        static bool    dabPlaced     = false;
-        static auto    dabLastCheck  = std::chrono::steady_clock::time_point{};
-        constexpr double kRungDb = 20.0;                         // ★ measured 2026-09-11 (~21 dB)
-        const double centre = LocalSdrShim::instance().listenFrequency();
-        static bool dabSaidMax = false;
-        if (std::fabs(centre - dabCentreSeen) > 1000.0) {
-            dabCentreSeen = centre; dabTuneAt = now; dabPlaced = false; dabLastCheck = {}; dabSaidMax = false;
-            // ★ Say what is happening while the block is being learned (Stuart, 2026-09-15).
-            vsSayVts("Learning the RF gain for this multiplex \xe2\x80\x94 please wait a moment.");
-        }
+        static int  dabBlockSeen = -2;
+        static auto dabCleanSince = std::chrono::steady_clock::time_point{};
+        static bool dabLearned = false;
+        const int blk = g_dabChannel.load(std::memory_order_relaxed);
         const auto q = g_dab.quality();
         const bool perfect = q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
-        const bool weak    = !q.locked || q.merDb < 12.0f || q.mscBer > 0.02;
-        const double peak  = sdrp->adcPeakDbfs();
-        const int    aim   = sdrp->ifAgcSetPointDbfs();
-        const long long sinceTune = std::chrono::duration_cast<std::chrono::seconds>(now - dabTuneAt).count();
-        const long long sinceChk  = dabLastCheck.time_since_epoch().count() == 0 ? 1000
-                                  : std::chrono::duration_cast<std::chrono::seconds>(now - dabLastCheck).count();
-        if (perfect) { dabPlaced = true; outMs = 0; outDir = 0; return; }
-        if (!dabPlaced && sinceTune < 8) return;                 // ★ the snapshot waits for the AGC
-        if (dabPlaced && sinceChk < 20) return;                  // ★ hands off between checks
-        const int n = sdrp->lnaStateCount();
-        const int cur = sdrp->currentLnaState();
-        const int lo  = std::max(0, lnaFloor);
-        int rungs = 0;                                            // + = less RF gain (state up)
-        if (mean >= 57.0 && std::isfinite(peak) && peak > aim + 3.0)
-            rungs = std::max(1, (int)std::lround((peak - aim) / kRungDb));
-        else if (weak && mean <= 52.0 && std::isfinite(peak) && peak < aim - 6.0) {
-            /* ★ THE ADC IS THE SAFETY ON A DEAD BLOCK (Stuart: "when tuning through dead blocks
-             *   we monitor the noise floor to make sure we don't over-gain and overload"). The
-             *   climb is bounded by BOTH headrooms — what the IF can still absorb and how far the
-             *   converter's peak sits below the target — and an unlocked block, where there may
-             *   be nothing to find, is allowed one rung per look, never a leap. */
-            const int byIf  = (int)std::floor((59.0 - mean - 6.0) / kRungDb);
-            const int byAdc = (int)std::floor((aim - 6.0 - peak) / kRungDb);
-            int up = std::max(1, std::min(byIf, byAdc));
-            if (!q.locked) up = 1;
-            rungs = -up;
-        }
-        if (dabPlaced && rungs != 0) rungs = rungs > 0 ? 1 : -1;  // ★ a correction is ONE rung
-        dabLastCheck = now;
-        if (rungs == 0) { dabPlaced = true; outMs = 0; outDir = 0; return; }
-        const int want = std::min(n - 1, std::max(lo, cur + rungs));
-        if (want == cur) {
-            // ★ Nothing left to give: the loop is at the highest RF gain the owner allows and the
-            //   block is still not there. Say it once, so silence is explained.
-            if (rungs < 0 && !q.locked && !dabSaidMax) {
-                dabSaidMax = true;
-                vsSayVts("RF gain at maximum \xe2\x80\x94 no multiplex found on this block.");
+        if (blk != dabBlockSeen) {
+            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false;
+            int mem = -1;
+            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
+              auto it = g_dabLnaMem.find(blk); if (it != g_dabLnaMem.end()) mem = it->second; }
+            const int n = sdrp->lnaStateCount();
+            if (mem >= 0 && mem < n && mem != sdrp->currentLnaState()) {
+                const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
+                LOGI("RSP RF AGC (DAB): %s ran clean at LNA state %d before — one write, then the IF AGC", nm, mem);
+                grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
+                LocalSdrShim::instance().setLnaState(mem);
+                g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
+                lastMove = now; lastDir = 0; outMs = 0; outDir = 0;
+                vsSayVts(std::string("RF gain restored for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - mem) + "/" + std::to_string(n - 1) + ".");
+                return;
             }
-            dabPlaced = true; outMs = 0; outDir = 0; return; }
-        LOGI("RSP RF AGC (DAB): %s — MER %.1f dB, FIB %.0f%%, MSC BER %.4f, IF reduction %.0f dB, "
-             "ADC peak %.1f vs %d dBFS — %s: RF gain state %d -> %d",
-             q.locked ? (weak ? "multiplex weak" : "multiplex over-driven") : "multiplex not locked",
-             (double)q.merDb, (double)q.fibRate * 100.0, q.mscBer, mean, peak, aim,
-             dabPlaced ? "one-rung correction" : "one move from the snapshot", cur, want);
-        grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
-        LocalSdrShim::instance().setLnaState(want);
-        g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
-        g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
-        lastMove = now; lastDir = rungs > 0 ? +1 : -1; lastMean = mean; outMs = 0; outDir = 0;
-        dabPlaced = true;
-        vsSayVts(std::string("RF gain ") + (rungs < 0 ? "up" : "down") + " to " + std::to_string(n - 1 - want)
-                 + "/" + std::to_string(n - 1) + (q.locked ? " \xe2\x80\x94 multiplex locked, the IF AGC now holds it."
-                                                             : " \xe2\x80\x94 still looking for the multiplex."));
-        return;
+        }
+        if (perfect) {
+            if (dabCleanSince.time_since_epoch().count() == 0) dabCleanSince = now;
+            else if (!dabLearned &&
+                     std::chrono::duration_cast<std::chrono::seconds>(now - dabCleanSince).count() >= 10) {
+                dabLearned = true;
+                const int st = sdrp->currentLnaState();
+                bool changed = false;
+                { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
+                  auto it = g_dabLnaMem.find(blk);
+                  changed = (it == g_dabLnaMem.end() || it->second != st);
+                  if (changed) { g_dabLnaMem[blk] = st; dabLnaSaveLocked(); } }
+                if (changed) {
+                    const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
+                    LOGI("RSP RF AGC (DAB): %s runs clean at LNA state %d — remembered", nm, st);
+                }
+            }
+            outMs = 0; outDir = 0; return;                 // ★ a clean multiplex is left alone
+        }
+        dabCleanSince = {};
+        dabQuick = true;
     }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
@@ -3046,7 +3062,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
 
     // ★ How far past the trigger, hence how urgent. High end runs out at 59, low end at 20.
     const double excess = dir > 0 ? (mean - kTrigHigh) : (kTrigLow - mean);
-    if (outMs < sustainMsFor(excess)) return;
+    { const double sus = sustainMsFor(excess); if (outMs < (dabQuick ? std::min(2000.0, sus) : sus)) return; }
 
     if (lastMove.time_since_epoch().count() != 0 &&
         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count()
@@ -8517,8 +8533,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     was alive ONCE; it says nothing about now. After a DAB rate change the events
              *     stopped, currentIfGr() echoed the commanded 59, and the loop stepped 3 -> 9
              *     on it (Lenovo, 2026-09-15 15:00). ifAgcReporting() is the per-tick truth. */
-            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone
-                && sdrp->ifAgcReporting())
+            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`
@@ -21279,7 +21294,8 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
         { std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
-          g_dabGainFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-gains.txt"; }
+          g_dabGainFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-gains.txt";
+          g_dabLnaFile  = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-lna.txt"; }
         { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);   // ★ beside the gain memory, same directory
           g_dabEnsFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-ensembles.txt"; }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
