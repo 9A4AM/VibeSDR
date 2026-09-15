@@ -203,6 +203,8 @@
   .capIq { display:inline-flex; align-items:center; height:19px; padding:0 7px; border:1px solid var(--phosphor);
            border-radius:4px; color:var(--phosphor); font:700 11px/1 ui-monospace,monospace; letter-spacing:.08em; flex:none; }
   .capRds { display:inline-block; flex:none; width:64px; height:24px; line-height:0; color:var(--phosphor); }
+  /* ★ The RDS mark ships with black fills in inline styles; the badge colour wins. */
+  .capRds svg path, .capRds svg g { fill: currentColor !important; stroke: none; }
   .modesTag { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); color:var(--dim);
               letter-spacing:.06em; cursor:help; flex:none; white-space:nowrap; }
   .modesTag:hover { color:var(--text); border-color:var(--text); }
