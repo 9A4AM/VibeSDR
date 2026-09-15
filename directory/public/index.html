@@ -208,7 +208,9 @@
   .modesTag { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); color:var(--dim);
               letter-spacing:.06em; cursor:help; flex:none; white-space:nowrap; }
   .modesTag:hover { color:var(--text); border-color:var(--text); }
-  .caps { display:inline-flex; align-items:center; gap:6px; margin-left:8px; }
+  /* ★ Right-aligned beside the grid square, not tucked against the name (Stuart, 2026-09-15). */
+  .caps { display:inline-flex; align-items:center; gap:6px; margin-left:auto; padding-left:12px; }
+  .srv > summary .caps + .tag, .srv > summary .caps ~ .meta { margin-left:10px; }
   /* ★ A RADIO CARD IS A DOOR. It looked like one and did nothing (a colleague tapped it and
      nothing happened, 2026-09-15); now it opens that receiver through the front door. */
   a.rcLink { display:block; color:inherit; text-decoration:none; }
