@@ -187,6 +187,7 @@
             font-family: inherit; }
   .listen:hover { background: #ffc75c; }
   /* ★ Green says "room for you"; a full or silent receiver must not borrow it. */
+  .rcStateRow { margin-top: 6px; display:flex; justify-content:flex-end; }
   .rcState.full { color: var(--busy); }
   .rcState.down { color: var(--dim); }
   /* ★ The estate's headcount is the same kind of fact — how much is alive right now. */
@@ -882,13 +883,15 @@ function radioLine(r, s) {
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
 
+  // ★ Badges on the top line, right-aligned so they line up card to card; the occupancy on a row
+  //   of its own at the bottom (Stuart, 2026-09-15).
   const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(r.name || r.driver || 'Radio')}</span>
-        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}<span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
-              >${esc(stateTxt)}</span></span></div>
+        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
       <div class="rcSub">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
       ${etiquette}
+      ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
     </div>`;
   // ★ The card opens ITS receiver — even a FULL one: the directory may be stale in either
   //   direction, and the receiver's own door is the one that knows. It bounces back if taken.
