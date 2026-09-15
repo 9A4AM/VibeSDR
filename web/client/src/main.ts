@@ -5188,6 +5188,10 @@ function dabRender() {
     + row('IQ dropped', tl(String(d.dropped ?? 0), !(d.dropped ?? 0) ? 'ok' : 'warn'))
     + '<h4>AUDIO CHANNEL</h4>'
     + (d.mp2In ? row('Layer II frames', tl(`${d.mp2In} in, ${d.mp2Bad ?? 0} bad, ${d.mp2Concealed ?? 0} concealed`, (d.mp2Bad ?? 0) / d.mp2In < 0.01 ? 'ok' : (d.mp2Bad ?? 0) / d.mp2In < 0.1 ? 'warn' : 'bad')) : '')
+    /* ★ DAB's own scale-factor check on Layer II (TS 103 466 B.3), in use from 5.6.13-2: a group
+     *  whose CRC fails keeps its last good scale factors — the MP2 counterpart of Reed-Solomon.
+     *  Shown per sub-band group, against the frames decoded, the way the RS row is shown. */
+    + (d.mp2In && d.scfConcealed !== undefined ? row('ScF-CRC', tl(`${d.scfConcealed} groups concealed`, !(d.scfConcealed) ? 'ok' : d.scfConcealed / Math.max(1, d.mp2In) < 0.05 ? 'warn' : 'bad')) : '')
     + (d.sfTried ? row('DAB+ super frames', tl(`${d.sfOk ?? 0} of ${d.sfTried}`, (d.sfOk ?? 0) / d.sfTried > 0.98 ? 'ok' : (d.sfOk ?? 0) / d.sfTried > 0.9 ? 'warn' : 'bad')) : '')
     + (d.sfTried ? row('Reed-Solomon', tl(`${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`, !(d.rsLost ?? 0) ? 'ok' : (d.rsLost ?? 0) / Math.max(1, d.sfTried) < 0.05 ? 'warn' : 'bad')) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
