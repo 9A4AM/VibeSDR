@@ -316,8 +316,8 @@ struct WristSDRApp: App {
           // disconnection into a shared receiver working as intended rather than a
           // crash. No auto-return: they choose when to leave the message.
           refusalScreen(title: "TIME UP",
-                        body: "Your session on this shared receiver has ended, so someone else can have a turn.",
-                        note: "You can reconnect in \(link.cooldownText).")
+                        body: "Your guaranteed time on this shared receiver has ended and your session was closed so the receiver is free for others.",
+                        note: "You can try again in \(link.cooldownText), though the receiver may be in use by then.")
         } else if link.cooldownRefused {
           refusalScreen(title: "PLEASE WAIT",
                         body: "You have just had a turn on this shared receiver.",

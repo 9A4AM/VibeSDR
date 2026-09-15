@@ -6529,11 +6529,13 @@ function showSessionEnded(cooldownSec: number, freshSec = 0) {
    *     are let in with no time left — which reads as a fault rather than as the rule it is.
    *  ★ Only said when the server stated it and it is genuinely longer. */
   showRefusal('TIME UP',
-    'Your session on this shared receiver has ended, so someone else can have a turn.' +
+    'Your guaranteed time on this shared receiver has ended and your session was closed so the '
+    + 'receiver is free for others.' +
     (f > m
-      ? `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'} — but a full turn `
-        + `starts again ${f} minutes after your last one.`
-      : `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`));
+      ? `<br><br>You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may `
+        + `be in use by then — a full turn starts again ${f} minutes after your last one.`
+      : `<br><br>You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may `
+        + `be in use by then.`));
 }
 
 /** Refused because we came back before our cooldown finished. */

@@ -4112,11 +4112,13 @@ export default function SDRScreen({ route, navigation }: Props) {
          *    which is right for a server that has no such rule. */
         setRefusal({
           title: 'TIME UP',
-          body: 'Your session on this shared receiver has ended, so someone else can have a turn.',
+          body: 'Your guaranteed time on this shared receiver has ended and your session was closed '
+            + 'so the receiver is free for others.',
           note: f > m
-            ? `You can reconnect in about ${m} minute${m === 1 ? '' : 's'} — but a full turn `
-              + `starts again ${f} minutes after your last one.`
-            : `You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`,
+            ? `You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may be `
+              + `in use by then — a full turn starts again ${f} minutes after your last one.`
+            : `You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may be `
+              + `in use by then.`,
         });
       },
       onCooldown: (secs: number) => {
