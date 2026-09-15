@@ -3041,7 +3041,8 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                 grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
                 LocalSdrShim::instance().setLnaState(mem);
                 g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
-                g_dab.armRetune();   // ★ a ~20 dB step: let the decoder re-acquire rather than track its old sync
+                /* ★ No re-acquire here: a decoder that is already playing rides a single rung
+                 *   (Stuart: "a single gain change was fine"); forcing a re-sync is a dropout. */
                 lastMove = now; lastDir = 0; outMs = 0; outDir = 0;
                 vsSayVts(std::string("RF gain restored for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - mem) + "/" + std::to_string(n - 1) + ".");
                 return;
@@ -3137,7 +3138,11 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                          nm, mean, pk, st - cur, n - 1 - st, n - 1, st);
                     LocalSdrShim::instance().setLnaState(st);
                     g_rspRfAgcLastLna.store(st, std::memory_order_relaxed);
-                    g_dab.armRetune();   // ★ as above — re-acquire on the new level
+                    /* ★ Re-acquire ONLY if nothing has locked yet — a decoder that is playing
+                     *   through the overload rides the jump; a forced re-sync would be a dropout
+                     *   it did not have (Stuart, 20:50). One that has not locked is still hunting
+                     *   on the clipped signal and needs to start again on the new level. */
+                    if (!q.locked) g_dab.armRetune();
                     lastMove = now; lastDir = +1; outMs = 0; outDir = 0;
                     vsSayVts(std::string("RF gain placed for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - st) + "/" + std::to_string(n - 1) + ".");
                     return;
@@ -11704,7 +11709,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("RSP RF AGC (DAB): %s ran clean at LNA state %d before — written with the tune", vibedab::kBandIII[idx].name, mem);
                     LocalSdrShim::instance().setLnaState(mem);
                     g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
-                    g_dab.armRetune();   // ★ the decoder starts again on the new level, not on what it heard before it
+                    g_dab.armRetune();   // ★ with the tune, before the decoder has anything to keep
                 }
             }
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
