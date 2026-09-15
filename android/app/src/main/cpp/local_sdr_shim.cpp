@@ -2818,10 +2818,23 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     hysteresis). "For everything else gain works as normal, but for DAB give it more RF
      *     unless overloaded" — Stuart. */
     if (dabRule) {   // ★ BEFORE every IF-readout gate below — see the note
+        /* ★★★ A STATE THAT OVERLOADED IS NOT TRIED AGAIN ON THIS BLOCK. 23:44: state 1 raised
+         *     the API's overload flag (its detector sits at the converter, ahead of the IF
+         *     filter, and fires before our filtered peak looks anything like full scale — -20
+         *     dBFS on the meter, OVERLOAD from the API), the rule stepped back to 2, saw -26,
+         *     stepped to 1 again, and so on every six seconds, and every step broke the
+         *     multiplex. The state that overloaded becomes the ceiling for this block; a new
+         *     block starts again with no ceiling. */
+        static int dabOverState = -1, dabRuleBlock = -2;
+        const int blkR = g_dabChannel.load(std::memory_order_relaxed);
+        if (blkR != dabRuleBlock) { dabRuleBlock = blkR; dabOverState = -1; }
         const double pk = sdrp->adcPeakDbfs();
         const bool over = sdrp->overloaded();
-        const int ddir = over || (std::isfinite(pk) && pk > -6.0) ? +1
-                       : (std::isfinite(pk) && pk < -14.0) ? -1 : 0;
+        const int curNow = sdrp->currentLnaState();
+        if (over) dabOverState = std::max(dabOverState, curNow);
+        int ddir = over || (std::isfinite(pk) && pk > -6.0) ? +1
+                 : (std::isfinite(pk) && pk < -14.0) ? -1 : 0;
+        if (ddir < 0 && dabOverState >= 0 && curNow - 1 <= dabOverState) ddir = 0;   // ★ the ceiling
         if (ddir == 0) { outMs = 0; outDir = 0; return; }
         if (ddir != outDir) { outDir = ddir; outMs = 0; }
         outMs += kWindowMs;
