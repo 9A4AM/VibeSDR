@@ -24069,6 +24069,14 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     }
 
     impl->radioReleased.store(false);
+    /* ★★★ THE KICK STARTS AGAIN FROM STEP 1 ON A RE-ACQUIRE. Its six steps advance on DSP ticks,
+     *     and a released radio only ticks during the keepalive's 15 s hold every 10 min — so the
+     *     kick was spread across THREE re-acquires (2/6 at 15:26, 3–4/6 at 15:36, 5–6/6 at 15:40
+     *     on the Lenovo, 2026-09-15), and the reopen in between put the LNA back to the API's
+     *     default of state 0 (maximum RF gain) after step 1 had set it to position 1. Handover
+     *     then happened at maximum gain with the IF pinned at 59. A fresh open is a fresh radio:
+     *     the kick runs whole, or not at all. */
+    if (rsp) { impl->sdrpAgcKick = 0; impl->sdrpSettling = true; g_rspAgcClearEvidence.store(true, std::memory_order_relaxed); }
     impl->startEngine();
     impl->buildAudio();
     impl->startDspThread();

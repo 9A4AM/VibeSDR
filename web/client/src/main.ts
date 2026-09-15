@@ -1626,6 +1626,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // two disagreeing about the same thing.
       const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
       const el = $<HTMLInputElement>('rspLna');
+      // ★ The RANGE follows the band too — the RSP has 7 states on HF and 10 on Band III, and a
+      //   slider still scaled for 6 clicks drew 5/9 as if it were 5/6 (Stuart, 2026-09-15).
+      if (el.max !== String(lnaMax)) el.max = String(lnaMax);
       if (document.activeElement !== el) {
         el.value = String(lnaMax - lna);
         renderRspVals();
