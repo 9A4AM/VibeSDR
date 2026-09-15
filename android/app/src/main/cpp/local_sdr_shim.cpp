@@ -2672,6 +2672,12 @@ static std::atomic<int>    g_dsAnnounce{0};    // 0 nothing, 1 entered DS, 2 lef
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
  *   forward for a global is how a file grows an ordering dependency nobody can see. */
 static constexpr int kGrLowPub = 30, kGrHighPub = 50;   // ★ the working window, for logs elsewhere
+/* ★★★ REVERTED 2026-09-15 22:20 TO THE 17:35 VERSION (what 5.6.13-1 shipped). Every DAB-specific
+ *     rule added after it — multiplex-guided rungs, the per-block LNA memory, the 3 s hold,
+ *     dabWantUp, the rail-on-a-clean-block rule, the one-write entry jump, the entry-time write
+ *     and the lock log — is gone at Stuart's call: "the MW gain works really well, DAB is
+ *     horribly broken but it was sorta working well enough before". The commits stay in the
+ *     history (87b0004b … bd1d0e54) if any of it is wanted back; do not re-add them piecemeal. */
 static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) {
     if (!sdrp || !g_rspRfAgc.load(std::memory_order_relaxed)) return;
     // ★ Only meaningful while the IF AGC is running: with it off the reduction is whatever the
@@ -2980,192 +2986,14 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         }
     }
     if (sdrp->secondsSinceAgcRestart() < 6.0) { outMs = 0; outDir = 0; return; }
-    /* ★★★ IN DAB THE MULTIPLEX DRIVES THE RF GAIN, NOT THE 30-50 WINDOW. Stuart, 2026-09-15:
-     *     "in DAB mode we have proper multiplex metrics we can use to drive the RF gain. Tune to
-     *     multiplex, gain too low, multiplex advises you it's too low … use the metrics to set the
-     *     coarse RF gain then let it be driven by the IF AGC afterwards." The window rule cannot
-     *     see MER: on 10D it held RF at 2/9 with the IF at 36 dB, inside the window, for ten
-     *     minutes while the ensemble never resolved. Here: a perfectly decoding ensemble is left
-     *     alone; a weak or unlocked one gets an RF rung UP while the IF still has room to absorb
-     *     it (reduction ≤ 52 dB), one rung per settle floor, MER re-read after each; a pinned IF
-     *     with the level over target still takes the rung DOWN through the rail path below. */
-    /* ★★★ A PINNED AGC IS NOT A SILENT ONE. The tick used to be gated on the AGC having reported
-     *     since our last write — and an AGC parked at 59 dB reports nothing because nothing
-     *     changes, so with the ADC 28 dB over target the loop never ran at all (7D, 2026-09-15,
-     *     not one gain line in an hour). No report is only disqualifying when the peak does not
-     *     confirm a rail. */
-    {
-        const double pk = sdrp->adcPeakDbfs();
-        const int    am = sdrp->ifAgcSetPointDbfs();
-        const bool railSays = std::isfinite(pk) &&
-            ((mean >= 57.0 && pk > am + 3.0) || (mean <= 22.0 && pk < am - 3.0));
-        if (!sdrp->ifAgcReporting() && !railSays) { outMs = 0; outDir = 0; return; }
-    }
-    /* ★★★ DAB: THE SAME IF-DRIVEN RULE, QUICKER, WITH A MEMORY PER MULTIPLEX. Stuart, 2026-09-15:
-     *     "revert it back to being tied to the IF auto gain and just speed it up a little in DAB
-     *     mode using the multiplex stats as the guide. But like the RTL-SDRs we remember the RF
-     *     gain once a multiplex runs clean." So: entering a block that ran clean before is ONE
-     *     write to the remembered LNA state; a block decoding perfectly for 10 s is remembered
-     *     and left alone; otherwise the 30-50 window rule steers with a 2 s sustain instead of
-     *     the FM curve (the 6 s settle floor between writes stands — it is what keeps the API
-     *     alive). */
-    bool dabQuick = false, dabWantUp = false;
-    if (g_dabMode.load(std::memory_order_relaxed)) {
-        static int  dabBlockSeen = -2;
-        static auto dabCleanSince = std::chrono::steady_clock::time_point{};
-        static auto dabTunedAt    = std::chrono::steady_clock::time_point{};
-        static bool dabLearned = false;
-        static bool dabJumped  = false;   // ★ one sized jump per block visit, then the rung rule
-        const int blk = g_dabChannel.load(std::memory_order_relaxed);
-        const auto q = g_dab.quality();
-        /* ★ "Runs clean" is judged AFTER error correction: 9A carries 6.6 % MSC bit errors before
-         *   Viterbi with zero FIB errors and clean audio, and the old test (MSC BER < 0.2 %) never
-         *   remembered it (2026-09-15 18:32). The FIB rate is the decoder's own verdict. */
-        const bool perfect = q.locked && q.fibRate >= 0.95f;   // ★ "received mostly fine" — Stuart
-        static bool dabWasLocked = false;
-        if (blk != dabBlockSeen) {
-            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabJumped = false; dabTunedAt = now;
-            dabWasLocked = false;
-            /* ★★ A NEW MULTIPLEX IS A NEW SITUATION. The anti-hunting rule refuses a step that
-             *    reverses the last one — right within a block, wrong across blocks: a rung given
-             *    up in a dead block on the way past then could not be taken back on arrival
-             *    ("holding at state 6 … would only undo the last move", 9A, 18:32). */
-            lastDir = 0; outMs = 0; outDir = 0; oscWarned = false;
-            int mem = -1;
-            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
-              auto it = g_dabLnaMem.find(blk); if (it != g_dabLnaMem.end()) mem = it->second; }
-            const int n = sdrp->lnaStateCount();
-            if (mem >= 0 && mem < n && mem != sdrp->currentLnaState()) {
-                const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
-                LOGI("RSP RF AGC (DAB): %s ran clean at LNA state %d before — one write, then the IF AGC", nm, mem);
-                grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
-                LocalSdrShim::instance().setLnaState(mem);
-                g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
-                /* ★ No re-acquire here: a decoder that is already playing rides a single rung
-                 *   (Stuart: "a single gain change was fine"); forcing a re-sync is a dropout. */
-                lastMove = now; lastDir = 0; outMs = 0; outDir = 0;
-                vsSayVts(std::string("RF gain restored for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - mem) + "/" + std::to_string(n - 1) + ".");
-                return;
-            }
-        }
-        /* ★ The lock, timed from the block entry — so a slow acquisition is a number in the
-         *   journal and not a stopwatch at the bench (11D took 35 s, 20:41). */
-        if (q.locked != dabWasLocked) {
-            dabWasLocked = q.locked;
-            const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
-            const double t = std::chrono::duration_cast<std::chrono::milliseconds>(now - dabTunedAt).count() / 1000.0;
-            if (q.locked) LOGI("[DAB] %s locked %.1f s after entry — FIB %.0f %%, LNA state %d, IF %.0f dB, peak %.1f dBFS",
-                               nm, t, q.fibRate * 100.0f, sdrp->currentLnaState(), mean, sdrp->adcPeakDbfs());
-            else          LOGI("[DAB] %s lost lock %.1f s after entry — LNA state %d, IF %.0f dB, peak %.1f dBFS",
-                               nm, t, sdrp->currentLnaState(), mean, sdrp->adcPeakDbfs());
-        }
-        /* ★★★ A CLEAN MULTIPLEX WITH THE IF AT A RAIL IS NOT LEFT ALONE. 11D at 21:01 (Stuart's
-         *     screenshot): RF 3/9, IF pinned at 59 dB = minimum IF gain, MER fine — and the loop
-         *     said "received fine" and sat there. At the rail the IF AGC has nothing left to shed
-         *     and the converter level is uncontrolled: it decodes today on headroom it does not
-         *     have, and the memory then learns the wrong rung. One rung on the RF side gives the
-         *     IF AGC its range back; the block is relearned at the new state once it is clean
-         *     there. Both rails, for the symmetric reason the rail note below gives. */
-        const bool ifRailed = mean >= 58.0 || mean <= 21.0;
-        if (perfect && !ifRailed) {
-            if (dabCleanSince.time_since_epoch().count() == 0) dabCleanSince = now;
-            else if (!dabLearned &&
-                     std::chrono::duration_cast<std::chrono::seconds>(now - dabCleanSince).count() >= 10) {
-                dabLearned = true;
-                const int st = sdrp->currentLnaState();
-                bool changed = false;
-                { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
-                  auto it = g_dabLnaMem.find(blk);
-                  changed = (it == g_dabLnaMem.end() || it->second != st);
-                  if (changed) { g_dabLnaMem[blk] = st; dabLnaSaveLocked(); } }
-                if (changed) {
-                    const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
-                    LOGI("RSP RF AGC (DAB): %s runs clean at LNA state %d — remembered", nm, st);
-                }
-            }
-            outMs = 0; outDir = 0; return;                 // ★ a clean multiplex is left alone
-        }
-        dabCleanSince = {};
-        /* ★ And the decoder gets three seconds to look before any rung moves — a rail reading one
-         *   second into a block is the retune, not the multiplex (8D on the way past, 18:32:18). */
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - dabTunedAt).count() < 3000) {
-            outMs = 0; outDir = 0; return;
-        }
-        /* ★★★ A SWAMPED BLOCK IS PLACED IN ONE WRITE, NOT WALKED. 11A, 20:23:49: entered at RF
-         *     state 4 with the IF pinned at 59 and the ADC peak at −13 dBFS, 27 dB over target.
-         *     The rung rule then took three steps seven seconds apart, the converter clipped
-         *     between them, the MER swung 13–24 and the audio was silent for 25 s (AUDIO AUDIT
-         *     quiet 100 % 20:23:51–20:24:16) — every frame the RSP "lost" against the V4 was lost
-         *     there. The excess was known at the start; the start-up coarse placement already
-         *     sizes a move from it with the band's own ladder, so the same arithmetic runs here
-         *     once per block visit. One write is fewer API calls than three (Stuart: "not too
-         *     quick as to break the API"; "we optimised the RTL path for speed"). Aimed at −20 dBFS
-         *     so the IF AGC lands with room on both sides; the block is then relearned at the
-         *     state it runs clean on. Only the swamped side: a starved block is dabWantUp's job,
-         *     a rung at a time, because RF gain added to a weak block is what overloads the
-         *     neighbour. */
-        if (!dabJumped && mean >= 58.0) {
-            dabJumped = true;
-            const double pk = sdrp->adcPeakDbfs();
-            /* ★★★ AIM AT THE IF AGC'S OWN TARGET, NOT A FIXED −20. 12B at 20:37:35: peak −3.2, a
-             *     jump of 3 rungs landed at −19.6 — and the IF stayed pinned at 59, because this
-             *     radio's set point is −40 dBFS and −20 is still 20 dB over it. Two more rungs
-             *     seven seconds apart followed ("DAB takes an eternity on the stronger radio").
-             *     Ten dB above the set point leaves the IF AGC inside its window with room both
-             *     ways; the cap is six rungs, enough for a −3 dBFS entry on Band III. */
-            const double kAimDbfs = (double)sdrp->ifAgcSetPointDbfs() + 10.0;
-            if (std::isfinite(pk) && pk > kAimDbfs + 6.0) {
-                const int n = sdrp->lnaStateCount();
-                const int cur = sdrp->currentLnaState();
-                const double wantDb = kAimDbfs - pk;              // negative: less gain
-                int step = 0;
-                const float gHere = sdrp->lnaGainDb(cur);
-                if (std::isfinite(gHere)) {
-                    double best = 1e9;
-                    for (int st = 0; st < n; ++st) {
-                        const float g2 = sdrp->lnaGainDb(st);
-                        if (!std::isfinite(g2)) continue;
-                        const double e = std::fabs(((double)g2 - (double)gHere) - wantDb);
-                        if (e < best) { best = e; step = st - cur; }
-                    }
-                }
-                if (step <= 0) step = std::max(1, (int)std::lround(-wantDb / 6.0));
-                step = std::min(6, step);
-                const int st = std::min(n - 1, cur + step);
-                if (st > cur) {
-                    const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
-                    LOGI("RSP RF AGC (DAB): %s swamped on entry — IF pinned at %.0f dB, ADC peak %.1f dBFS — one jump of %d state(s) to RF gain %d/%d (LNA %d), then the IF AGC",
-                         nm, mean, pk, st - cur, n - 1 - st, n - 1, st);
-                    LocalSdrShim::instance().setLnaState(st);
-                    g_rspRfAgcLastLna.store(st, std::memory_order_relaxed);
-                    /* ★ Re-acquire ONLY if nothing has locked yet — a decoder that is playing
-                     *   through the overload rides the jump; a forced re-sync would be a dropout
-                     *   it did not have (Stuart, 20:50). One that has not locked is still hunting
-                     *   on the clipped signal and needs to start again on the new level. */
-                    if (!q.locked) g_dab.armRetune();
-                    lastMove = now; lastDir = +1; outMs = 0; outDir = 0;
-                    vsSayVts(std::string("RF gain placed for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - st) + "/" + std::to_string(n - 1) + ".");
-                    return;
-                }
-            }
-        }
-        dabQuick = true;
-        /* ★★★ A WEAK MULTIPLEX WITH IF HEADROOM WANTS RF, WINDOW OR NOT. 10D sat at RF 2/9 with the
-         *     IF at 36 dB — inside 30-50, so the window rule held — while the decoder starved
-         *     ("nowhere near enough RF gain", 19:35). In DAB the multiplex is the guide: not
-         *     received fine, the IF still able to absorb a rung (≤ 52 dB) and the converter 6 dB
-         *     or more under its target → this is "below the window" and a rung goes back. */
-        { const double pk = sdrp->adcPeakDbfs(); const int am = sdrp->ifAgcSetPointDbfs();
-          dabWantUp = mean <= 52.0 && std::isfinite(pk) && pk < am - 6.0; }
-    }
-    const int dir = dabWantUp ? -1 : (mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0));
+    const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
     outMs += kWindowMs;
 
     // ★ How far past the trigger, hence how urgent. High end runs out at 59, low end at 20.
     const double excess = dir > 0 ? (mean - kTrigHigh) : (kTrigLow - mean);
-    { const double sus = sustainMsFor(excess); if (outMs < (dabQuick ? std::min(2000.0, sus) : sus)) return; }
+    if (outMs < sustainMsFor(excess)) return;
 
     if (lastMove.time_since_epoch().count() != 0 &&
         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count()
@@ -11692,25 +11520,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 int learned = -1;
                 { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked(); auto it = g_dabGainMem.find(idx); if (it != g_dabGainMem.end()) learned = it->second; }
                 if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs());
-            }
-            /* ★★★ AND THE RSP'S REMEMBERED RUNG GOES ON NOW, WITH THE TUNE — not from the RF loop's
-             *     tick, which sits behind the six-second post-restart gate (the rate change re-Inits
-             *     the stream). 11D, 20:41:00: entered at state 7, the memory's write to 8 landed at
-             *     20:41:06, and the decoder, which had started acquiring at the wrong level, did
-             *     not play until 20:41:40 ("35 seconds it took to lock on and play audio from
-             *     11D"). Written here the decoder's first frames are at the right gain and the
-             *     loop's own memory path finds nothing to do. */
-            if (useSdrplay() && sdrp && !radioReleased.load()) {
-                int mem = -1;
-                { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
-                  auto it = g_dabLnaMem.find(idx); if (it != g_dabLnaMem.end()) mem = it->second; }
-                const int n = sdrp->lnaStateCount();
-                if (mem >= 0 && mem < n && mem != sdrp->currentLnaState()) {
-                    LOGI("RSP RF AGC (DAB): %s ran clean at LNA state %d before — written with the tune", vibedab::kBandIII[idx].name, mem);
-                    LocalSdrShim::instance().setLnaState(mem);
-                    g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
-                    g_dab.armRetune();   // ★ with the tune, before the decoder has anything to keep
-                }
             }
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
