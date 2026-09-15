@@ -596,17 +596,18 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            listener slots. Shared dial: not offered, and it says why. The server enforces all of
            it — see iqFullRateOffered() and the shared-dial refusal in the shim. -->
       <label style="margin-top:12px" id="rawIqRow"><span class="lbl">Raw IQ out</span>
-        <span id="rawIqSingle" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span id="rawIqSingle" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
           <label class="row" style="gap:8px;align-items:center;flex:0 0 auto">
             <input type="checkbox" id="rawIqOn" style="width:16px;height:16px;accent-color:var(--amber)">
             <span>Offer it</span></label>
-          <span class="row" style="gap:6px;align-items:center;flex:0 0 auto">
+          <span class="row" id="rawIqLanRow" style="gap:6px;align-items:center;flex:0 0 auto">
             <span class="lbl" style="margin:0">Local network up to</span>
             <select id="rawIqLan" style="max-width:14em"></select></span>
+          <span class="note" id="rawIqLanFixed" style="margin:0">250 kHz on the local network, 48 kHz through the tunnel</span>
         </span>
         <span id="rawIqLocked" class="row hide" style="gap:6px;align-items:center;flex-wrap:wrap">
           <select id="rawIqStreams" style="max-width:14em"></select>
-          <span class="note" style="margin:0">250 kHz each on the local network</span>
+          <span class="note" style="margin:0">250 kHz each on the local network, 48 kHz through the tunnel</span>
         </span>
         <label class="row" id="rawIqLocalRow" style="gap:8px;align-items:center;margin-top:6px">
           <input type="checkbox" id="rawIqLocalOnly" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1283,8 +1284,9 @@ function rawIqAvail() {
   const locked = radio().mode === "locked";
   const shared = !locked && n > 1;
   const single = !shared && !locked;
-  $("rawIqSingle").classList.toggle("hide", !single);
-  $("rawIqLocked").classList.toggle("hide", !(locked && !shared));
+  // ★ display, not a class: these spans carry .row (display:flex), which a .hide class loses to.
+  $("rawIqSingle").style.display = single ? "" : "none";
+  $("rawIqLocked").style.display = (locked && !shared) ? "" : "none";
   $("rawIqShared").classList.toggle("hide", !shared);
   // ★ The streams dropdown is built from the listener count, so it can never offer more streams
   //   than there are people to hold them.
@@ -1301,11 +1303,16 @@ function rawIqAvail() {
   //    250 kHz belongs to the locked window, where each stream is a channel.
   { const sel = $("rawIqLan");
     const cur = sel.value;
-    const rates = $("rate") ? [...$("rate").options].map(o => parseInt(o.value, 10)).filter(v => v > 0) : [];
+    // ★ Nothing above 2.4 MHz is offered: 8 MHz of raw IQ is not a thing a home network carries
+    //   (Stuart, 2026-09-15, seeing "Full span (8 MHz)" on the RSP). A radio with no rate that
+    //   low gets no dropdown at all — just the 250 kHz / 48 kHz statement.
+    const rates = ($("rate") ? [...$("rate").options].map(o => parseInt(o.value, 10)) : [])
+                    .filter(v => v > 0 && v <= 2400000);
     const mhz = (v) => `${(v / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz`;
-    sel.innerHTML = rates.map(v => `<option value="${v}">${mhz(v)}</option>`).join("")
-                  || `<option value="0">Full span</option>`;
-    sel.value = rates.includes(parseInt(cur, 10)) ? cur : String(rates[rates.length - 1] || 0); }
+    sel.innerHTML = rates.map(v => `<option value="${v}">${mhz(v)}</option>`).join("");
+    if (rates.length) sel.value = rates.includes(parseInt(cur, 10)) ? cur : String(rates[rates.length - 1]);
+    $("rawIqLanRow").style.display = rates.length ? "" : "none";
+    $("rawIqLanFixed").style.display = rates.length ? "none" : ""; }
   const on = single ? $("rawIqOn").checked : locked ? parseInt($("rawIqStreams").value || "0", 10) > 0 : false;
   $("rawIqLocalRow").classList.toggle("hide", shared || !on);
   $("rawIqLan").disabled = !on;
