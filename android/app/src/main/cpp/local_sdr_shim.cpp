@@ -2596,6 +2596,8 @@ static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the re
 static std::atomic<long long> g_rspRfAgcLastLnaAt{0};
 static constexpr long long    kRspGainMemorySec = 6 * 3600;
 static std::atomic<bool>      g_rspHandoverFromMemory{false};
+/** ★ A transient VTS line to every listener — see the `vts` notice field. */
+static void vsSayVts(const std::string& text);
 /** ★★★ WE have concluded the API is stuck, because our own gain writes stopped landing.
  *
  *  Deliberately SEPARATE from SdrplaySource::apiFailed(), which is the API reporting its own
@@ -2973,8 +2975,11 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         static auto    dabLastCheck  = std::chrono::steady_clock::time_point{};
         constexpr double kRungDb = 20.0;                         // ★ measured 2026-09-11 (~21 dB)
         const double centre = LocalSdrShim::instance().listenFrequency();
+        static bool dabSaidMax = false;
         if (std::fabs(centre - dabCentreSeen) > 1000.0) {
-            dabCentreSeen = centre; dabTuneAt = now; dabPlaced = false; dabLastCheck = {};
+            dabCentreSeen = centre; dabTuneAt = now; dabPlaced = false; dabLastCheck = {}; dabSaidMax = false;
+            // ★ Say what is happening while the block is being learned (Stuart, 2026-09-15).
+            vsSayVts("Learning the RF gain for this multiplex \xe2\x80\x94 please wait a moment.");
         }
         const auto q = g_dab.quality();
         const bool perfect = q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
@@ -3009,7 +3014,14 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         dabLastCheck = now;
         if (rungs == 0) { dabPlaced = true; outMs = 0; outDir = 0; return; }
         const int want = std::min(n - 1, std::max(lo, cur + rungs));
-        if (want == cur) { dabPlaced = true; outMs = 0; outDir = 0; return; }
+        if (want == cur) {
+            // ★ Nothing left to give: the loop is at the highest RF gain the owner allows and the
+            //   block is still not there. Say it once, so silence is explained.
+            if (rungs < 0 && !q.locked && !dabSaidMax) {
+                dabSaidMax = true;
+                vsSayVts("RF gain at maximum \xe2\x80\x94 no multiplex found on this block.");
+            }
+            dabPlaced = true; outMs = 0; outDir = 0; return; }
         LOGI("RSP RF AGC (DAB): %s — MER %.1f dB, FIB %.0f%%, MSC BER %.4f, IF reduction %.0f dB, "
              "ADC peak %.1f vs %d dBFS — %s: RF gain state %d -> %d",
              q.locked ? (weak ? "multiplex weak" : "multiplex over-driven") : "multiplex not locked",
@@ -3022,6 +3034,9 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
         lastMove = now; lastDir = rungs > 0 ? +1 : -1; lastMean = mean; outMs = 0; outDir = 0;
         dabPlaced = true;
+        vsSayVts(std::string("RF gain ") + (rungs < 0 ? "up" : "down") + " to " + std::to_string(n - 1 - want)
+                 + "/" + std::to_string(n - 1) + (q.locked ? " \xe2\x80\x94 multiplex locked, the IF AGC now holds it."
+                                                             : " \xe2\x80\x94 still looking for the multiplex."));
         return;
     }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
@@ -20657,6 +20672,12 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
 /** Kick everyone the given ban rule now matches — the other half of "a ban must take effect on
  *  people who are already here". */
 void LocalSdrShim::broadcastNotice() { if (p) p->sendNoticeNow(); }
+void LocalSdrShim::sayVts(const std::string& text) {
+    if (!p) return;
+    const std::string body = "{\"type\":\"notice\",\"vts\":\"" + vibeadmin::esc(text) + "\"}";
+    for (auto& c : p->allSpecClients()) if (c && c->isOpen()) p->sendText(c, body);
+}
+static void vsSayVts(const std::string& text) { LocalSdrShim::instance().sayVts(text); }
 
 int LocalSdrShim::adminKickMatching(const std::string& cidr) {
     if (!p) return 0;
