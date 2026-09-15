@@ -98,16 +98,36 @@ developer or anywhere else, and lets the owner block abuse of their radio. Serve
 reached through the public directory pass through Cloudflare's network on the way,
 as any website does.
 
-### The VibeServer directory
-Server owners who choose to list a server register its name, its public web
-address (the tunnel hostname listeners connect to) and a **coarse** position: a Maidenhead grid locator, which names a square a few
-kilometres across, or a city-level position. VibeServer asks for this before it
-will start, because the directory exists to sort receivers by distance, but it is
-never an exact geographic location and the app never derives one. The directory
-records the IP address each registration came from, to limit abuse, and nothing
-about listeners:
-browsing the list is an ordinary web request that is not logged by the developer.
-An owner can delist with one press, effective immediately.
+### Public sharing, the tunnel and the directory
+A VibeServer is private to your own network until you switch public sharing on.
+When you do, this is what happens:
+
+1. **The tunnel.** VibeServer opens an outbound Cloudflare tunnel with a random
+   hostname. It is outbound only: no port is opened on your router, nothing inbound
+   ever reaches your home IP address, and that address is never published or
+   listed anywhere. The random hostname is different on every connection.
+2. **Registration.** Through that tunnel VibeServer tells the directory three things:
+   the name you gave the server, its **coarse** position — a Maidenhead grid
+   locator, which names a square a few kilometres across, or a city-level position —
+   and a unique identifier for that server. The identifier is random, generated on
+   your machine, and identifies the server, not you. VibeServer asks for the coarse
+   position before it will start, because the directory exists to sort receivers by
+   distance; it is never an exact location and the app never derives one.
+3. **The listing.** In return the directory lists the server, pins its rough
+   position on the map, and assigns it a friendly name of its own
+   (`<name>.vibeserver.vibesdr.net`). That name is linked to the identifier, so it
+   survives reconnections and tunnel changes, and it is yours to give to friends,
+   family or a radio club.
+4. **Listening.** A listener who opens the friendly name reaches the server through
+   Cloudflare and the tunnel. The directory is not involved in the connection and
+   learns nothing about who listens; browsing the list is an ordinary web request
+   that is not logged by the developer. The tunnel terminates at Cloudflare's edge,
+   as for any site behind Cloudflare, so it is protection from exposure rather than
+   end-to-end encryption.
+
+The directory records the IP address each registration came from, to limit abuse,
+and nothing else about the owner. An owner can delist with one press, effective
+immediately, and switching public sharing off closes the tunnel.
 
 ### On-device data
 The following are stored **only on your device** and are never transmitted to the
