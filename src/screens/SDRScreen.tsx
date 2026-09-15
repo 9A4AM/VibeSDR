@@ -8976,7 +8976,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           logoUri={liveLogo}
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}
-          bottomOffset={pillBottom + 8 + noticeStackH}
+          // ★ Above the VTS bar, like every other box anchored here (see the note at line ~8381).
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClose={() => setAdvRdsOpen(false)}
         />
       )}
@@ -8998,7 +8999,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
-          bottomOffset={pillBottom + 8 + noticeStackH}
+          // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
+          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
