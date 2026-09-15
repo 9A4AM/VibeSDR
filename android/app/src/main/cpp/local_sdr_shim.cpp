@@ -17997,10 +17997,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   period is about not disturbing a reload — and a reload does not care what the gain is
         //   while nobody is listening, because resumeCaptureIdle leaves it exactly as found.
         applyRestGain();
-        const double g = g_vsIdleGraceSec.load();
-        if (g <= 0.0) {                                      // grace disabled: act at once
-            if (g_vsReleaseWhenIdle.load()) LocalSdrShim::instance().releaseRadio();
-            else                            pauseCaptureIdle();
+        double g = g_vsIdleGraceSec.load();
+        /* ★★★ A RELEASE IS NEVER INSTANT. With the grace at 0 the radio was let go the moment the
+         *     listener count touched zero — and a browser leaving DAB does exactly that for about
+         *     a second while it swaps its audio and spectrum sockets. Lenovo, 21:04:50: "[DAB] mode
+         *     OFF", audio closed by peer, RELEASED at 21:04:51.36, sdrplay_api_Open at 21:04:51.37
+         *     — a full Uninit / ReleaseDevice / Open / Init and a 12 s AGC kick on EVERY DAB exit,
+         *     which read as "the radio keeps dying" and is the churn that set up the 20:39 abort
+         *     and the API service hang before it. Parking can still be instant (it only stops
+         *     consuming); a release is a device teardown, so it waits out a socket swap — longer
+         *     on an RSP, whose re-acquire is the expensive one. The owner's grace still applies
+         *     above these floors. */
+        if (g_vsReleaseWhenIdle.load()) {
+            const double floorS = useSdrplay() ? 10.0 : 3.0;
+            if (g < floorS) g = floorS;
+        }
+        if (g <= 0.0) {                                      // grace disabled: park at once
+            pauseCaptureIdle();
             return;
         }
         idleParkDueAt.store(nowSecs() + g);
