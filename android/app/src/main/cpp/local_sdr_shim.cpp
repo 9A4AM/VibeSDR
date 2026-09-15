@@ -3043,7 +3043,15 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                 return;
             }
         }
-        if (perfect) {
+        /* ★★★ A CLEAN MULTIPLEX WITH THE IF AT A RAIL IS NOT LEFT ALONE. 11D at 21:01 (Stuart's
+         *     screenshot): RF 3/9, IF pinned at 59 dB = minimum IF gain, MER fine — and the loop
+         *     said "received fine" and sat there. At the rail the IF AGC has nothing left to shed
+         *     and the converter level is uncontrolled: it decodes today on headroom it does not
+         *     have, and the memory then learns the wrong rung. One rung on the RF side gives the
+         *     IF AGC its range back; the block is relearned at the new state once it is clean
+         *     there. Both rails, for the symmetric reason the rail note below gives. */
+        const bool ifRailed = mean >= 58.0 || mean <= 21.0;
+        if (perfect && !ifRailed) {
             if (dabCleanSince.time_since_epoch().count() == 0) dabCleanSince = now;
             else if (!dabLearned &&
                      std::chrono::duration_cast<std::chrono::seconds>(now - dabCleanSince).count() >= 10) {
