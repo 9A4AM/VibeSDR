@@ -61,27 +61,36 @@ If any of this ever changes, this page will say so, at the top, before the chang
 
 ## Information the app uses
 
-### Location (optional for listening)
-Listening needs no location at all. If you grant location permission, VibeSDR uses
-your device location **only** to sort and filter the list of receivers by distance
-(nearest first) and, when you plug an SDR into the device itself, to place a pin for
-that receiver on the app's map and to work out the distance and bearing of the
-digital-mode spots it decodes. Deny it and you lose only those: the lists are
-unsorted and the spots are shown without a distance.
+### Location
+VibeSDR asks for **coarse** location only, on iOS and Android only, and never in
+the background. What it is for depends on whether you are listening or serving.
 
-On every platform the app asks for **coarse** location only — never precise — even
-where the device could provide an exact position.
+**Listening.** Location is entirely optional. Grant it and the app can sort and
+filter the server directories by distance, and, when you plug an SDR into the
+device itself, place your own receiver on the map so the digital-mode spots it
+decodes can be shown with a distance and bearing. Deny it and you lose only those:
+the directories are unsorted, and spots still appear on the map but with no
+accurate distance, because your own position defaults to 0° latitude, 0°
+longitude — you will appear just off West Africa on the equator. You can fix that
+without sharing your real location at all: enter the nearest city or a Maidenhead
+grid reference by hand and the app uses that instead.
 
-- Your location is **never sent to any directory**. Every directory the app can
-  browse — VibeServer, UberSDR, KiwiSDR, Receiverbook, FM-DX and SpyServer — is
-  downloaded as a plain list and sorted by distance **on your device**. No
-  directory, and no receiver, learns where you are.
-- The only position that ever leaves a device is a server owner's own, when they
-  list a VibeServer publicly — see *Public sharing* below. Listening sends none.
-- Location is **entirely optional**. If you deny or disable it, every other feature
-  of the app continues to work normally — you can still browse and use every
-  server; the list simply won't be sorted by distance.
-- VibeSDR never accesses your location in the background.
+**Serving.** Listing a server publicly is the one thing that needs a position,
+because the directory exists to sort receivers by distance. With the default
+option — the tunnel and a listing on vibesdr.net — VibeSDR and VibeServer will
+not start the server without one. It can come from the device's coarse location
+(not on Linux, where there is none), reduced to a Maidenhead grid reference, or
+you can enter a city or grid reference yourself. Serving on your local network
+only, or through your own port forwarding, needs no location at all; listeners on
+such a server simply meet the same 0° limitation described above for spots.
+
+**Where it goes.** All directory sorting and every map view is handled on the
+device: no directory, and no receiver, is ever told where a listener is. A
+position leaves a device in exactly two cases — to show a server's location when
+its owner lists it on vibesdr.net, and to the clients connected to that server,
+for the decoders that show location-based data on a map. In both cases it is the
+Maidenhead grid square only, never a fix: a square a few kilometres on a side
+(about 5.6 km by 4.6 km in the UK), so it says which town, not which street.
 
 ### Connections to SDR receivers
 When you select an SDR instance, the app connects directly from your device to
@@ -200,9 +209,10 @@ location.
 
 ## Permissions
 
-- **Location** (optional) — sort/filter servers by distance on the device, as
-  described above. Requested at approximate ("coarse") accuracy only, never in the
-  background, and never sent anywhere.
+- **Location** (optional for listening; a grid square is needed to list a server)
+  — sort/filter servers by distance and place your own receiver on the map, all on
+  the device, as described above. Requested at approximate ("coarse") accuracy
+  only and never in the background.
 - **Local network** (iOS and watchOS) — to discover and connect to SDR receivers on
   your local network.
 - **Notifications / media controls** — to show now-playing controls and run audio
