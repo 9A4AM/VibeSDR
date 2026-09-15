@@ -2937,6 +2937,13 @@ function fill() {
       var nm = String((typeof hw === "object" && hw && hw.model) || "");
       var isV4 = /blog\s*v4/i.test(nm);
       var v4 = $("autoDsV4"); if (v4) v4.classList.toggle("hide", !isV4);
+      /* ★★★ AN RTL CONTROL, DRAWN ONLY ON AN RTL. Direct sampling is the RTL2832U's tuner bypass;
+       *   an SDRplay, an Airspy HF+ or a HackRF reach HF natively and have no such switch. It was
+       *   shown on every radio and could be ticked on the RSP1B with no warning (Stuart,
+       *   2026-09-15: "this doesnt apply for an SDRPlay"). AGENTS.md: branch on the driver or
+       *   remove it — never leave a control that is inert on two of three radios. */
+      var drv = String(r.driver || "");
+      $("hwAutoDs").classList.toggle("hide", !(drv === "rtl" || drv === "rtlsdr"));
       function syncClash() {
         var el = $("autoDsClash"); if (!el) return;
         var lo = Math.abs(parseFloat(($("convLo") || {}).value || "0")) || 0;
@@ -3183,7 +3190,8 @@ function collectRadio() {
 
     /* ★ Sent every time, like the converter above and for the same reason: this is the field
      *   that lets an owner turn it OFF. Gated out when zero it could never be un-set. */
-    autoDirectSampling: !!($("autoDs") && $("autoDs").checked),
+    // ★ A hidden control must not still send a value (same rule as the spectrogram box below).
+    autoDirectSampling: !!($("autoDs") && !$("hwAutoDs").classList.contains("hide") && $("autoDs").checked),
     directSamplingBelowHz: (function () {
       var mhz = parseFloat($("autoDsBelow") ? $("autoDsBelow").value || "0" : "0");
       return (mhz > 0) ? Math.round(mhz * 1e6) : 24000000;
