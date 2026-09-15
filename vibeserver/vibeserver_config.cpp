@@ -536,6 +536,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.rateLock = one.rateLock;
     r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax; r.nbWide = one.nbWide;
     r.rawIqLanMaxHz = one.rawIqLanMaxHz;
+    r.blockedModes = one.blockedModes;
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
@@ -844,6 +845,11 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rawIq = r.rawIq; c.rawIqMax = r.rawIqMax;   // ★ raw IQ out — the last link, as the note below says
     c.rawIqLanMaxHz = r.rawIqLanMaxHz;
     c.nbWide = r.nbWide;
+    /* ★★★ THE MODES LIST WAS THE tunerBwAuto FAULT AGAIN — saved, parsed, stored against the right
+     *     radio, and never copied here, so the worker offered everything however the owner had
+     *     set it (Stuart, 2026-09-15: "I went in, disabled WFM/ADV RDS/DAB … and they've been
+     *     ignored"). The file on the Pi held "wfm,rds,dab"; the radio never saw it. */
+    c.blockedModes = r.blockedModes;
     /* ★★★ THE LAST LINK IN THE CHAIN, AND THE ONE THAT WAS MISSING. This function flattens a
      *     RADIO's settings into the server-level Config that the worker process actually reads, so
      *     a per-radio field that is not copied here simply never arrives — however correctly it is
