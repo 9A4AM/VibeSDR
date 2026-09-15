@@ -3015,6 +3015,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         static auto dabCleanSince = std::chrono::steady_clock::time_point{};
         static auto dabTunedAt    = std::chrono::steady_clock::time_point{};
         static bool dabLearned = false;
+        static bool dabJumped  = false;   // ★ one sized jump per block visit, then the rung rule
         const int blk = g_dabChannel.load(std::memory_order_relaxed);
         const auto q = g_dab.quality();
         /* ★ "Runs clean" is judged AFTER error correction: 9A carries 6.6 % MSC bit errors before
@@ -3022,7 +3023,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *   remembered it (2026-09-15 18:32). The FIB rate is the decoder's own verdict. */
         const bool perfect = q.locked && q.fibRate >= 0.95f;   // ★ "received mostly fine" — Stuart
         if (blk != dabBlockSeen) {
-            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabTunedAt = now;
+            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabJumped = false; dabTunedAt = now;
             /* ★★ A NEW MULTIPLEX IS A NEW SITUATION. The anti-hunting rule refuses a step that
              *    reverses the last one — right within a block, wrong across blocks: a rung given
              *    up in a dead block on the way past then could not be taken back on arrival
@@ -3074,6 +3075,53 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *   second into a block is the retune, not the multiplex (8D on the way past, 18:32:18). */
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - dabTunedAt).count() < 3000) {
             outMs = 0; outDir = 0; return;
+        }
+        /* ★★★ A SWAMPED BLOCK IS PLACED IN ONE WRITE, NOT WALKED. 11A, 20:23:49: entered at RF
+         *     state 4 with the IF pinned at 59 and the ADC peak at −13 dBFS, 27 dB over target.
+         *     The rung rule then took three steps seven seconds apart, the converter clipped
+         *     between them, the MER swung 13–24 and the audio was silent for 25 s (AUDIO AUDIT
+         *     quiet 100 % 20:23:51–20:24:16) — every frame the RSP "lost" against the V4 was lost
+         *     there. The excess was known at the start; the start-up coarse placement already
+         *     sizes a move from it with the band's own ladder, so the same arithmetic runs here
+         *     once per block visit. One write is fewer API calls than three (Stuart: "not too
+         *     quick as to break the API"; "we optimised the RTL path for speed"). Aimed at −20 dBFS
+         *     so the IF AGC lands with room on both sides; the block is then relearned at the
+         *     state it runs clean on. Only the swamped side: a starved block is dabWantUp's job,
+         *     a rung at a time, because RF gain added to a weak block is what overloads the
+         *     neighbour. */
+        if (!dabJumped && mean >= 58.0) {
+            dabJumped = true;
+            const double pk = sdrp->adcPeakDbfs();
+            constexpr double kAimDbfs = -20.0;
+            if (std::isfinite(pk) && pk > kAimDbfs + 6.0) {
+                const int n = sdrp->lnaStateCount();
+                const int cur = sdrp->currentLnaState();
+                const double wantDb = kAimDbfs - pk;              // negative: less gain
+                int step = 0;
+                const float gHere = sdrp->lnaGainDb(cur);
+                if (std::isfinite(gHere)) {
+                    double best = 1e9;
+                    for (int st = 0; st < n; ++st) {
+                        const float g2 = sdrp->lnaGainDb(st);
+                        if (!std::isfinite(g2)) continue;
+                        const double e = std::fabs(((double)g2 - (double)gHere) - wantDb);
+                        if (e < best) { best = e; step = st - cur; }
+                    }
+                }
+                if (step <= 0) step = std::max(1, (int)std::lround(-wantDb / 6.0));
+                step = std::min(4, step);
+                const int st = std::min(n - 1, cur + step);
+                if (st > cur) {
+                    const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
+                    LOGI("RSP RF AGC (DAB): %s swamped on entry — IF pinned at %.0f dB, ADC peak %.1f dBFS — one jump of %d state(s) to RF gain %d/%d (LNA %d), then the IF AGC",
+                         nm, mean, pk, st - cur, n - 1 - st, n - 1, st);
+                    LocalSdrShim::instance().setLnaState(st);
+                    g_rspRfAgcLastLna.store(st, std::memory_order_relaxed);
+                    lastMove = now; lastDir = +1; outMs = 0; outDir = 0;
+                    vsSayVts(std::string("RF gain placed for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - st) + "/" + std::to_string(n - 1) + ".");
+                    return;
+                }
+            }
         }
         dabQuick = true;
         /* ★★★ A WEAK MULTIPLEX WITH IF HEADROOM WANTS RF, WINDOW OR NOT. 10D sat at RF 2/9 with the
