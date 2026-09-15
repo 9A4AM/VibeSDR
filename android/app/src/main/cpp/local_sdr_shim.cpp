@@ -4283,6 +4283,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  completing transfers, so the capture thread sits there forever and any detection that waits
      *  for that call to return waits for ever too. Silence is the signal. */
     std::atomic<double> lastIqAt{0.0};
+    // ★ When the RSP's tuner was last written. A retune burst (block-stepping through Band III at
+    //   0.8 s a hop, 2026-09-15) pauses the callback for longer than the watchdog's 3 s, and a
+    //   re-Init issued INTO that burst is what hung the API service. Recent writes widen the
+    //   silence the watchdog will tolerate — see the stall test.
+    std::atomic<double> lastHwWriteAt{0.0};
     // Consecutive in-place stream restarts since the last healthy stretch — drives the backoff
     // that stops a wedged API being hammered, and for the Airspy decides when to escalate from
     // restarting the stream to reopening the device. Watchdog thread only.
@@ -4889,7 +4894,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         else if (useTcp()) sendTcpCmd(0x01, hz);
-        else if (useSdrplay()) sdrp->setFrequency((double)hz);
+        else if (useSdrplay()) { sdrp->setFrequency((double)hz); lastHwWriteAt.store(nowSecs(), std::memory_order_relaxed); }
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
         else if (useHackRf())   hrf->setFrequency((double)hz);
         // ★★★ HANDED OFF, NOT PERFORMED. This runs under modeMtx (see above, and
@@ -18996,7 +19001,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double age = hrf->secondsSinceLastRx();
                     if (age < 1e8) last = std::max(last, nowSecs() - age);
                 }
-                const bool silent = last > 0 && (nowSecs() - last) > 3.0;
+                /* ★★ A RADIO BEING RETUNED IS ALLOWED A LONGER PAUSE. 3 s of silence is the
+                 *    unplugged-dongle figure; an RSP that had a tuner write inside the last 3 s
+                 *    gets 8 s before it is called stalled, so a block-stepping burst is never
+                 *    answered with a re-Init landing between two tunes (2026-09-15 19:48). */
+                const double sinceWrite = nowSecs() - lastHwWriteAt.load(std::memory_order_relaxed);
+                const double silenceS = (useSdrplay() && sinceWrite < 3.0) ? 8.0 : 3.0;
+                const bool silent = last > 0 && (nowSecs() - last) > silenceS;
 
                 // ★★★ AN RSP STALL IS RECOVERABLE IN PLACE — and unlike a dongle, nothing has
                 // been unplugged. The SDRplay API can simply stop calling the stream callback
