@@ -8469,8 +8469,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     was alive ONCE; it says nothing about now. After a DAB rate change the events
              *     stopped, currentIfGr() echoed the commanded 59, and the loop stepped 3 -> 9
              *     on it (Lenovo, 2026-09-15 15:00). ifAgcReporting() is the per-tick truth. */
-            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
-                vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
+            /* ★★★ THE IF GAIN IS HELD STILL WHILE DAB IS ON. Same aerial, same MER (9.1 vs 9.2),
+             *     same pre-Viterbi rate: the V4 lost nothing on 10D and the RSP1A lost half its
+             *     frames (2026-09-15 23:11). Averages that agree with results that differ mean the
+             *     errors arrive in bursts, and the one thing this radio does in DAB that the RTL
+             *     does not is run its IF AGC continuously with millisecond attack and decay —
+             *     every correction is an amplitude step inside an OFDM symbol, and DQPSK reads
+             *     each carrier against the previous symbol, so one step spoils all 1536 at once.
+             *     The RTL's gain is frozen for the whole of DAB. So: once the tuner's loop has
+             *     settled on a block (reporting, 8 s since its last restart, mid-range), its
+             *     reduction is written back as a fixed value and the loop is switched off. It is
+             *     switched back on when DAB is left, when the block changes, or when the level
+             *     drifts far from the set point for 5 s (a fade, a stronger block) — it then
+             *     re-settles and is held again. The RF loop stays out while the IF is held. */
+            {
+                static bool dabIfHeld = false;
+                static int  dabHeldBlock = -2;
+                static auto dabDriftSince = std::chrono::steady_clock::time_point{};
+                const bool dabOn = g_dabMode.load(std::memory_order_relaxed);
+                const int  blkNow = g_dabChannel.load(std::memory_order_relaxed);
+                if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
+                    sdrp->setIfAgc(true);
+                    dabIfHeld = false; dabDriftSince = {};
+                    LOGI("RSP IF AGC: released — %s", dabOn ? "block changed" : "DAB left");
+                } else if (dabIfHeld) {
+                    const double pk = sdrp->adcPeakDbfs(); const int am = sdrp->ifAgcSetPointDbfs();
+                    const bool drift = std::isfinite(pk) && (pk > am + 8.0 || pk < am - 15.0);
+                    if (!drift) dabDriftSince = {};
+                    else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = std::chrono::steady_clock::now();
+                    else if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - dabDriftSince).count() >= 5) {
+                        sdrp->setIfAgc(true);
+                        dabIfHeld = false; dabDriftSince = {};
+                        LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS against a %d dBFS set point for 5 s", pk, am);
+                    }
+                } else if (dabOn && sdrpAgcWanted && !sdrpSettling && graceDone && sdrp->ifAgcReporting()
+                           && sdrp->secondsSinceAgcRestart() >= 8.0) {
+                    const int gr = sdrp->currentIfGr();
+                    if (gr >= 24 && gr <= 55) {
+                        sdrp->setIfAgc(false);
+                        sdrp->setIfGainReduction(gr);
+                        dabIfHeld = true; dabHeldBlock = blkNow; dabDriftSince = {};
+                        LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, sdrp->adcPeakDbfs());
+                        vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
+                    }
+                }
+                if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
+                    vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted && !dabIfHeld);
+            }
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`
              *     block above, so the notches only tracked the dial when the RF AGC's own
