@@ -8010,7 +8010,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              *   that explains the bouncing noise floor to somebody who has never
                              *   seen it (Stuart, 2026-09-15: "a VTS notification too so users get a
                              *   prominent message and idea what is going on"). */
-                            { const std::string body = "{\"type\":\"notice\",\"text\":\"Setting the receiver's gain \xe2\x80\x94 "
+                            { const std::string body = "{\"type\":\"notice\",\"vts\":\"Setting the receiver's gain \xe2\x80\x94 "
                                   "the noise floor will bounce for about half a minute while the AGC finds its level.\"}";
                               for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
@@ -8372,7 +8372,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
                      sdrp->currentIfGr());
                 { const int n = std::max(1, sdrp->lnaStateCount() - 1);
-                  const std::string body = "{\"type\":\"notice\",\"text\":\"Gain set \xe2\x80\x94 RF gain "
+                  const std::string body = "{\"type\":\"notice\",\"vts\":\"Gain set \xe2\x80\x94 RF gain "
                       + std::to_string(n - sdrp->currentLnaState()) + "/" + std::to_string(n)
                       + ", IF reduction " + std::to_string(sdrp->currentIfGr()) + " dB. The AGC now holds it.\"}";
                   for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
@@ -9820,7 +9820,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void drainDirectSamplingAnnounce() {
         const int a = g_dsAnnounce.exchange(0, std::memory_order_relaxed);
         if (!a) return;
-        const std::string body = std::string("{\"type\":\"notice\",\"text\":\"")
+        const std::string body = std::string("{\"type\":\"notice\",\"vts\":\"")
             + (a == 1
                ? "Switching to direct sampling mode for HF \xe2\x80\x94 the tuner is bypassed "
                  "below this point, so gain control is not available."

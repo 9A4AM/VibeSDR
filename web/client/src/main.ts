@@ -1107,6 +1107,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ A refusal in the server's own words, in the TRANSIENT slot — never the owner's notice
     //   slot, which somebody posted deliberately and which must not be clobbered by it.
     onRefused: (why: string) => showPill(why, 9000),
+    onVts: (text: string) => vtsNotice('srv', text, '', 30000),
     /* ★ DAB arrives twice a second with the whole station list — see BRIEF-dab.md for why it is
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
     onDab: (d: DabState) => {

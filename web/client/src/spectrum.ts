@@ -278,6 +278,10 @@ export interface SpectrumCallbacks {
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
   onRefused?: (why: string) => void;
+  /** ★ A transient server message for the VTS bar — the gain start-up, a direct-sampling
+   *  switch. Neither the owner's standing notice nor a refusal pill: those slots are taken
+   *  (Stuart, 2026-09-15: "gain warning should be in the VTS like it is in the app"). */
+  onVts?: (text: string) => void;
   /** The person at the server is looking for this window. */
   onSummon?: () => void;
   /** ★★ lockedRate is an UP-TO CEILING (offer rates at or below it). lockedCentre is a real
@@ -852,6 +856,7 @@ export class SpectrumClient {
          *  ★ Same shape as the `needs_codec` message in audio.ts, which was also sent, also
          *    ignored, and also left the only evidence being a control that appeared not to work. */
         if (typeof msg.why === 'string' && msg.why) { this.cb.onRefused?.(msg.why); break; }
+        if (typeof msg.vts === 'string' && msg.vts) { this.cb.onVts?.(msg.vts); break; }
         // ★ The owner's message to listeners, pushed the moment it is posted or cleared.
         this.cb.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
         break;

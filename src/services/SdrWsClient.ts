@@ -2226,6 +2226,10 @@ export abstract class SdrWsClient {
        *     message somebody deliberately posted, and leave it clobbered. */
       const why = typeof msg.why === 'string' ? msg.why : '';
       if (why) { this.callbacks.onRefused?.(why); return; }
+      // ★ `vts` = a transient server line for the bar (gain start-up, sampling switch); the
+      //   refusal path already lands there, with the same look.
+      const vts = typeof msg.vts === 'string' ? msg.vts : '';
+      if (vts) { this.callbacks.onRefused?.(vts); return; }
       this.callbacks.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
       return;
     }
