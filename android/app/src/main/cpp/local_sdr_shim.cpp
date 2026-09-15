@@ -2607,6 +2607,15 @@ static std::atomic<bool> g_rspAgcRestartReq{false};
  *  ★ Set by the repair, consumed by the detector, which then needs FRESH evidence before it may
  *    complain again. */
 static std::atomic<bool> g_rspAgcClearEvidence{false};
+/** ★★★ THE KICK HAS JUST HANDED OVER (step 6/6). Every gate that protects the RF loop from the
+ *  handover transient — the 12 s grace, "has the reduction moved off the parking value", the
+ *  once-only placement, the RF tick's own sustain counters — is reset from THIS flag, not from
+ *  watching sdrpSettling flip. Measured 2026-09-15 on the Lenovo RSP1A: kick 6/6 at .783, "RF
+ *  AGC: starting" at .796, "59.0 dB for 1.0 s … state 5 -> 6" 1.1 s later, and only THEN "the
+ *  IF AGC settled at 40 dB" — the loop had judged the kick's own 59 dB parking value and thrown
+ *  the last RF rung away before the tuner's AGC had moved at all (Stuart: "initialising AGC
+ *  worked fine, the noise floor bounced then settled, signals were good, then 0 RF gain"). */
+static std::atomic<bool> g_rspKickHandover{false};
 
 /* ── AUTOMATIC DIRECT SAMPLING FOR HF (RTL only) ─────────────────────────────────────────────
  * ★★ An owner setting, OFF by default — see RadioConfig::autoDirectSampling for why it must stay
@@ -2840,6 +2849,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     if (g_rspAgcClearEvidence.exchange(false, std::memory_order_relaxed)) {
         deadSteps = 0; unhonoured = 0; deadWarned = false;
         grAtLastStep = -1; structGainAtStep = -999.0f;
+        outMs = 0; outDir = 0; lastDir = 0; oscWarned = false;   // ★ no sustain carried over a handover
     }
     if (grAtLastStep >= 0) {
         const float gNow    = sdrp->structGainDb();
@@ -7971,6 +7981,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                  savedAgc == 0 ? "AGC off — owner's saved gain restored" : "AGC on",
                                  sdrp->currentIfGr(), sdrp->currentLnaState(), sdrp->systemGainDb(),
                                  (savedLna >= 0 || savedGr >= 0) ? " [saved]" : "");
+                            // ★ The handover moment: every RF-loop gate starts again from here.
+                            g_rspKickHandover.store(true, std::memory_order_relaxed);
+                            g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
                             break; }
                 }
             }
@@ -8072,6 +8085,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             static auto settledAt = std::chrono::steady_clock::time_point{};
             static int  handoverGr = -1;
             static bool ifHasMoved = false;
+            /* ★★★ RESET AT THE HANDOVER ITSELF — see g_rspKickHandover. Watching sdrpSettling
+             *     flip is not the same event: a kick that spans an idle period (step 1 at boot,
+             *     steps 2–6 when the first listener arrives) can leave these holding values from
+             *     before the kick, so the grace read as already served and "moved" as already
+             *     true, and the loop stepped on the parking value 1.1 s after handover. */
+            static bool armedOnceReset = false;
+            if (g_rspKickHandover.exchange(false, std::memory_order_relaxed)) {
+                settledAt = std::chrono::steady_clock::now();
+                handoverGr = sdrp->currentIfGr();          // ★ the parking value, 59 — "moved" means off THIS
+                ifHasMoved = false;
+                armedOnceReset = true;
+            }
             if (sdrpSettling) {
                 settledAt = std::chrono::steady_clock::time_point{};
                 handoverGr = -1; ifHasMoved = false;
@@ -8102,6 +8127,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     usually means no steps at all (Stuart's suggestion, 2026-09-12). */
             static bool armedOnce = false;
             if (sdrpSettling) armedOnce = false;
+            if (armedOnceReset) { armedOnce = false; armedOnceReset = false; }
             if (!sdrpSettling && graceDone && ifAgcAlive && !armedOnce
                 && g_rspRfAgc.load(std::memory_order_relaxed)) {
                 armedOnce = true;
