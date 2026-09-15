@@ -3022,8 +3022,10 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *   Viterbi with zero FIB errors and clean audio, and the old test (MSC BER < 0.2 %) never
          *   remembered it (2026-09-15 18:32). The FIB rate is the decoder's own verdict. */
         const bool perfect = q.locked && q.fibRate >= 0.95f;   // ★ "received mostly fine" — Stuart
+        static bool dabWasLocked = false;
         if (blk != dabBlockSeen) {
             dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabJumped = false; dabTunedAt = now;
+            dabWasLocked = false;
             /* ★★ A NEW MULTIPLEX IS A NEW SITUATION. The anti-hunting rule refuses a step that
              *    reverses the last one — right within a block, wrong across blocks: a rung given
              *    up in a dead block on the way past then could not be taken back on arrival
@@ -3039,10 +3041,22 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                 grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
                 LocalSdrShim::instance().setLnaState(mem);
                 g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
+                g_dab.armRetune();   // ★ a ~20 dB step: let the decoder re-acquire rather than track its old sync
                 lastMove = now; lastDir = 0; outMs = 0; outDir = 0;
                 vsSayVts(std::string("RF gain restored for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - mem) + "/" + std::to_string(n - 1) + ".");
                 return;
             }
+        }
+        /* ★ The lock, timed from the block entry — so a slow acquisition is a number in the
+         *   journal and not a stopwatch at the bench (11D took 35 s, 20:41). */
+        if (q.locked != dabWasLocked) {
+            dabWasLocked = q.locked;
+            const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
+            const double t = std::chrono::duration_cast<std::chrono::milliseconds>(now - dabTunedAt).count() / 1000.0;
+            if (q.locked) LOGI("[DAB] %s locked %.1f s after entry — FIB %.0f %%, LNA state %d, IF %.0f dB, peak %.1f dBFS",
+                               nm, t, q.fibRate * 100.0f, sdrp->currentLnaState(), mean, sdrp->adcPeakDbfs());
+            else          LOGI("[DAB] %s lost lock %.1f s after entry — LNA state %d, IF %.0f dB, peak %.1f dBFS",
+                               nm, t, sdrp->currentLnaState(), mean, sdrp->adcPeakDbfs());
         }
         /* ★★★ A CLEAN MULTIPLEX WITH THE IF AT A RAIL IS NOT LEFT ALONE. 11D at 21:01 (Stuart's
          *     screenshot): RF 3/9, IF pinned at 59 dB = minimum IF gain, MER fine — and the loop
@@ -3123,6 +3137,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                          nm, mean, pk, st - cur, n - 1 - st, n - 1, st);
                     LocalSdrShim::instance().setLnaState(st);
                     g_rspRfAgcLastLna.store(st, std::memory_order_relaxed);
+                    g_dab.armRetune();   // ★ as above — re-acquire on the new level
                     lastMove = now; lastDir = +1; outMs = 0; outDir = 0;
                     vsSayVts(std::string("RF gain placed for ") + nm + " \xe2\x80\x94 " + std::to_string(n - 1 - st) + "/" + std::to_string(n - 1) + ".");
                     return;
@@ -11672,6 +11687,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 int learned = -1;
                 { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked(); auto it = g_dabGainMem.find(idx); if (it != g_dabGainMem.end()) learned = it->second; }
                 if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs());
+            }
+            /* ★★★ AND THE RSP'S REMEMBERED RUNG GOES ON NOW, WITH THE TUNE — not from the RF loop's
+             *     tick, which sits behind the six-second post-restart gate (the rate change re-Inits
+             *     the stream). 11D, 20:41:00: entered at state 7, the memory's write to 8 landed at
+             *     20:41:06, and the decoder, which had started acquiring at the wrong level, did
+             *     not play until 20:41:40 ("35 seconds it took to lock on and play audio from
+             *     11D"). Written here the decoder's first frames are at the right gain and the
+             *     loop's own memory path finds nothing to do. */
+            if (useSdrplay() && sdrp && !radioReleased.load()) {
+                int mem = -1;
+                { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
+                  auto it = g_dabLnaMem.find(idx); if (it != g_dabLnaMem.end()) mem = it->second; }
+                const int n = sdrp->lnaStateCount();
+                if (mem >= 0 && mem < n && mem != sdrp->currentLnaState()) {
+                    LOGI("RSP RF AGC (DAB): %s ran clean at LNA state %d before — written with the tune", vibedab::kBandIII[idx].name, mem);
+                    LocalSdrShim::instance().setLnaState(mem);
+                    g_rspRfAgcLastLna.store(mem, std::memory_order_relaxed);
+                    g_dab.armRetune();   // ★ the decoder starts again on the new level, not on what it heard before it
+                }
             }
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
