@@ -513,9 +513,15 @@ bool publishOnce(const Settings& want, const std::string& url) {
             g_listed = false;
             return false;
         }
+        // ★ Same as stop(): the row is gone, the address the owner gave out is not.
+        const std::string keep = jsonStr(state, "slug");
         clearState();
+        if (!keep.empty()) saveState("", "", keep, 0);
     }
 
+    /* ★ Offer the remembered address back (see stop()). A name the directory now refuses as
+     *   taken falls back to the derived one below, so a lost name never blocks the listing. */
+    const std::string remembered = jsonStr(loadState(), "slug");
     body = "{\"name\":\"" + esc(want.name) + "\",\"grid\":\"" + esc(want.locator) + "\""
          + ",\"url\":\"" + esc(url) + "\",\"kind\":\"" + (want.publicUrl.empty() ? "tunnel" : "direct")
          + "\",\"locator\":\"" + esc(want.locator) + "\",\"status\":" + status;
@@ -523,8 +529,16 @@ bool publishOnce(const Settings& want, const std::string& url) {
     //     temporary share set up from scratch was recorded as PERMANENT — the path every new user
     //     takes first was the one path that could not work.
     if (want.shareForSec >= 0) body += ",\"shareForSec\":" + std::to_string(want.shareForSec);
-    body += "}";
-    const std::string r = httpPost("/api/directory/register", body);
+    std::string r;
+    if (!remembered.empty()) {
+        r = httpPost("/api/directory/register", body + ",\"slug\":\"" + esc(remembered) + "\"}");
+        if (jsonStr(r, "key").empty() && !jsonStr(r, "error").empty()) {
+            std::fprintf(stderr, "[directory] remembered address '%s' refused (%s) — registering under the derived one\n",
+                         remembered.c_str(), jsonStr(r, "error").c_str());
+            r.clear();
+        }
+    }
+    if (r.empty()) r = httpPost("/api/directory/register", body + "}");
     std::unique_lock<std::mutex> lk(g_mtx);
     if (r.empty()) { g_error = "could not reach the directory"; g_listed = false; return false; }
     const std::string newKey = jsonStr(r, "key");
@@ -871,7 +885,16 @@ void stop() {
     //   a listing to age out for a quarter of an hour after the owner said stop.
     if (!id.empty() && !key.empty())
         httpPost("/api/directory/delist", "{\"id\":\"" + esc(id) + "\",\"key\":\"" + esc(key) + "\"}");
+    /* ★★★ THE FRIENDLY NAME SURVIVES A DELIST. The id and key are the directory's and go with the
+     *     row; the slug is the address the owner has GIVEN OUT, and clearing it here meant the
+     *     next listing derived a fresh one from the name — lenovoi5.vibeserver.vibesdr.net became
+     *     stuey3d-lenovoi5 after one accidental unlist (Lenovo, 2026-09-15 21:38), and every link
+     *     the owner had shared went 404. The slug is kept on its own and offered back on the next
+     *     registration; the directory grants it if nobody has taken it meanwhile. */
+    std::string slug;
+    { std::lock_guard<std::mutex> lk(g_mtx); slug = jsonStr(loadState(), "slug"); }
     clearState();
+    if (!slug.empty()) saveState("", "", slug, 0);
     stopTunnel();
     std::lock_guard<std::mutex> lk(g_mtx);
     g_listed = false; g_address.clear(); g_tunnelUrl.clear(); g_error.clear();
