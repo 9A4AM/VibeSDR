@@ -2802,6 +2802,51 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         return;                                           // ★ still filling this window
 
     const double mean = count ? accum / count : 0.0;
+    /* ★★★ DAB: AS MUCH RF GAIN AS THE CONVERTER ALLOWS, AND THE IF WINDOW IS NOT CONSULTED.
+     *     Measured on 10D, RSP1A, 2026-09-15 23:20-23:30, same aerial as a V4 that decoded it
+     *     clean: at the window rule's choice (state 5, IF 41-59) the raw error rate sat in the
+     *     high nines and 13-18 % of frames were erased; Stuart put the LNA at state 2 by hand,
+     *     the raw rate fell to 8.7-9.3 % (the V4's figure) and erasures stopped; the loop then
+     *     stepped to 3 and the rate fell again, because state 2 had the converter at -2 dBFS.
+     *     On a weak block the LNA sets the noise figure and the IF reduction only attenuates
+     *     what comes after it, so the 30-50 dB IF window — right for a carrier — spends the
+     *     half decibel that separates this radio from the RTL. The converter is the only
+     *     limit that matters: more gain while its peak is under -14 dBFS and the overload flag
+     *     is clear, less only past -6 dBFS or on overload (Stuart: state 2 ran it to -6 and
+     *     "7 is slightly too high, 6 was better"), a 2 s sustain and the 6 s settle
+     *     floor, no anti-hunting refusal (the 7 dB between the two thresholds is its own
+     *     hysteresis). "For everything else gain works as normal, but for DAB give it more RF
+     *     unless overloaded" — Stuart. */
+    if (dabRule) {   // ★ BEFORE every IF-readout gate below — see the note
+        const double pk = sdrp->adcPeakDbfs();
+        const bool over = sdrp->overloaded();
+        const int ddir = over || (std::isfinite(pk) && pk > -6.0) ? +1
+                       : (std::isfinite(pk) && pk < -14.0) ? -1 : 0;
+        if (ddir == 0) { outMs = 0; outDir = 0; return; }
+        if (ddir != outDir) { outDir = ddir; outMs = 0; }
+        outMs += kWindowMs;
+        if (outMs < (ddir > 0 && (over || pk > -3.0) ? 500.0 : 2000.0)) return;
+        if (lastMove.time_since_epoch().count() != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < 6000)
+            return;
+        const int n = sdrp->lnaStateCount();
+        if (n <= 1) return;
+        const int cur = sdrp->currentLnaState();
+        const int lo  = std::max(0, lnaFloor);
+        const int want = std::min(n - 1, std::max(lo, cur + ddir));
+        if (want == cur) { outMs = 0; return; }
+        LOGI("RSP RF AGC (DAB): ADC peak %.1f dBFS%s — RF gain state %d -> %d (%s gain; IF %.0f dB, system gain %.1f dB)",
+             pk, over ? ", OVERLOAD" : "", cur, want, ddir < 0 ? "more" : "less", mean, sdrp->systemGainDb());
+        grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
+        LocalSdrShim::instance().setLnaState(want);
+        g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
+        g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+        lastMove = now; lastDir = ddir; lastMean = mean;
+        lastStepAt = std::chrono::steady_clock::now();
+        outMs = 0; outDir = 0;
+        return;
+    }
     accum = 0.0; count = 0; winStart = now;
 
     /* ★★★ STRICTLY PAST THE TRIGGER, NOT AT IT. `>=` acts the moment the average TOUCHES the
@@ -2989,50 +3034,6 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         }
     }
     if (sdrp->secondsSinceAgcRestart() < 6.0) { outMs = 0; outDir = 0; return; }
-    /* ★★★ DAB: AS MUCH RF GAIN AS THE CONVERTER ALLOWS, AND THE IF WINDOW IS NOT CONSULTED.
-     *     Measured on 10D, RSP1A, 2026-09-15 23:20-23:30, same aerial as a V4 that decoded it
-     *     clean: at the window rule's choice (state 5, IF 41-59) the raw error rate sat in the
-     *     high nines and 13-18 % of frames were erased; Stuart put the LNA at state 2 by hand,
-     *     the raw rate fell to 8.7-9.3 % (the V4's figure) and erasures stopped; the loop then
-     *     stepped to 3 and the rate fell again, because state 2 had the converter at -2 dBFS.
-     *     On a weak block the LNA sets the noise figure and the IF reduction only attenuates
-     *     what comes after it, so the 30-50 dB IF window — right for a carrier — spends the
-     *     half decibel that separates this radio from the RTL. The converter is the only
-     *     limit that matters: more gain while its peak is under -10 dBFS and the overload flag
-     *     is clear, less only past -3 dBFS or on overload, a 2 s sustain and the 6 s settle
-     *     floor, no anti-hunting refusal (the 7 dB between the two thresholds is its own
-     *     hysteresis). "For everything else gain works as normal, but for DAB give it more RF
-     *     unless overloaded" — Stuart. */
-    if (dabRule) {
-        const double pk = sdrp->adcPeakDbfs();
-        const bool over = sdrp->overloaded();
-        const int ddir = over || (std::isfinite(pk) && pk > -3.0) ? +1
-                       : (std::isfinite(pk) && pk < -10.0) ? -1 : 0;
-        if (ddir == 0) { outMs = 0; outDir = 0; return; }
-        if (ddir != outDir) { outDir = ddir; outMs = 0; }
-        outMs += kWindowMs;
-        if (outMs < (ddir > 0 && (over || pk > -1.0) ? 500.0 : 2000.0)) return;
-        if (lastMove.time_since_epoch().count() != 0 &&
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < 6000)
-            return;
-        const int n = sdrp->lnaStateCount();
-        if (n <= 1) return;
-        const int cur = sdrp->currentLnaState();
-        const int lo  = std::max(0, lnaFloor);
-        const int want = std::min(n - 1, std::max(lo, cur + ddir));
-        if (want == cur) { outMs = 0; return; }
-        LOGI("RSP RF AGC (DAB): ADC peak %.1f dBFS%s — RF gain state %d -> %d (%s gain; IF %.0f dB, system gain %.1f dB)",
-             pk, over ? ", OVERLOAD" : "", cur, want, ddir < 0 ? "more" : "less", mean, sdrp->systemGainDb());
-        grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
-        LocalSdrShim::instance().setLnaState(want);
-        g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
-        g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
-        lastMove = now; lastDir = ddir; lastMean = mean;
-        lastStepAt = std::chrono::steady_clock::now();
-        outMs = 0; outDir = 0;
-        return;
-    }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
@@ -8531,26 +8532,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     re-settles and is held again. The RF loop stays out while the IF is held. */
             {
                 static bool dabIfHeld = false;
-                static int  dabHeldBlock = -2;
+                static int  dabHeldBlock = -2, dabArmedBlock = -2;
                 static auto dabDriftSince = std::chrono::steady_clock::time_point{};
+                static auto dabHoldArmedAt = std::chrono::steady_clock::time_point{};
                 const bool dabOn = g_dabMode.load(std::memory_order_relaxed);
                 const int  blkNow = g_dabChannel.load(std::memory_order_relaxed);
+                const auto nowH = std::chrono::steady_clock::now();
+                /* ★ The hold arms 8 s after the block was entered or the loop was last released —
+                 *   NOT 8 s after the AGC's last restart, which our own release had just reset
+                 *   to zero and the reporting flag had not: 23:36 held 55 dB 30 ms after every
+                 *   block change and re-held 200 ms after every release, five times a minute. */
+                if (dabOn && blkNow != dabArmedBlock) { dabArmedBlock = blkNow; dabHoldArmedAt = nowH; }
                 if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
                     sdrp->setIfAgc(true);
-                    dabIfHeld = false; dabDriftSince = {};
+                    dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
                     LOGI("RSP IF AGC: released — %s", dabOn ? "block changed" : "DAB left");
                 } else if (dabIfHeld) {
-                    const double pk = sdrp->adcPeakDbfs(); const int am = sdrp->ifAgcSetPointDbfs();
-                    const bool drift = std::isfinite(pk) && (pk > am + 8.0 || pk < am - 15.0);
+                    /* ★ Released only for a reason the AGC can answer: the converter near the
+                     *   top (past -3 dBFS, or the overload flag) or the level fallen right away
+                     *   (under -35 dBFS). "8 dB over a -20 set point" was NOT such a reason —
+                     *   the loop could only have gone from 55 to 59 and back, and did, every
+                     *   5 s. The RF rule owns the level in DAB now; the IF just holds still. */
+                    const double pk = sdrp->adcPeakDbfs();
+                    const bool drift = sdrp->overloaded() || (std::isfinite(pk) && (pk > -3.0 || pk < -35.0));
                     if (!drift) dabDriftSince = {};
-                    else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = std::chrono::steady_clock::now();
-                    else if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - dabDriftSince).count() >= 5) {
+                    else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = nowH;
+                    else if (std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5) {
                         sdrp->setIfAgc(true);
-                        dabIfHeld = false; dabDriftSince = {};
-                        LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS against a %d dBFS set point for 5 s", pk, am);
+                        dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
+                        LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS%s for 5 s", pk, sdrp->overloaded() ? " (overload)" : "");
                     }
                 } else if (dabOn && sdrpAgcWanted && !sdrpSettling && graceDone && sdrp->ifAgcReporting()
-                           && sdrp->secondsSinceAgcRestart() >= 8.0) {
+                           && std::chrono::duration_cast<std::chrono::seconds>(nowH - dabHoldArmedAt).count() >= 8) {
                     const int gr = sdrp->currentIfGr();
                     if (gr >= 24 && gr <= 55) {
                         sdrp->setIfAgc(false);
