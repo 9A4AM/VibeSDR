@@ -771,8 +771,9 @@ function serverCaps(s) {
 }
 function serverCapBadges(s) {
   const c = serverCaps(s);
-  const parts = [c.dab ? dabBadge({ dab: true }) : '', c.iq ? iqBadge({ rawIq: 'public' }) : '',
-                 c.rdsx ? advRdsBadge({ rdsx: true }) : '', modesTag(c.modes)].filter(Boolean);
+  // ★ One order, open or closed: modes · IQ48 · Advanced RDS · DAB (Stuart, 2026-09-15).
+  const parts = [modesTag(c.modes), c.iq ? iqBadge({ rawIq: 'public' }) : '',
+                 c.rdsx ? advRdsBadge({ rdsx: true }) : '', c.dab ? dabBadge({ dab: true }) : ''].filter(Boolean);
   return parts.length ? `<span class="caps">${parts.join('')}</span>` : '';
 }
 
@@ -883,7 +884,7 @@ function radioLine(r, s) {
 
   const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(r.name || r.driver || 'Radio')}</span>
-        <span class="rcRight">${modesTag(modesOf(r))}${dabBadge(r)}${iqBadge(r)}${advRdsBadge(r)}<span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
+        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}<span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
               >${esc(stateTxt)}</span></span></div>
       <div class="rcSub">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
