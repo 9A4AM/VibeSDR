@@ -3092,7 +3092,13 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         if (!dabJumped && mean >= 58.0) {
             dabJumped = true;
             const double pk = sdrp->adcPeakDbfs();
-            constexpr double kAimDbfs = -20.0;
+            /* ★★★ AIM AT THE IF AGC'S OWN TARGET, NOT A FIXED −20. 12B at 20:37:35: peak −3.2, a
+             *     jump of 3 rungs landed at −19.6 — and the IF stayed pinned at 59, because this
+             *     radio's set point is −40 dBFS and −20 is still 20 dB over it. Two more rungs
+             *     seven seconds apart followed ("DAB takes an eternity on the stronger radio").
+             *     Ten dB above the set point leaves the IF AGC inside its window with room both
+             *     ways; the cap is six rungs, enough for a −3 dBFS entry on Band III. */
+            const double kAimDbfs = (double)sdrp->ifAgcSetPointDbfs() + 10.0;
             if (std::isfinite(pk) && pk > kAimDbfs + 6.0) {
                 const int n = sdrp->lnaStateCount();
                 const int cur = sdrp->currentLnaState();
@@ -3109,7 +3115,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
                     }
                 }
                 if (step <= 0) step = std::max(1, (int)std::lround(-wantDb / 6.0));
-                step = std::min(4, step);
+                step = std::min(6, step);
                 const int st = std::min(n - 1, cur + step);
                 if (st > cur) {
                     const char* nm = (blk >= 0 && (size_t)blk < vibedab::kBandIIICount) ? vibedab::kBandIII[blk].name : "?";
@@ -17539,6 +17545,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const uint32_t bufLen = rtlBufLenForRate(sampleRate);
         Impl* self = this;
         rtlThreadDone.store(false);
+        joinOnce(rtlThread, "reader (restart)");   // ★ see startDspThread — never overwrite a joinable thread
         rtlThread = std::thread([self, bufLen]{
             // ★★★ THE REAPER MUST OUTRANK THE CONSUMERS. This thread does almost no work — it
             //     hands libusb back its completed transfers and resubmits them — but it is the
@@ -17996,6 +18003,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (useTcp()) {
             tcpRunning.store(true);
             rtlThreadDone.store(false);
+            joinOnce(rtlThread, "reader (restart)");
             rtlThread = std::thread([this]{
                 struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{this};
                 tcpReadLoop();
@@ -19110,6 +19118,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         lastRestartAt = nowSecs();
                         std::string rerr;
                         bool ok = false;
+                        /* ★ Stuart, 2026-09-15: "we need a message to say what has happened" —
+                         *   the VTS carries the recovery, start and end, on every path below. */
+                        if (useSdrplay() && sdrp) vsSayVts(sdrp->serviceUnresponsive()
+                            ? "SDRplay API service not responding \xe2\x80\x94 asking for it to be restarted\xe2\x80\xa6"
+                            : "SDRplay API failure \xe2\x80\x94 attempting recovery\xe2\x80\xa6");
                         if (useSdrplay() && sdrp && sdrp->serviceUnresponsive()) {
                             /* ★★★ THE SERVICE ITSELF HAS STOPPED ANSWERING — no re-Init or reopen
                              *     from this process will ever land (every one said
@@ -19165,9 +19178,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             // Give it a fresh clock, or the next tick sees the OLD timestamp
                             // and declares another stall before any sample could have arrived.
                             lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+                            if (useSdrplay() && sdrp) {
+                                /* ★ A re-Init resets the tuner's AGC loop, so the start-up kick
+                                 *   runs whole again — the same reset a re-acquire performs. */
+                                sdrpAgcKick = 0; sdrpSettling = true;
+                                g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
+                                vsSayVts("SDRplay API recovered successfully \xe2\x80\x94 resetting the AGC.");
+                            }
                             continue;
                         }
                         LOGE("stream restart failed: %s", rerr.c_str());
+                        if (useSdrplay() && sdrp)
+                            vsSayVts(std::string("SDRplay API recovery failed \xe2\x80\x94 ") + rerr + ". Trying again.");
                     }
                     // ★★★ FALL THROUGH TO THE REPORTING BELOW — do NOT `continue` while waiting
                     // out the back-off. An earlier draft of this did, and it recreated the exact
@@ -19434,6 +19456,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     void startDspThread() {
+        /* ★★★ NEVER OVERWRITE A JOINABLE THREAD. 2026-09-15 20:39:32 on the Lenovo: a DAB exit
+         *     (rate change, source rebuilt), the idle release and a listener's re-acquire landed
+         *     within 1.3 s on three threads, and one of them assigned this member while the last
+         *     dsp loop had not been joined — std::thread's destructor then calls std::terminate:
+         *     "terminate called without an active exception", status=6/ABRT, the whole server
+         *     down until systemd brought it back. Same guard startDabClock already carries. */
+        joinOnce(dspThread, "dsp (restart)");
         dspRunning.store(true);
         dspThread = std::thread([this]{ dspLoop(); });
         startHousekeeping();
@@ -22100,6 +22129,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->startDspThread();
     impl->tcpRunning.store(true);
     impl->rtlThreadDone.store(false);
+    joinOnce(impl->rtlThread, "reader (restart)");
     impl->rtlThread = std::thread([impl]{
         struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
         impl->tcpReadLoop();
@@ -22241,8 +22271,10 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
 
     impl->startDspThread();
     impl->tcpRunning.store(true);                 // shared "network source alive" flag
+    joinOnce(impl->rtlThread, "reader (restart)");
     impl->rtlThread    = std::thread([impl]{ impl->spyReadLoop(); });
     impl->spyFftRunning.store(true);
+    joinOnce(impl->spyFftThread, "spy fft (restart)");
     impl->spyFftThread = std::thread([impl]{ impl->spyFftLoop(); });
 
     p = impl;
@@ -24925,6 +24957,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     if (tcp) {
         impl->tcpRunning.store(true);
         impl->rtlThreadDone.store(false);
+        joinOnce(impl->rtlThread, "reader (restart)");
         impl->rtlThread = std::thread([impl]{
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
             impl->tcpReadLoop();
