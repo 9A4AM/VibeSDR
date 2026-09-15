@@ -102,6 +102,13 @@ export function sessionLimitForUrl(url: string): number | undefined {
 // Module-level cache
 let _cache:     SDRInstance[] | null = null;
 let _cacheTime  = 0;
+function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6371, d = Math.PI / 180;
+  const dLat = (bLat - aLat) * d, dLon = (bLon - aLon) * d;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * d) * Math.cos(bLat * d) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 let _cacheLat:  number | null = null;
 let _cacheLon:  number | null = null;
 const CACHE_TTL_MS = 60_000;
@@ -128,9 +135,10 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
       | undefined;
     const res = await mod?.getLocation?.();
     // Coarsen to ~1 km (2 dp) before it leaves this function — the app only
-    // needs rough distance to sort servers, never a precise fix. This keeps
-    // what we use and transmit to the instance directory "coarse" (matches
-    // the App Store privacy declaration + Android's COARSE_LOCATION request).
+    // needs rough distance to sort servers, never a precise fix. Nothing
+    // transmits it (2026-09-15: no directory is told the position any more);
+    // the rounding keeps what we HOLD coarse, matching the App Store privacy
+    // declaration + Android's COARSE_LOCATION request.
     return res && typeof res.lat === 'number' && typeof res.lon === 'number'
       ? { lat: Math.round(res.lat * 100) / 100, lon: Math.round(res.lon * 100) / 100 } : null;
   } catch {
@@ -149,10 +157,13 @@ export async function fetchInstances(
   const sameLocation = lat === _cacheLat && lon === _cacheLon;
   if (_cache && Date.now() - _cacheTime < CACHE_TTL_MS && sameLocation) return _cache;
 
-  let url = BASE_URL;
-  if (lat != null && lon != null) url += `&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}`;
-
-  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  // ★★ THE LISTENER'S POSITION NEVER LEAVES THE DEVICE. Until 2026-09-15 this appended
+  //    `&lat=&lon=` so the directory could return a distance column — the ONE directory of six
+  //    that was ever told where the listener is, and the privacy page had to carry a special
+  //    case for it. The listing carries every server's latitude/longitude, so the distance is a
+  //    haversine here, as it already is for VibeServer, Kiwi, Receiverbook, FMDX and SpyServer.
+  //    The position still keys the cache: a fresh position wants fresh distances.
+  const resp = await fetch(BASE_URL, { signal: AbortSignal.timeout(10000) });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   const items: any[] = data.instances ?? [];
@@ -192,7 +203,9 @@ export async function fetchInstances(
       longitude: item.longitude         ?? null,
       countryCode: typeof item.country_code === 'string' && item.country_code.length === 2
         ? item.country_code : null,
-      distance:  item.distance          ?? null,
+      distance:  (lat != null && lon != null
+                  && typeof item.latitude === 'number' && typeof item.longitude === 'number')
+        ? haversineKm(lat, lon, item.latitude, item.longitude) : null,
       bestSnr,
       // ★ The owner's per-listener time limit, in SECONDS from the directory.
       //   Every UberSDR entry carries it (seen: 3600–43200) and we ignored it

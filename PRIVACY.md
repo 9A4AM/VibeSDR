@@ -72,15 +72,15 @@ unsorted and the spots are shown without a distance.
 On every platform the app asks for **coarse** location only — never precise — even
 where the device could provide an exact position.
 
-- Your location is sent **only** to the public UberSDR instance directory
-  (`instances.ubersdr.org`), rounded to about a kilometre, **at the moment you
-  refresh the list**, so it can return instances ordered by distance. It is not
-  stored by the app or by the developer.
-- The VibeServer directory (`vibeserver.vibesdr.net`) receives **no location at
-  all**: the app downloads the list and sorts it by distance on your device.
+- Your location is **never sent to any directory**. Every directory the app can
+  browse — VibeServer, UberSDR, KiwiSDR, Receiverbook, FM-DX and SpyServer — is
+  downloaded as a plain list and sorted by distance **on your device**. No
+  directory, and no receiver, learns where you are.
+- The only position that ever leaves a device is a server owner's own, when they
+  list a VibeServer publicly — see *Public sharing* below. Listening sends none.
 - Location is **entirely optional**. If you deny or disable it, every other feature
   of the app continues to work normally — you can still browse and use every
-  instance; the list simply won't be sorted by distance.
+  server; the list simply won't be sorted by distance.
 - VibeSDR never accesses your location in the background.
 
 ### Connections to SDR receivers
@@ -200,8 +200,9 @@ location.
 
 ## Permissions
 
-- **Location** (optional) — sort/filter servers by distance, as described above.
-  Requested at approximate ("coarse") accuracy only, and never in the background.
+- **Location** (optional) — sort/filter servers by distance on the device, as
+  described above. Requested at approximate ("coarse") accuracy only, never in the
+  background, and never sent anywhere.
 - **Local network** (iOS and watchOS) — to discover and connect to SDR receivers on
   your local network.
 - **Notifications / media controls** — to show now-playing controls and run audio
