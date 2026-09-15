@@ -678,6 +678,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              <br><span id="gainRestAgcNote" class="hide">With automatic RF gain on this is the STARTING gain:
              the loop begins here and is then free to move in either direction, and it returns here
              rather than being switched off when the receiver empties.</span></div></label>
+        <!-- ★★★ ONE SLIDER, TWO JOBS, SAID PLAINLY: a starting point, or THE gain. Locked, the
+             figure above is fixed for every band, listeners get no gain controls, and VibeAGC
+             below is greyed — an AGC cannot run on a gain that may not move (Stuart, 2026-09-15:
+             "either a starting point or a locked gain"). Stored as the existing all-bands lock
+             (gainLimits "all:<raw>" + gainLocks "all:1"), so the server needs nothing new. -->
+        <label class="row" id="gainRestLockRow" style="gap:8px;align-items:center;margin-top:6px;display:none">
+          <input type="checkbox" id="gainRestLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Lock the gain here &mdash; fixed for every listener; VibeAGC stays off</span></label>
 
         <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
              automatic gain is broken — and it is, which is why VibeServer has never used it. A
@@ -1400,7 +1408,10 @@ function layoutLockedRadio(locked) {
     if (hw && rate)  hw.insertBefore(rate, hw.firstChild);
     if (hw && bias)  hw.insertBefore(bias, rate ? rate.nextSibling : hw.firstChild);
     const gc = $("gainCard");
-    if (gc && rest) gc.appendChild(rest);
+    // ★ Above VibeAGC, not appended at the bottom: the AGC row's note refers to it (Stuart,
+    //   2026-09-15: "move that starting gain slider above the VibeAGC toggle").
+    if (gc && rest) { const agc = $("rtlAgcRow"); gc.insertBefore(rest, agc || null);
+                      const lk = $("gainRestLockRow"); if (lk) gc.insertBefore(lk, agc || null); }
   }
   const lim = $("gainLimitRow");
   if (lim) lim.classList.toggle("hide", locked || lim.dataset.avail === "0");
@@ -1955,6 +1966,14 @@ function renderGain() {
   //    the fault this pair has already had once tonight.
   if (r.agcLock === 1) $("rtlAgc").value = "1";
   $("rtlAgc").disabled = r.agcLock === 1;
+  // ★ A fixed gain wins over everything: VibeAGC off and greyed, its lock greyed too.
+  { const locks = gainSideList("gainLocks");
+    const fixedAll = locks["all"] === 1 && /(^|,)\s*all:/.test(radio().gainLimits || "");
+    $("gainRestLock").checked = fixedAll;
+    $("gainRestLockRow").style.display = isRtl ? "" : "none";   // .row's flex beats .hide
+    if (fixedAll) { $("rtlAgc").value = "0"; $("rtlAgc").disabled = true;
+                    $("gainAgcLock").checked = false; $("gainAgcLock").disabled = true; }
+    else $("gainAgcLock").disabled = false; }
   // ★★★ ONE SLIDER, TWO MEANINGS — and the page says which one is in force, exactly as the phone's
   //     server screen does. Stuart, 2026-08-21: "that gain slider should be like the android build
   //     a return to and a starting gain, the agc should start there." The slider never moves; only
@@ -2517,15 +2536,12 @@ async function renderHw() {
        about your aerial yet, so coming UP to a working gain is the safe direction. A near-empty
        waterfall on a brand-new server is this protection working, not a fault.`;
 
-  el.innerHTML += `<div class="note">${startState}</div>`;
-  el.innerHTML += `<div class="note"><b>Gain is not set here.</b> Open this receiver in the client,
-    unlock <b>Protected settings</b> with your admin password, and the gain controls appear in the
-    menu &mdash; so you can set them against live signals instead of guessing. Whatever you set
-    there is saved <b>the moment you change it</b> &mdash; there is nothing to press, and nothing
-    is lost if you close the tab &mdash; and restored when the server restarts.
-    <br><br><b>Do this on your first listen.</b> Finish this page, connect, and spend a minute on
-    the gain while you can see the waterfall: it is the single setting that most decides how good
-    this receiver sounds to everyone who visits it, and the default is only ever a starting point.</div>`;
+  /* ★★★ THE GAIN STORY LIVES IN ONE PLACE NOW — the Gain limits card, where the starting gain
+   *     sits above VibeAGC with a lock beside it. This card used to carry two paragraphs about
+   *     where gain is NOT set, above a select that set it (Stuart, 2026-09-15: "double
+   *     settings"). Only a radio with something of its own to say keeps a note here. */
+  if (drv === "airspyhf" || drv === "hackrf") el.innerHTML += `<div class="note">${startState}</div>`;
+  { const card = el.closest(".card"); if (card) card.classList.toggle("hide", !el.innerHTML.trim()); }
 
   // Restore stored values into whichever controls we just drew.
   // ★★★ FROM THE RADIO, NOT FROM THE MACHINE. These two read `cfg` — the machine-wide config —
@@ -3087,6 +3103,29 @@ function fill() {
     // ★ Name the ends, because "more is less" needs saying every time it is read.
     $("gainIfVal").textContent = v + " dB" + (v <= 20 ? " · max gain" : v >= 59 ? " · min gain" : "");
   });
+  /** The fixed-gain lock: writes/clears the all-bands lock from the starting-gain figure. */
+  function applyRestLock() {
+    const on = $("gainRestLock").checked;
+    const raw = radio().restGain >= 0 ? radio().restGain : gainToRaw(($("gainRest").value || "").trim());
+    const others = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean)
+                     .filter(e => e.slice(0, e.lastIndexOf(":")) !== "all");
+    if (on && raw >= 0) {
+      if (radio().restGain < 0) radio().restGain = raw;
+      radio().gainLimits = others.concat(["all:" + raw]).join(",");
+      gainSideSet("gainLocks", "all", 1);
+      radio().rtlAgc = false; radio().agcLock = 0;
+      $("rtlAgc").value = "0"; $("rtlAgc").disabled = true;
+      $("gainAgcLock").checked = false; $("gainAgcLock").disabled = true;
+    } else {
+      if (on) $("gainRestLock").checked = false;          // nothing to lock to yet
+      radio().gainLimits = others.join(",");
+      gainSideSet("gainLocks", "all", null);
+      $("rtlAgc").disabled = radio().agcLock === 1; $("gainAgcLock").disabled = false;
+    }
+    { const n = $("gainRestAgcNote"); if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
+    gainChips();
+  }
+  $("gainRestLock").addEventListener("change", applyRestLock);
   $("gainRest").addEventListener("change", () => {
     const t = ($("gainRest").value || "").trim();
     // ★★★ THE LOCK IMPLIES THE AGC. "Listeners may not switch to manual" is meaningless with the
@@ -3096,6 +3135,7 @@ function fill() {
     radio().rtlAgc = $("rtlAgc").value === "1" || $("gainAgcLock").checked;
     radio().restGain = t ? gainToRaw(t) : -1;
     $("gainRest").value = gainFromRaw(radio().restGain);   // echo it back in canonical form
+    if ($("gainRestLock").checked) applyRestLock();        // a locked figure follows the slider
   });
   /* ★★★ A LOCATOR FROM A TOWN NAME, OR FROM COORDINATES — see the note by the button.
    *
