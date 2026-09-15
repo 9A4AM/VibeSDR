@@ -2589,6 +2589,13 @@ static std::atomic<bool> g_rspAgcSetLock{false};
  *  start-up kick — which is what made it walk several steps and disturb the IF AGC. */
 static std::atomic<int>  g_rspRfAgcStart{-1};
 static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
+/** ★ WHEN the loop last settled the LNA (monotonic secs) — the "gain memory" the kick may hand
+ *  over from. Stuart, 2026-09-15: "if we have a gain memory then we use that, speeds the whole
+ *  process up, but starting from scratch or if it's not been used in a long time then play it
+ *  safe". Fresh = set in this run within kRspGainMemorySec; a cold start has none. */
+static std::atomic<long long> g_rspRfAgcLastLnaAt{0};
+static constexpr long long    kRspGainMemorySec = 6 * 3600;
+static std::atomic<bool>      g_rspHandoverFromMemory{false};
 /** ★★★ WE have concluded the API is stuck, because our own gain writes stopped landing.
  *
  *  Deliberately SEPARATE from SdrplaySource::apiFailed(), which is the API reporting its own
@@ -2996,6 +3003,8 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     structGainAtStep = sdrp->structGainDb();
     LocalSdrShim::instance().setLnaState(want);
     g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
+    g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
     lastMove = now;
     lastDir = dir; lastMean = mean;
     lastStepAt = std::chrono::steady_clock::now();   // ★ start the quiet period — see above
@@ -7980,7 +7989,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              *     hand over from. The saved LNA is the owner's MANUAL setting and
                              *     still applies when the loop is off. */
                             const bool rfLoop = g_rspRfAgc.load(std::memory_order_relaxed);
-                            if (savedLna >= 0 && !rfLoop) sdrp->setLnaState(savedLna);
+                            if (!rfLoop) { if (savedLna >= 0) sdrp->setLnaState(savedLna); }
+                            else {
+                                /* ★ A FRESH GAIN MEMORY IS A SHORTCUT; anything else plays safe.
+                                 *   The memory is where the loop last settled this run. */
+                                const long long nowS = (long long)std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                                const int mem = g_rspRfAgcLastLna.load(std::memory_order_relaxed);
+                                const long long at = g_rspRfAgcLastLnaAt.load(std::memory_order_relaxed);
+                                const bool fresh = mem >= 0 && at > 0 && (nowS - at) < kRspGainMemorySec;
+                                g_rspHandoverFromMemory.store(fresh, std::memory_order_relaxed);
+                                if (fresh) {
+                                    sdrp->setLnaState(mem);
+                                    LOGI("RSP: handing over from the gain memory — LNA state %d, settled %lld min ago",
+                                         mem, (nowS - at) / 60);
+                                }
+                            }
                             // ★ AGC BEFORE the manual IF reduction: it owns the gain path, so
                             //   setting the reduction first and then enabling AGC would let the
                             //   loop immediately undo it. Same ordering rule as ahf_control.
@@ -8160,7 +8184,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   let the IF Gain do its kick and then set AGC". */
                     const int pos  = 1;
                     const int st   = std::max(floorState, (n - 1) - pos);   // ★ position -> state
-                    if (st != sdrp->currentLnaState()) {
+                    // ★ Not over a fresh gain memory — the kick already placed it (see the
+                    //   handover). The coarse placement still checks the band afterwards.
+                    const bool fromMemory = g_rspHandoverFromMemory.exchange(false, std::memory_order_relaxed);
+                    if (!fromMemory && st != sdrp->currentLnaState()) {
                         LOGI("RSP RF AGC: starting from RF gain %d/%d (LNA state %d)",
                              pos, n - 1, st);
                         LocalSdrShim::instance().setLnaState(st);
