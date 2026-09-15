@@ -591,8 +591,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         const int nb = snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         const int nb2 = snprintf(b, sizeof b,
@@ -1359,13 +1359,20 @@ private:
              *  way round; with real frames on disk the same search takes seconds and can try
              *  every hypothesis at once. Removed once the parameters are known. */
             if (const char* dp = std::getenv("VIBE_DAB_DUMP")) {
+                /* ★ Header-valid frames only, and not the first hundred: the first capture
+                 *   (2026-09-16 00:09) was 400 frames of pure PRBS — the subchannel before the
+                 *   receiver had locked — and matched nothing because it WAS nothing. */
                 static FILE* fp = std::fopen(dp, "wb");
-                static int   left = 400;
-                if (fp && left > 0) {
-                    const uint32_t n32 = uint32_t(f.size());
-                    std::fwrite(&n32, 4, 1, fp);
-                    std::fwrite(f.data(), 1, f.size(), fp);
-                    if (--left == 0) { std::fflush(fp); std::fclose(fp); fp = nullptr; }
+                static int   left = 1500, skip = 100;
+                if (fp && left > 0 && mp2Header(f.data(), f.size()).valid) {
+                    if (skip > 0) { --skip; }
+                    else {
+                        const uint32_t n32 = uint32_t(f.size());
+                        std::fwrite(&n32, 4, 1, fp);
+                        std::fwrite(f.data(), 1, f.size(), fp);
+                        if ((left % 100) == 0) std::fflush(fp);
+                        if (--left == 0) { std::fflush(fp); std::fclose(fp); fp = nullptr; }
+                    }
                 }
             }
             std::vector<float> out;

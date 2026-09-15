@@ -367,15 +367,54 @@ public:
                     }
             }
         }
+        /* ★★★ ScF-CRC CONCEALMENT — the thing DAB added to Layer II, finally in use (2026-09-16).
+         *     The MPEG CRC covers header, allocation and scfsi; the scale factors are unprotected,
+         *     and on a marginal block (10D at 9 dB MER, both the RSP1A and the V4) the residual
+         *     errors that survive Viterbi land in them and come out as "bubbling mud" — a
+         *     sub-band jumping a gain step for 8 ms at a time. DAB+ has Reed-Solomon for the same
+         *     residue; MP2 has only this. Measured on air once the byte order was right: 637 of
+         *     709 groups-of-frames matched, so the misses ARE the errors.
+         *     A group whose check fails keeps the scale factors it had in the last frame where
+         *     that group passed (per channel, sub-band and part) — what a broadcast receiver does
+         *     — or, with nothing to fall back on, the group is muted for the frame. The bit reader
+         *     is untouched: allocation is what the samples are read by, and it is CRC-protected. */
+        {
+            const int perCh = f.channels == 1 ? f.bitrateKbps : f.bitrateKbps / 2;
+            const int ncrc  = (f.lsf || perCh >= 56) ? 4 : 2;
+            const int at    = f.frameBytes - 2 - ncrc;
+            static const int loA[4] = { 0, 4, 8, 16 }, hiA48[4] = { 3, 7, 15, 26 }, hiA24[4] = { 3, 7, 15, 29 };
+            const int* hiA = f.lsf ? hiA24 : hiA48;
+            const bool canCheck = prevScfValid_ && prevScfN_ == ncrc && at >= 4 && !scfIdx_.empty();
+            for (int g = 0; g < ncrc; ++g) {
+                const int lo = loA[g], hi = std::min(hiA[g], sblimit - 1);
+                const bool bad = canCheck && scfCrc8(lo, hi, 0x00, false) != prevScf_[g];
+                if (bad) {
+                    ++scfConcealed_;
+                    for (int sb = lo; sb <= hi; ++sb)
+                        for (int ch = 0; ch < nch; ++ch) {
+                            if (!alloc[ch][sb]) continue;
+                            for (int pt = 0; pt < 3; ++pt)
+                                sfIdx[ch][sb][pt] = lastGoodValid_[ch][sb] ? int(lastGoodSf_[ch][sb][pt]) : 63;   // 63 = the quietest step
+                        }
+                } else if (canCheck) {
+                    // ★ A group that passed is the fallback for the next miss in that group.
+                    for (int sb = lo; sb <= hi; ++sb)
+                        for (int ch = 0; ch < nch; ++ch) {
+                            if (!alloc[ch][sb]) { lastGoodValid_[ch][sb] = false; continue; }
+                            for (int pt = 0; pt < 3; ++pt) lastGoodSf_[ch][sb][pt] = uint8_t(sfIdx[ch][sb][pt] < 0 ? 63 : sfIdx[ch][sb][pt]);
+                            lastGoodValid_[ch][sb] = true;
+                        }
+                }
+            }
+        }
         // ★ Indices settled (and repaired) — only now turn them into gains.
         for (int sb = 0; sb < sblimit; ++sb)
             for (int ch = 0; ch < nch; ++ch)
                 for (int g = 0; g < 3; ++g)
                     if (sfIdx[ch][sb][g] >= 0) sf[ch][sb][g] = scaleFactor(sfIdx[ch][sb][g]);
 
-        // ★ Now that the scale factors are known, check DAB's own CRC over them — counting
-        //   only, until the convention is measured. See tallyScfCrc.
-        tallyScfCrc(frame, f.frameBytes, f.bitrateKbps);
+        // ★ Carry this frame's ScF-CRC words forward for the next frame, and keep the tally.
+        tallyScfCrc(frame, f.frameBytes, f.bitrateKbps, f.channels, f.lsf);
 
         out.assign(size_t(1152) * size_t(nch), 0.0f);
         for (int gr = 0; gr < 12; ++gr) {
@@ -429,6 +468,7 @@ public:
      *  and it will be hard-coded with that evidence beside it. */
     struct ScfCrcTally { uint32_t checked = 0, ok[4] = {0, 0, 0, 0}; };
     const ScfCrcTally& scfCrc() const { return scfTally_; }
+    uint32_t scfConcealed() const { return scfConcealed_; }   // ★ sub-band groups concealed by ScF-CRC
     /** ★ Did the last frame carry an MPEG header CRC at all? DAB may use the SCALE FACTOR CRC of
      *  TS 103 466 instead, in which case the MPEG protection bit is set and there is nothing to
      *  check here — which would make a zero refusal count meaningless. Measure before believing. */
@@ -454,6 +494,8 @@ public:
      *  was doing a moment ago", and after a gap it was doing it a moment ago in a different piece
      *  of music. Stale history would fight the first frames back in. */
     void resetScfHistory() {
+        for (int c = 0; c < 2; ++c) for (int b = 0; b < 32; ++b) lastGoodValid_[c][b] = false;
+        prevScfValid_ = false;
         for (int c = 0; c < 2; ++c) for (int b = 0; b < 32; ++b) sfHistValid_[c][b] = false;
     }
     void reset() { std::memset(v_, 0, sizeof v_); }
@@ -500,6 +542,9 @@ private:
     std::vector<ScfEntry> scfIdx_;
     ScfCrcTally scfTally_;
     uint8_t prevScf_[4] = {0,0,0,0};
+    uint32_t scfConcealed_ = 0;
+    uint8_t  lastGoodSf_[2][32][3] = {};
+    bool     lastGoodValid_[2][32] = {};
     int     prevScfN_ = 0;
     bool    prevScfValid_ = false;
     /** ★ Per (channel, sub-band) reference for the squeal guard: the loudest index this sub-band
@@ -535,11 +580,22 @@ private:
      *  frame that FOLLOWS it, so the bytes have to be held over.
      *  ★ Zero out of 2819 was the useful result: a wrong preset would still have matched
      *    occasionally by chance at one byte in 256. Nothing at all means structurally wrong. */
-    void tallyScfCrc(const uint8_t* frame, int frameBytes, int bitrateKbps) {
-        const int ncrc = bitrateKbps >= 56 ? 4 : 2;
+    /* ★★★ TS 103 466 B.3, read properly this time (2026-09-16, against the spec text itself):
+     *   · two or four words by bit rate PER CHANNEL — ≥ 56 kbit/s mono or ≥ 112 kbit/s otherwise
+     *     gives four (so a 64 kbit/s stereo service has TWO, not four as "bitrate ≥ 56" said);
+     *     24 kHz (LSF) coding always four, with group 3 = sub-bands 16..29;
+     *   · the words sit in REVERSE order in the stream: ScF-CRC3, 2, 1, 0 then the F-PAD, so
+     *     group g's byte is at [at + ncrc-1-g], not [at + g];
+     *   · CRC-8, G = x^8+x^4+x^3+x^2+1, register initialised to 0000 0000, over the three MSBs
+     *     of every transmitted scale factor of the group in bitstream order;
+     *   · the words in frame n-1 protect frame n. */
+    void tallyScfCrc(const uint8_t* frame, int frameBytes, int bitrateKbps, int channels, bool lsf) {
+        const int perCh = channels == 1 ? bitrateKbps : bitrateKbps / 2;
+        const int ncrc  = (lsf || perCh >= 56) ? 4 : 2;
         const int at = frameBytes - 2 - ncrc;              // before the two F-PAD bytes
         if (at < 4 || scfIdx_.empty()) { prevScfValid_ = false; return; }
-        static const int loA[4] = { 0, 4, 8, 16 }, hiA[4] = { 3, 7, 15, 26 };
+        static const int loA[4] = { 0, 4, 8, 16 }, hiA48[4] = { 3, 7, 15, 26 }, hiA24[4] = { 3, 7, 15, 29 };
+        const int* hiA = lsf ? hiA24 : hiA48;
         const uint8_t inits[4]  = { 0x00, 0xFF, 0x00, 0xFF };
         const bool    invs[4]   = { false, false, true,  true  };
 
@@ -553,7 +609,8 @@ private:
             }
         }
         // Carry THIS frame's bytes forward — they describe the NEXT frame's scale factors.
-        for (int g = 0; g < ncrc; ++g) prevScf_[g] = frame[at + g];
+        // ★ Reversed: the stream carries ScF-CRC(ncrc-1) first.
+        for (int g = 0; g < ncrc; ++g) prevScf_[g] = frame[at + (ncrc - 1 - g)];
         prevScfN_ = ncrc;
         prevScfValid_ = true;
     }
