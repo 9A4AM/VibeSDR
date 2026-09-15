@@ -685,7 +685,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              (gainLimits "all:<raw>" + gainLocks "all:1"), so the server needs nothing new. -->
         <label class="row" id="gainRestLockRow" style="gap:8px;align-items:center;margin-top:6px;display:none">
           <input type="checkbox" id="gainRestLock" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Lock the gain here &mdash; fixed for every listener; VibeAGC stays off</span></label>
+          <span>Lock this gain?</span></label>
+        <div class="note" id="gainRestLockNote" style="display:none"><b>Gain locked.</b> This is THE gain,
+          on every band, for every listener &mdash; nobody can move it. VibeAGC is unavailable while
+          the gain is locked. Untick it and VibeAGC works as normal.</div>
 
         <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
              automatic gain is broken — and it is, which is why VibeServer has never used it. A
@@ -703,6 +706,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <option value="0">Off — the gain stays where it is set</option>
             <option value="1">On — the receiver manages its own gain</option>
           </select>
+          <div class="note" id="rtlAgcLockedNote" style="display:none;color:var(--warn)">
+            <b>VibeAGC unavailable</b> &mdash; the gain is locked above.</div>
           <div class="note"><b>This is not the dongle's built-in AGC.</b> That one is unreliable
             across tuners and known broken on the RTL-SDR Blog v4, and this server never uses it.
             VibeSDR's own loop measures how close the signal is to overloading the converter and
@@ -833,6 +838,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              listeners get no gain controls at all. A band you do not lock reads
              <b>up to RF&nbsp;7 &middot; IF&nbsp;20</b> &mdash; they keep the controls and simply
              cannot go past it. Lock <b>All bands</b> and the whole radio is fixed.
+             <span id="gainLimitAgcNote" style="display:none"><br><b>With VibeAGC on</b>, the loop obeys these
+             ceilings: tuning into a capped band brings the gain down to the ceiling, and the AGC
+             cannot raise it past that figure however quiet the band is.</span>
              <br>Cap the bands that overload and leave the rest open &mdash; a strong local FM
              transmitter is the usual reason, while HF wants everything the radio has. Tuning into
              a capped band brings the gain down automatically.
@@ -1699,6 +1707,14 @@ function gainSideList(key) {
   }
   return out;
 }
+/** The three sentences that follow the lock and the AGC state — one place, so they never disagree. */
+function gainNotesSync() {
+  const locked = $("gainRestLock") && $("gainRestLock").checked;
+  const agcOn  = $("rtlAgc") && $("rtlAgc").value === "1" && !locked;
+  if ($("gainRestLockNote")) $("gainRestLockNote").style.display = locked ? "" : "none";
+  if ($("rtlAgcLockedNote")) $("rtlAgcLockedNote").style.display = locked ? "" : "none";
+  if ($("gainLimitAgcNote")) $("gainLimitAgcNote").style.display = agcOn ? "" : "none";
+}
 function gainSideSet(key, band, val) {
   const m = gainSideList(key);
   if (val === null || val === undefined || !isFinite(val) || val < 0) delete m[band];
@@ -1973,7 +1989,8 @@ function renderGain() {
     $("gainRestLockRow").style.display = isRtl ? "" : "none";   // .row's flex beats .hide
     if (fixedAll) { $("rtlAgc").value = "0"; $("rtlAgc").disabled = true;
                     $("gainAgcLock").checked = false; $("gainAgcLock").disabled = true; }
-    else $("gainAgcLock").disabled = false; }
+    else $("gainAgcLock").disabled = false;
+    gainNotesSync(); }
   // ★★★ ONE SLIDER, TWO MEANINGS — and the page says which one is in force, exactly as the phone's
   //     server screen does. Stuart, 2026-08-21: "that gain slider should be like the android build
   //     a return to and a starting gain, the agc should start there." The slider never moves; only
@@ -3069,6 +3086,7 @@ function fill() {
     radio().rtlAgc = $("rtlAgc").value === "1";
     const n = $("gainRestAgcNote");
     if (n) n.classList.toggle("hide", !radio().rtlAgc);
+    gainNotesSync();
   });
   $("gainAgcLock").addEventListener("change", () => {
     const on = $("gainAgcLock").checked;
@@ -3124,6 +3142,7 @@ function fill() {
     }
     { const n = $("gainRestAgcNote"); if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
     gainChips();
+    gainNotesSync();
   }
   $("gainRestLock").addEventListener("change", applyRestLock);
   $("gainRest").addEventListener("change", () => {

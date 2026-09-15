@@ -17405,6 +17405,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                            | (lastSentTunerBw.exchange(bwNow) != bwNow);
         if (lastSentGainCap.exchange(cap) != cap || hwMoved)
             for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+        /* ★★★ VibeAGC OBEYS THE BAND'S CEILING. The loop's ceiling was always the tuner's
+         *     maximum (49.6 dB), so an owner who capped FM at 25 dB got 25 dB for a manual
+         *     listener and 49.6 dB the moment the AGC ran (Stuart, 2026-09-15: "VibeAGC must obey
+         *     the per band gain limits"). The ceiling is now the capped figure on a capped band
+         *     and the tuner's top elsewhere, refreshed on every retune — including when the cap
+         *     goes AWAY, which is why this sits above the early return. Steps are re-based so the
+         *     loop's position is unchanged in dB, only measured from the new ceiling. */
+        if (!useSdrplay() && !useHackRf() && dev && g_rtlAgc.load(std::memory_order_relaxed)) {
+            const int n = rtlsdr_get_tuner_gains(dev, nullptr);
+            if (n > 1) {
+                std::vector<int> gl((size_t)n);
+                rtlsdr_get_tuner_gains(dev, gl.data());
+                int ceilIdx = n - 1;
+                if (cap >= 0) for (int i = 0; i < n; i++) if (gl[(size_t)i] <= cap) ceilIdx = i;
+                const int cur = lastGainTenthDb;
+                int curIdx = 0;
+                for (int i = 0; i < n; i++) if (gl[(size_t)i] <= cur) curIdx = i;
+                if (curIdx > ceilIdx) curIdx = ceilIdx;
+                const int want = gl[(size_t)ceilIdx];
+                if (g_gainTarget.load(std::memory_order_relaxed) != want) {
+                    LOGI("VibeAGC ceiling %s %d (%s) — %d steps below it now",
+                         cap >= 0 ? "capped at" : "back to the tuner's top,", want,
+                         cap >= 0 ? "the owner's limit on this band" : "no limit on this band",
+                         ceilIdx - curIdx);
+                    g_gainTarget.store(want, std::memory_order_relaxed);
+                    g_ovlSteps.store(ceilIdx - curIdx, std::memory_order_relaxed);
+                }
+            }
+        }
         if (cap < 0) return;
         /* ★★★ WITH THE LOCK ON, THE CEILING IS WHERE THE GAIN GOES — not merely where it stops.
          *   Every branch below "only lowers", which is right for a limit and wrong for a setting:
@@ -19516,8 +19545,13 @@ void LocalSdrShim::setRtlAgc(bool on) {
         //   always, as "how many steps below the ceiling are we".
         int curIdx = 0;
         for (int i = 0; i < n; i++) if (gains[(size_t)i] <= cur) curIdx = i;
-        g_gainTarget.store(gains[(size_t)(n - 1)], std::memory_order_relaxed);
-        g_ovlSteps.store((n - 1) - curIdx, std::memory_order_relaxed);
+        // ★ Capped band = capped ceiling, from the first tick — see applyGainCapForFreq.
+        const int cap = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+        int ceilIdx = n - 1;
+        if (cap >= 0) for (int i = 0; i < n; i++) if (gains[(size_t)i] <= cap) ceilIdx = i;
+        if (curIdx > ceilIdx) curIdx = ceilIdx;
+        g_gainTarget.store(gains[(size_t)ceilIdx], std::memory_order_relaxed);
+        g_ovlSteps.store(ceilIdx - curIdx, std::memory_order_relaxed);
     } else {
         // ★ Ceiling back down to where we actually are. Leaving it at the maximum would let the
         //   protection climb far above the owner's figure the moment the band went quiet.
