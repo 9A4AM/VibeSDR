@@ -3565,10 +3565,6 @@ final class VibeSpatialOutput {
                                              dataLength: bytes, flags: 0,
                                              blockBufferOut: &block) == noErr,
           let bb = block else { completionHandler?(); return }
-    // ★★★ ASSURE THE MEMORY. With memoryBlock nil the block allocates LAZILY, and a data pointer
-    //     taken before that can be nothing — a silent early return per buffer. One of the two
-    //     suspects for iOS 289's silence (2026-09-15).
-    guard CMBlockBufferAssureBlockMemory(bb) == noErr else { completionHandler?(); return }
     var dataPtr: UnsafeMutablePointer<Int8>?
     var lengthAtOffset = 0, totalLength = 0
     guard CMBlockBufferGetDataPointer(bb, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset,
@@ -3598,18 +3594,13 @@ final class VibeSpatialOutput {
       pts = nextPts
       nextPts = CMTimeAdd(nextPts, dur)
     }
-    var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(format.sampleRate)),
-                                    presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-    // ★ ONE size entry — bytes per frame — and a per-FRAME duration in the timing entry: that is
-    //   how LPCM sample buffers are described (each frame is a sample). The first cut gave the
-    //   whole buffer one timing entry of the full duration and no sizes; the other suspect.
-    var frameBytes = channels * 4
+    var timing = CMSampleTimingInfo(duration: dur, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
     var sample: CMSampleBuffer?
     guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: bb, dataReady: true,
                                makeDataReadyCallback: nil, refcon: nil, formatDescription: fmtDesc,
                                sampleCount: frames, sampleTimingEntryCount: 1,
-                               sampleTimingArray: &timing, sampleSizeEntryCount: 1,
-                               sampleSizeArray: &frameBytes, sampleBufferOut: &sample) == noErr,
+                               sampleTimingArray: &timing, sampleSizeEntryCount: 0,
+                               sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
           let sb = sample else { completionHandler?(); return }
     renderer.enqueue(sb)
     // ★ Say so ONCE, and say if the renderer has failed — the one place a silent device speaks.
