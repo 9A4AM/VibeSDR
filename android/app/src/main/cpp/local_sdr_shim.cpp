@@ -2864,9 +2864,16 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         const bool  wrLanded = haveG && std::fabs(gNow - structGainAtStep) > 0.05f;
         const bool  grMoved  = (int)llround(mean) != grAtLastStep;
 
-        if (haveG && !wrLanded) { ++unhonoured; deadSteps = 0; }
-        else if (!grMoved)      { ++deadSteps;  unhonoured = 0; }
-        else                    { deadSteps = 0; unhonoured = 0; deadWarned = false; }
+        /* ★★★ A RAIL IS NOT A FROZEN NUMBER. At 59 (or 20) the IF AGC has nothing left to give,
+         *     so an LNA step that leaves it there is the AGC still saying "too much" — not a dead
+         *     readout. Measured on the Lenovo RSP1A in DAB (2026-09-15 15:13): ADC peak -32 dBFS
+         *     against a -40 target, IF pinned at 59, and this guard declared the reading frozen
+         *     after two steps and HELD — at 8 dB over target, with the ensemble breaking up. Off
+         *     the rails, two unchanged readings through two rungs is still the frozen-readout test. */
+        const bool atRail = mean <= 20.5 || mean >= 58.5;
+        if (haveG && !wrLanded)      { ++unhonoured; deadSteps = 0; }
+        else if (!grMoved && !atRail) { ++deadSteps;  unhonoured = 0; }
+        else                         { deadSteps = 0; unhonoured = 0; deadWarned = false; }
         grAtLastStep = -1; structGainAtStep = -999.0f;    // consumed, whichever way it went
     }
 
