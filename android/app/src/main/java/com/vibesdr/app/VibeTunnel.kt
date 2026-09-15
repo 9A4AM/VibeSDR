@@ -472,6 +472,10 @@ object VibeTunnel {
                     //   DAB+ badge on the directory card; the desktop publisher sends the same key.
                     if (it.has("dab")) put("dab", it.optBoolean("dab", false))
                     if (it.has("listeners")) put("listeners", it.optInt("listeners", 0))
+                    // ★ What it offers — same three keys directory.cpp forwards per radio.
+                    it.optString("rawIq").takeIf { s -> s.isNotEmpty() }?.let { s -> put("rawIq", s) }
+                    if (it.has("rdsx")) put("rdsx", it.optBoolean("rdsx", false))
+                    it.optJSONArray("modes")?.let { m -> put("modes", m) }
                 }
                 put("maxListeners", cap)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —

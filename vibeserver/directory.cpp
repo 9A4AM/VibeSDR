@@ -380,6 +380,21 @@ std::string buildStatus(int port) {
                             j += std::string(",\"dab\":") + (jsonBool(ri, "dab") ? "true" : "false");
                             const long long fi = jsonNum(ri, "freeInSec", -1);
                             if (fi >= 0) j += ",\"freeInSec\":" + std::to_string(fi);
+                            // ★ WHAT IT OFFERS — the directory's badges (raw IQ through the tunnel,
+                            //   Advanced RDS) and its modes/decoders filter read these. Copied
+                            //   straight from the radio's own answer; absent on an older radio.
+                            const std::string iq = jsonStr(ri, "rawIq");
+                            if (!iq.empty()) j += ",\"rawIq\":\"" + iq + "\"";
+                            if (ri.find("\"rdsx\":") != std::string::npos)
+                                j += std::string(",\"rdsx\":") + (jsonBool(ri, "rdsx") ? "true" : "false");
+                            { const std::string k2 = "\"modes\":";
+                              size_t a = ri.find(k2);
+                              if (a != std::string::npos) {
+                                  a = ri.find('[', a);
+                                  const size_t b = a == std::string::npos ? a : ri.find(']', a);
+                                  if (a != std::string::npos && b != std::string::npos)
+                                      j += ",\"modes\":" + ri.substr(a, b - a + 1);
+                              } }
                         }
                     }
                     j += ",\"maxListeners\":" + std::to_string(rmax);

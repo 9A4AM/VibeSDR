@@ -11983,6 +11983,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // unchanged: while nobody is looking, neither the extra CPU nor the extra bytes are
         // spent. Do not let these two drift apart.
         if (type == "rdsx") {
+            // ★ The owner's "Adv RDS" switch held for the decoder-socket path and not for this
+            //   one, so the app could turn the analyser on where the web client could not.
+            if (vsModeBlocked("rds")) return;
             const bool on = jsonNum(msg, "on", v) && v != 0.0;
             { std::lock_guard<std::mutex> lk(rdsxMtx);
               if (on) rdsxSocks.insert(sock.get()); else rdsxSocks.erase(sock.get()); }
@@ -20719,6 +20722,29 @@ static std::string vsTunableJson() {
         // ★ The full-rate offer: the capture rate in Hz, or 0. LAN visitors with the radio to
         //   themselves get it as a "FULL" entry in the rate picker.
         j += ",\"rawIqFull\":" + std::to_string(LocalSdrShim::instance().rawIqFullRate());
+    }
+    /* ★★★ WHAT THIS RECEIVER OFFERS, BY NAME — so a directory can badge and filter on it. The
+     *  owner's "Modes and decoders" switches (blockedModes) were enforced here and published
+     *  nowhere: a visitor searching for a WEFAX-capable receiver in Europe had no way to ask
+     *  (Stuart, 2026-09-15). The list is the setup page's BLOCKABLE list minus what is switched
+     *  off, with DAB answering for the whole capability question (decoder present, rate, bands).
+     *  ★ `rdsx` is its own flag because it is its own badge: an owner who switches Advanced RDS
+     *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
+    {
+        static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab",
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time" };
+        std::string m = "[";
+        bool first = true;
+        for (const char* id : kOffer) {
+            const std::string k = id;
+            if (k == "dab") { if (!vsDabCapable()) continue; }
+            else if (vsModeBlocked(k)) continue;
+            if (k == "rds" && vsModeBlocked("wfm")) continue;   // no FM, no RDS of any kind
+            m += (first ? "\"" : ",\"") + k + "\""; first = false;
+        }
+        m += "]";
+        j += ",\"modes\":" + m;
+        j += std::string(",\"rdsx\":") + ((!vsModeBlocked("rds") && !vsModeBlocked("wfm")) ? "true" : "false");
     }
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
     //   listener searches for, and the plan that knows the names is region-aware and lives here.

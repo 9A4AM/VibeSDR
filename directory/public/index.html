@@ -198,6 +198,27 @@
   .tag.lock { color: var(--accent); border-color: var(--accent); }
   /* ★ The same blue as the diamond on the map and in the legend: one colour means one thing. */
   .tag.temp { color: var(--temp); border-color: var(--temp); }
+  /* ★ CAPABILITY BADGES — a statement about a receiver, never decoration: drawn only when the
+     server said so. Same 21 px height as the DAB+ mark so the three sit on one line. */
+  .capIq { display:inline-flex; align-items:center; height:19px; padding:0 7px; border:1px solid var(--phosphor);
+           border-radius:4px; color:var(--phosphor); font:700 11px/1 ui-monospace,monospace; letter-spacing:.08em; flex:none; }
+  .capRds { display:inline-block; flex:none; width:52px; height:21px; line-height:0; }
+  .modesTag { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); color:var(--dim);
+              letter-spacing:.06em; cursor:help; flex:none; white-space:nowrap; }
+  .modesTag:hover { color:var(--text); border-color:var(--text); }
+  .caps { display:inline-flex; align-items:center; gap:6px; margin-left:8px; }
+  /* ★ A RADIO CARD IS A DOOR. It looked like one and did nothing (a colleague tapped it and
+     nothing happened, 2026-09-15); now it opens that receiver through the front door. */
+  a.rcLink { display:block; color:inherit; text-decoration:none; }
+  a.rcLink:hover .rcard, a.rcLink:focus-visible .rcard { border-color:var(--accent); background:rgba(255,184,51,.06); }
+  a.rcLink .rcName::after { content:' ›'; color:var(--accent); opacity:.6; }
+  /* ★ MODES + DECODERS CHIPS — the second question after "what frequency": what can it DO. */
+  #modeBar { display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px 2px; align-items:center; }
+  #modeBar .lbl { font-size:11px; color:var(--dim); letter-spacing:.08em; margin-right:4px; }
+  #modeBar .mchip { font:11px/1 ui-monospace,monospace; letter-spacing:.06em; padding:5px 9px; border-radius:20px;
+                    border:1px solid var(--line); color:var(--dim); background:transparent; cursor:pointer; }
+  #modeBar .mchip:hover { color:var(--text); border-color:var(--text); }
+  #modeBar .mchip.on { color:#000; background:var(--accent); border-color:var(--accent); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   /* ══ NARROW SCREENS ═══════════════════════════════════════════════════════════════════════
      ★★ There were no media queries in this page at all, which is fine while everything is a
@@ -559,6 +580,10 @@
           it is just as true of the dial's numerals as of the pins (Stuart, 2026-08-23). Two
           legends saying the same thing in different words is two things to keep in step. -->
   <div class="fNote"><span id="dialGapNote"></span> <span id="filterSummary"></span></div>
+  <!-- ★ Frequency first (the dial), then WHAT the receiver can do (these), then WHERE (the
+          country picker): the order a listener actually asks in — "4–5 MHz, with RTTY and WEFAX,
+          in Europe" (Stuart, 2026-09-15). -->
+  <div id="modeBar"></div>
 </section>
 
 <!-- ★★★ THE OLD FILTER BLOCK IS GONE — THE DIAL IS ITS REPLACEMENT (Stuart, 2026-08-23: "that
@@ -690,6 +715,66 @@ function listenUrl(s) {
   return s.address ? `https://${s.address}/` : s.url;
 }
 
+/** ★★ A RADIO'S OWN DOOR. /r/<id>/?join=1 is the front door's route to one receiver, and ?join
+ *  is the landing page's "open THIS one" — the same link its own cards use. The door stays the
+ *  only way in; we simply walk the visitor through it. If the radio has been taken since the
+ *  directory last looked, the receiver sends them back to the door with a note (see the web
+ *  client's showBusy). No id, or no address, means no deep link — the LISTEN button remains. */
+function radioUrl(r, s) {
+  if (!s || !s.address || !r || !r.id || s.demo) return '';
+  return `https://${s.address}/r/${encodeURIComponent(r.id)}/?join=1`;
+}
+
+/* ══ WHAT A RECEIVER OFFERS ═══════════════════════════════════════════════════════════════════
+ * ★★★ SAID OR NOT SHOWN, like everything else here: a badge is a fact the server published.
+ *     `rawIq` is "off" | "local" | "public" — only PUBLIC reaches a directory visitor, so only
+ *     public earns the IQ48 mark (48 kS/s is the tunnel's raw-IQ rate). `rdsx` is Advanced RDS,
+ *     its own flag because an owner can switch the analyser off to save CPU and STILL serve
+ *     basic RDS — the card must not read as "no RDS". `modes` is the owner's offered list. */
+const MODE_NAMES = {
+  wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
+  dab: 'DAB', rds: 'Advanced RDS', rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX',
+  sstv: 'SSTV', ft8: 'FT8 / FT4', time: 'Time signals',
+};
+const MODE_ORDER = Object.keys(MODE_NAMES);
+const modesOf = (r) => (Array.isArray(r && r.modes) ? r.modes : []).map((m) => String(m).toLowerCase())
+                         .filter((m) => MODE_NAMES[m]);
+function iqBadge(r) {
+  if (!r || r.rawIq !== 'public') return '';
+  return `<span class="capIq" title="Raw IQ out at 48 kS/s through the tunnel — pair VibeIQ or rtl_tcp software with this receiver">IQ48</span>`;
+}
+/** ★ Upright, not leaned: "similar font to the RDS logo, but do not lean it" (Stuart). */
+const ADVRDS_SVG = `<svg viewBox="0 0 52 21" width="52" height="21" xmlns="http://www.w3.org/2000/svg" style="display:block">`
+  + `<rect x="0.5" y="0.5" width="51" height="20" rx="3" fill="none" stroke="var(--phosphor)" stroke-width="1"/>`
+  + `<text x="26" y="8" text-anchor="middle" font-family="Helvetica Neue,Arial,sans-serif" font-weight="700" font-size="5.6" letter-spacing="1.1" fill="var(--phosphor)">ADVANCED</text>`
+  + `<text x="26" y="18" text-anchor="middle" font-family="Helvetica Neue,Arial,sans-serif" font-weight="900" font-size="10.5" letter-spacing="1" fill="var(--phosphor)">RDS</text>`
+  + `</svg>`;
+function advRdsBadge(r) {
+  if (!r || r.rdsx !== true) return '';
+  return `<span class="capRds" title="Advanced RDS — the full RDS analyser (constellation, scope view, deviation, group statistics)">${ADVRDS_SVG}</span>`;
+}
+/** The modes + decoders a radio offers, as a tag whose tooltip lists them. Nothing when unsaid. */
+function modesTag(list) {
+  const ms = MODE_ORDER.filter((m) => list.includes(m));
+  if (!ms.length) return '';
+  const words = ms.map((m) => MODE_NAMES[m]).join(' · ');
+  return `<span class="modesTag" title="Modes and decoders on offer: ${esc(words)}">${ms.length} MODES</span>`;
+}
+/** The union across a server's radios, for the collapsed row. */
+function serverCaps(s) {
+  const rs = (s && s.radios) || [];
+  const union = new Set();
+  for (const r of rs) for (const m of modesOf(r)) union.add(m);
+  const any = (k) => rs.some((r) => r[k] === true);
+  return { dab: any('dab'), rdsx: any('rdsx'), iq: rs.some((r) => r.rawIq === 'public'), modes: [...union] };
+}
+function serverCapBadges(s) {
+  const c = serverCaps(s);
+  const parts = [c.dab ? dabBadge({ dab: true }) : '', c.iq ? iqBadge({ rawIq: 'public' }) : '',
+                 c.rdsx ? advRdsBadge({ rdsx: true }) : '', modesTag(c.modes)].filter(Boolean);
+  return parts.length ? `<span class="caps">${parts.join('')}</span>` : '';
+}
+
 /**
  * One radio, as a listener would ask about it: what it is, what it can hear, whether there is room,
  * and how long they get. Stuart's own entry, 2026-08-22:
@@ -795,14 +880,18 @@ function radioLine(r, s) {
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
 
-  return `<div class="rcard">
+  const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(r.name || r.driver || 'Radio')}</span>
-        <span class="rcRight">${dabBadge(r)}<span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
+        <span class="rcRight">${modesTag(modesOf(r))}${dabBadge(r)}${iqBadge(r)}${advRdsBadge(r)}<span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
               >${esc(stateTxt)}</span></span></div>
       <div class="rcSub">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
       ${etiquette}
     </div>`;
+  // ★ The card opens ITS receiver — even a FULL one: the directory may be stale in either
+  //   direction, and the receiver's own door is the one that knows. It bounces back if taken.
+  const url = radioUrl(r, s);
+  return url ? `<a class="rcLink" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Open this receiver">${card}</a>` : card;
 }
 
 /** ★ The WorldDAB DAB+ mark, drawn ONLY beside a radio whose server reports `dab: true` — a
@@ -846,11 +935,12 @@ function serverBlock(s) {
    */
   const wanted = searchRanges() || [];
   const rs = (s.radios || []);
-  const fit = wanted.length ? rs.filter((r) => wanted.every(([lo, hi]) => radioCovers(r, lo, hi))) : rs;
+  const fit = rs.filter((r) => (!wanted.length || wanted.every(([lo, hi]) => radioCovers(r, lo, hi)))
+                            && radioOffers(r));
   const hidden = rs.length - fit.length;
   const radios = (fit.map((r) => radioLine(r, s)).join('')
     + (hidden > 0 ? `<div class="radio cap">${hidden} other receiver${hidden === 1 ? '' : 's'} here `
-                    + `cannot cover what you asked for.</div>` : ''))
+                    + `cannot ${modesOn.size ? 'do' : 'cover'} what you asked for.</div>` : ''))
     || '<div class="radio cap">This server has not published its radios yet.</div>';
   // ★ The aerial and the machine, each on its own line and each only when said. An empty label
   //   would be worse than nothing: it implies we asked and got no answer.
@@ -870,7 +960,7 @@ function serverBlock(s) {
   return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
-      <span>${esc(s.name)}</span>
+      <span>${esc(s.name)}</span>${serverCapBadges(s)}
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
       ${shareLeft(s) > 0 ? `<span class="tag temp" title="This listing ends when the share does — the receiver stays running, it just stops being advertised here">Temporary share \u00b7 ${esc(untilText(shareLeft(s)))} left</span>` : ''}
@@ -1054,17 +1144,49 @@ function searchRanges() {
   return wants;
 }
 
+/** ★ The modes and decoders the visitor asked for. Empty = not asked. */
+const modesOn = new Set();
+/** Does this radio offer everything asked for? A radio that never published a list cannot say
+ *  yes — the same rule as an unpublished tuning range: never invent a capability. */
+function radioOffers(r) {
+  if (!modesOn.size) return true;
+  const have = modesOf(r);
+  return [...modesOn].every((m) => have.includes(m));
+}
 function matches(s) {
   if (countriesOn.size && !countriesOn.has(s.country)) return false;
   const wants = searchRanges();
   // ★ A band this plan cannot name is not a band we can match by frequency — say no rather than
   //   quietly returning everything.
   if (wants === null) return false;
-  if (wants.length) {
-    const ok = (s.radios || []).some((r) => wants.every(([lo, hi]) => radioCovers(r, lo, hi)));
+  if (wants.length || modesOn.size) {
+    // ★ ONE RADIO must satisfy the whole ask — the bands AND the modes — or the visitor is sent
+    //   to a machine where the WEFAX-capable radio cannot reach 4 MHz.
+    const ok = (s.radios || []).some((r) =>
+      (!wants.length || wants.every(([lo, hi]) => radioCovers(r, lo, hi))) && radioOffers(r));
     if (!ok) return false;
   }
   return true;
+}
+/** The chip bar: every mode/decoder any listed server offers, so a chip is never a dead end. */
+function renderModeBar() {
+  const bar = document.getElementById('modeBar');
+  if (!bar) return;
+  const offered = new Set();
+  for (const s of ALL) for (const r of (s.radios || [])) for (const m of modesOf(r)) offered.add(m);
+  for (const m of [...modesOn]) if (!offered.has(m)) modesOn.delete(m);
+  const chips = MODE_ORDER.filter((m) => offered.has(m));
+  bar.innerHTML = chips.length
+    ? `<span class="lbl">MODES &amp; DECODERS</span>` + chips.map((m) =>
+        `<button type="button" class="mchip${modesOn.has(m) ? ' on' : ''}" data-mode="${m}" `
+        + `title="Only receivers that offer ${esc(MODE_NAMES[m])}">${esc(MODE_NAMES[m])}</button>`).join('')
+    : '';
+  bar.querySelectorAll('.mchip').forEach((b) => b.addEventListener('click', () => {
+    const m = b.dataset.mode;
+    if (modesOn.has(m)) modesOn.delete(m); else modesOn.add(m);
+    b.classList.toggle('on', modesOn.has(m));
+    applyFilters();
+  }));
 }
 
 /* ══ THE NETWORK DIAL ════════════════════════════════════════════════════════════════════════
@@ -1515,7 +1637,7 @@ function renderDial() {
   if (hint && DEMO_ON) hint.textContent = 'SIMULATED RECEIVERS — remove ?demo from the URL for the real directory';
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   // ★ A key that can only be a no-op is worse than no key.
-  document.getElementById('clearSel').disabled = !(vfoLive || needleA > 0 || bandsOn.size);
+  document.getElementById('clearSel').disabled = !(vfoLive || needleA > 0 || bandsOn.size || modesOn.size);
   const vfoKey = document.getElementById('setVfo');
   // ★ The key wears the colour of what it will leave behind: amber once an anchor is down.
   vfoKey.classList.toggle('armed', needleA > 0 && !rangeSet);
@@ -1946,8 +2068,8 @@ function wireDial() {
   });
   document.getElementById('clearSel').addEventListener('click', () => {
     // ★ The query, not the view: where you are looking is not something you asked for.
-    needleA = 0; rangeSet = false; vfoLive = false; bandsOn.clear();
-    renderDial(); applyFilters();
+    needleA = 0; rangeSet = false; vfoLive = false; bandsOn.clear(); modesOn.clear();
+    renderModeBar(); renderDial(); applyFilters();
   });
 
   const glass = document.querySelector('.dialGlass');
@@ -2046,7 +2168,7 @@ window.addEventListener('resize', () => {
 
 function applyFilters() {
   const shown = ALL.filter(matches);
-  const active = bandsOn.size > 0 || needleA > 0;
+  const active = bandsOn.size > 0 || needleA > 0 || modesOn.size > 0;
 
   const sum = document.getElementById('filterSummary');
   if (!active) sum.textContent = '';
@@ -2061,7 +2183,8 @@ function applyFilters() {
       ? ` · ${prettyHz(Math.min(needleA, needleV))} – ${prettyHz(Math.max(needleA, needleV))}`
       : vfoLive ? ` · can hear ${prettyHz(needleV)}` : '';
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
-    sum.textContent = `Showing ${shown.length} of ${ALL.length} servers${bandTxt}${rangeTxt}`
+    const modeTxt = modesOn.size ? ` · with ${[...modesOn].map((m) => MODE_NAMES[m]).join(' + ')}` : '';
+    sum.textContent = `Showing ${shown.length} of ${ALL.length} servers${bandTxt}${rangeTxt}${modeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
       + (mute ? ` ${mute} ${mute === 1 ? 'has' : 'have'} not published a tuning range and cannot`
                 + ` be matched by frequency.` : '');
@@ -2361,7 +2484,7 @@ function load(first) {
     // ★ Real servers first, then the invented ones — so a demo run still shows the estate as it
     //   actually is, with the simulation around it.
     .then(async (servers) => DEMO_ON ? servers.concat(await demoServers()) : servers)
-    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial();
+    .then((servers) => { ALL = servers; renderModeBar(); learnBands(ALL); renderCountries(); renderDial();
                          applyFilters(); drawCountryHighlight(); })
     .catch(() => {
       if (!first) return;

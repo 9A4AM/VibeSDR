@@ -4160,6 +4160,33 @@ async function showSplashRadios(): Promise<void> {
   if (dir?.landingMessage || dir?.landingLinkUrl)
     showLandingMessage(dir.landingMessage, dir.landingLinkUrl, dir.landingLinkLabel);
 
+  // ★★ BOUNCED BACK FROM A RADIO THAT WAS TAKEN — see showBusy. Say which one and why, above the
+  //    cards, once; the URL is cleaned so a reload does not repeat it.
+  {
+    const qs = new URLSearchParams(location.search);
+    const busyId = qs.get('busy');
+    if (busyId && isFrontDoor) {
+      const r = radios.find((x: any) => String(x.id ?? x.serial ?? '') === busyId);
+      const name = r ? String((r as any).label || (r as any).driver || 'That radio') : 'That radio';
+      const fi = Number(qs.get('freeIn'));
+      const when = Number.isFinite(fi) && fi >= 0
+        ? ` It should be free again in about ${Math.max(1, Math.round(fi / 60))} minute${Math.round(fi / 60) === 1 ? '' : 's'}.`
+        : '';
+      let note = document.getElementById('splashBusyNote');
+      if (!note) {
+        note = document.createElement('div');
+        note.id = 'splashBusyNote';
+        note.style.cssText = 'margin:10px auto 0;max-width:420px;padding:8px 12px;border:1px solid var(--busy,#ff5a5a);'
+          + 'border-radius:8px;color:var(--busy,#ff5a5a);font:12px/1.5 ui-monospace,monospace;letter-spacing:.04em;text-align:center';
+        host.insertAdjacentElement('beforebegin', note);
+      }
+      note.textContent = `${name} is now in use — it was free when the directory last checked.${when} Pick another radio below.`;
+      qs.delete('busy'); qs.delete('freeIn');
+      const clean = `${location.pathname}${qs.toString() ? '?' + qs.toString() : ''}${location.hash}`;
+      history.replaceState(null, '', clean);
+    }
+  }
+
   if (radios.length < 2 && !dir?.frontDoor) { host.innerHTML = ''; return; }
 
   // ★★★ ONE AERIAL LINE, NOT TWO. Past this point we are drawing CARDS, and each card carries its
@@ -6416,6 +6443,21 @@ function showDeviceBanner(present: boolean, reason?: string) {
  *  ★ Called REPEATEDLY as our position changes — the server holds the socket open and re-sends.
  *    So this updates in place and must not stack overlays. */
 function showBusy(q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) {
+  /* ★★★ SENT STRAIGHT TO A RADIO THAT IS NOW TAKEN → BACK TO THE DOOR, WITH A REASON. The
+   *     directory links a radio card to /r/<id>/?join=1 so a tap opens that receiver without a
+   *     second choice. The directory is a minute stale at worst, so the radio it called FREE can
+   *     be occupied by the time the tap lands — and a listener who never chose to queue should
+   *     not be put in one. They are returned to the front door, which lists every radio with its
+   *     live state, carrying the id so the door can say which one was taken (Stuart,
+   *     2026-09-15). Only from a /r/ path: on a single-process server the root IS the radio and
+   *     there is nowhere else to go, so the queue is still the right answer there. */
+  const m = /^\/r\/([^/?#]+)/.exec(location.pathname);
+  if (m && new URLSearchParams(location.search).has('join')) {
+    const q2 = new URLSearchParams({ busy: m[1] });
+    if (q?.freeIn !== undefined && q.freeIn >= 0) q2.set('freeIn', String(q.freeIn));
+    location.replace(`${location.origin}/?${q2.toString()}`);
+    return;
+  }
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   let body: string;
   if (q?.queueFull) {
