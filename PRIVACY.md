@@ -24,10 +24,13 @@ Everything the app stores stays on your device, or in your own iCloud account.
 
 This is deliberate, and it is permanent.
 
-- **No third-party SDKs.** The apps contain no analytics, advertising, attribution,
-  crash-reporting or "monetisation" libraries from anyone. The only code that runs
-  is VibeSDR's own, the open-source radio libraries it is built from, and the
-  platform's frameworks.
+- **No data-collecting SDKs.** The apps contain no analytics, advertising,
+  attribution, crash-reporting or "monetisation" libraries from anyone. The
+  third-party code they do contain is the kind a radio needs — open-source
+  drivers, decoders and codecs (librtlsdr, libusb, Opus and the like), and, in
+  VibeServer, Cloudflare's tunnel client so a server can be reached from outside
+  your network. All of it is open source or published, does one job, and reports
+  nothing to anyone.
 - **No bandwidth-sharing or proxy SDKs — ever.** Developers of apps like this one are
   regularly offered money to embed SDKs that use the phones of people running the app
   as proxy exit nodes: other people's internet traffic, of unknown origin and purpose,

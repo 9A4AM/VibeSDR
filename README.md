@@ -222,9 +222,11 @@ On the watch, the Crown is disarmed until you deliberately arm it.
 
 ## Privacy
 
-No personal data, no analytics, no ads, no tracking, and no third-party SDK of any kind. There is
-nothing in these apps that reports to the developer, and nothing in them that belongs to anyone
-else. Location is optional, coarse, and used only to sort receivers by distance.
+No personal data, no analytics, no ads, no tracking, and no data-collecting SDK of any kind.
+Third-party code in these apps is limited to what makes a radio work: open-source drivers and
+codecs, and the Cloudflare tunnel client that lets a server be reached from outside. None of it
+reports to the developer or to anyone else. Location is optional, coarse, and used only to sort
+receivers by distance.
 
 That is a position, not an accident of being small. Companies approach hobby apps with paid
 SDKs — analytics, advertising, and lately "bandwidth sharing" SDKs that quietly turn every phone
