@@ -3020,7 +3020,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         /* ★ "Runs clean" is judged AFTER error correction: 9A carries 6.6 % MSC bit errors before
          *   Viterbi with zero FIB errors and clean audio, and the old test (MSC BER < 0.2 %) never
          *   remembered it (2026-09-15 18:32). The FIB rate is the decoder's own verdict. */
-        const bool perfect = q.locked && q.fibRate >= 0.99f;
+        const bool perfect = q.locked && q.fibRate >= 0.95f;   // ★ "received mostly fine" — Stuart
         if (blk != dabBlockSeen) {
             dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabTunedAt = now;
             /* ★★ A NEW MULTIPLEX IS A NEW SITUATION. The anti-hunting rule refuses a step that
