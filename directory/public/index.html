@@ -224,6 +224,9 @@
                     border:1px solid var(--line); color:var(--dim); background:transparent; cursor:pointer; }
   #modeBar .mchip:hover { color:var(--text); border-color:var(--text); }
   #modeBar .mchip.on { color:#000; background:var(--accent); border-color:var(--accent); }
+  #modeBar .modeHint { flex-basis:100%; font-size:11px; line-height:1.5; color:var(--dim); letter-spacing:.03em; padding:2px 0 4px; }
+  #modeBar .modeHint b { color:var(--text); }
+  #modeBar .modeHint a { color:var(--accent); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   /* ══ NARROW SCREENS ═══════════════════════════════════════════════════════════════════════
      ★★ There were no media queries in this page at all, which is fine while everything is a
@@ -740,10 +743,15 @@ const MODE_NAMES = {
   wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
   dab: 'DAB', rds: 'Advanced RDS', rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX',
   sstv: 'SSTV', ft8: 'FT8 / FT4', time: 'Time signals',
+  iq48: 'IQ48',   // ★ not a mode the radio lists — derived from rawIq === 'public' (capsOf)
 };
 const MODE_ORDER = Object.keys(MODE_NAMES);
+const VIBEIQ_URL = 'https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.0';
 const modesOf = (r) => (Array.isArray(r && r.modes) ? r.modes : []).map((m) => String(m).toLowerCase())
-                         .filter((m) => MODE_NAMES[m]);
+                         .filter((m) => MODE_NAMES[m] && m !== 'iq48');
+/** Everything a radio can be filtered by: its modes and decoders, plus IQ48 when its raw IQ is
+ *  public (Stuart, 2026-09-16: "add IQ48 option across the modes and decoders"). */
+const capsOf = (r) => modesOf(r).concat(r && r.rawIq === 'public' ? ['iq48'] : []);
 function iqBadge(r) {
   if (!r || r.rawIq !== 'public') return '';
   return `<span class="capIq" title="Raw IQ out at 48 kS/s through the tunnel — pair VibeIQ or rtl_tcp software with this receiver">IQ48</span>`;
@@ -1156,7 +1164,7 @@ const modesOn = new Set();
  *  yes — the same rule as an unpublished tuning range: never invent a capability. */
 function radioOffers(r) {
   if (!modesOn.size) return true;
-  const have = modesOf(r);
+  const have = capsOf(r);
   return [...modesOn].every((m) => have.includes(m));
 }
 function matches(s) {
@@ -1179,13 +1187,19 @@ function renderModeBar() {
   const bar = document.getElementById('modeBar');
   if (!bar) return;
   const offered = new Set();
-  for (const s of ALL) for (const r of (s.radios || [])) for (const m of modesOf(r)) offered.add(m);
+  for (const s of ALL) for (const r of (s.radios || [])) for (const m of capsOf(r)) offered.add(m);
   for (const m of [...modesOn]) if (!offered.has(m)) modesOn.delete(m);
   const chips = MODE_ORDER.filter((m) => offered.has(m));
   bar.innerHTML = chips.length
     ? `<span class="lbl">MODES &amp; DECODERS</span>` + chips.map((m) =>
         `<button type="button" class="mchip${modesOn.has(m) ? ' on' : ''}" data-mode="${m}" `
         + `title="Only receivers that offer ${esc(MODE_NAMES[m])}">${esc(MODE_NAMES[m])}</button>`).join('')
+      + (offered.has('iq48')
+          ? `<div class="modeHint"><b>IQ48</b> is 48 kHz of raw IQ output from the server. Use `
+            + `<a href="${VIBEIQ_URL}" target="_blank" rel="noopener"><b><u>VibeIQ</u></b></a> to receive the `
+            + `IQ stream from the server and convert it to RTL-TCP for downstream decoding apps such as `
+            + `SDR++, SDR#, SDRangel, GQRX, CubicSDR and DSD-FME / DSD+.</div>`
+          : '')
     : '';
   bar.querySelectorAll('.mchip').forEach((b) => b.addEventListener('click', () => {
     const m = b.dataset.mode;
