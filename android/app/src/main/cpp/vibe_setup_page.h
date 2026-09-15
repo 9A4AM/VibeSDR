@@ -514,8 +514,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            and it was markup nesting the entire time. The gate in renderHw() was innocent. -->
       <div class="card">
         <h2>Radio</h2>
-        <p class="why">Listeners cannot change these in shared mode, so they are set here or not
-           at all.</p>
+        <p class="why">How this radio starts, and where its gain is set. Gain itself lives in the
+           client, behind the admin password, where you can see the waterfall while you move it.</p>
         <div id="hw"></div>
       </div>
       <div class="card">
@@ -2468,13 +2468,12 @@ async function renderHw() {
         surviving being driven hard. Bring the LNA up until signals are clear of the noise and no
         further.</div>`;
   } else {
-    const opts = (hw.gains || []).map(g =>
-      `<option value="${g}">${(g/10).toFixed(1)} dB</option>`).join("");
-    el.innerHTML = `
-      <label><span class="lbl">Tuner gain</span>
-        <select id="gain"><option value="-1">Automatic</option>${opts}</select>
-        <div class="hint">Automatic suits most aerials. Fix it only if you know you need to.</div>
-      </label>`;
+    /* ★★★ NO GAIN SELECT HERE. It sat directly above a note saying "Gain is not set here", and
+     *     both were true: the select saved a number the client's live controls then overrode.
+     *     A control that contradicts the paragraph under it is worse than either alone (Stuart,
+     *     2026-09-15: "a gain setting with a message saying cannot be set here"). The stored
+     *     `gain` is still read by fill() and left alone by collect() when the select is absent. */
+    el.innerHTML = "";
   }
   // ★★★ SAY WHERE THE GAIN CONTROLS ACTUALLY ARE. They are deliberately NOT on this page: gain
   //     is the one setting you cannot choose sensibly in the abstract — it depends on your aerial,
