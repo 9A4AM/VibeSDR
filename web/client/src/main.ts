@@ -1916,6 +1916,34 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
 
     el.appendChild(btn); el.appendChild(why);
 
+    // ★★ WEBKIT IS TOLD ABOUT WEBKIT. Safari — and every browser on iOS, which is WebKit
+    //    underneath whatever it is called — can leave the AudioContext "running" with a frozen
+    //    clock on the first connection (WebKit bug 263627; measured on Stuart's silent tab,
+    //    currentTime stuck at 1.18 s, 2026-09-14). The watchdog rebuilds the context, but a
+    //    refresh is the sure cure, and a listener who has not been told tries the START button
+    //    six more times instead. Said here, on the one screen every listener reads before the
+    //    first click, and only to the engines that have the bug: Blink and Gecko carry
+    //    "AppleWebKit" in the UA too, so they are excluded by their own tokens.
+    const ua = navigator.userAgent;
+    const isWebKit = /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg\/|Firefox|FxiOS/.test(ua)
+                     || /iPhone|iPad|iPod/.test(ua);
+    if (isWebKit) {
+      const note = document.createElement('div');
+      note.style.cssText = 'font:11px/1.5 ui-monospace,monospace;letter-spacing:.04em;'
+        + 'color:var(--amber,#ffb000);opacity:.6;text-align:center;max-width:34em;padding:0 1em;margin-top:6px';
+      note.append('Due to a known issue in WebKit (');
+      const a = document.createElement('a');
+      a.href = 'https://bugs.webkit.org/show_bug.cgi?id=263627';
+      a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = 'bug 263627';
+      a.style.cssText = 'color:inherit;text-decoration:underline';
+      // ★ The link is the one thing on the gate that must NOT start the audio or be swallowed.
+      a.addEventListener('click', (e) => e.stopPropagation());
+      note.append(a, ') audio may fail to start on the first connection. If it does, refresh the page, '
+        + 'which restores the audio.');
+      el.appendChild(note);
+    }
+
     // ★★★ THE GATE MUST EAT THE CLICK. Being on top is not enough: the waterfall listens for
     //     pointer events on the window, so the click that started audio ALSO fell through and
     //     retuned the radio — the listener's first act on the page moved the dial without them
