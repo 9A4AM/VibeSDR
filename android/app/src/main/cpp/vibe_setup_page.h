@@ -1136,6 +1136,41 @@ let AUTH = "";          // vs_admin_nonce=…&vs_admin_auth=… for the current 
 let PASS = "";
 let cfg  = null;
 
+/** ★★ THE FRIENDLY NAME, RETURNED. What the phone has always shown under its listing switch:
+ *  once the directory has answered, the shareable address — and until then, or on a refusal,
+ *  the honest state. Read from cfg.dirStatus (vibedir::statusJson folded into /vibeserver/config)
+ *  and refreshed every 15 s while the owner is looking, because the tunnel and the registration
+ *  arrive a few seconds after the save. */
+function renderDirStatus(st) {
+  const el = $("dirStatus"); if (!el) return;
+  const on = $("dirList") && $("dirList").checked;
+  if (!st || typeof st !== "object" || !on) { el.innerHTML = ""; return; }
+  const addr = String(st.address || "");
+  if (st.listed && addr) {
+    el.innerHTML = `<b>Listed.</b> Accessible from <a href="https://${esc(addr)}/" target="_blank" rel="noopener"`
+      + ` style="color:var(--amber)">https://${esc(addr)}</a>` + (st.tunnelUrl ? ` &mdash; through a Cloudflare tunnel.` : `.`);
+  } else if (st.error) {
+    el.innerHTML = `<b style="color:#ff8a7d">Not listed:</b> ${esc(String(st.error))}`;
+  } else if (st.running) {
+    el.textContent = "Registering with the directory\u2026 the address appears here once it answers.";
+  } else {
+    el.textContent = "Save and restart to publish the listing.";
+  }
+}
+let dirStatusTimer = 0;
+function pollDirStatus() {
+  clearInterval(dirStatusTimer);
+  dirStatusTimer = setInterval(async () => {
+    if (!cfg || !$("dirList") || !$("dirList").checked) return;
+    try {
+      const r = await fetch("/vibeserver/config?" + await authQuery(), {cache:"no-store"});
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j && j.dirStatus) { cfg.dirStatus = j.dirStatus; renderDirStatus(j.dirStatus); }
+    } catch (e) { /* next tick */ }
+  }, 15000);
+}
+
 // ── ★★★ PURE-JS HMAC-SHA256. crypto.subtle IS NOT AVAILABLE HERE AND MUST NOT BE USED.
 //    A VibeServer is plain http:// on a LAN IP, which is NOT a secure context, so crypto.subtle
 //    is undefined there — but localhost IS a secure context, so a version using it works
@@ -2832,6 +2867,7 @@ function fill() {
   //    the owner an empty box over a setting that is actually on, and the next save writes the
   //    blank back — which is how twelve settings reverted on every start once already.
   $("dirList").checked        = !!cfg.dirList;
+  renderDirStatus(cfg.dirStatus);
   $("dirName").value          = cfg.dirName || "";
   $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
   $("dirShareSec").value      = String(cfg.dirShareSec || 0);
@@ -3380,6 +3416,7 @@ async function signIn(fromTicket) {
     if (r.status === 401) { $("signinErr").textContent = "That password was not accepted."; return; }
     if (!r.ok) { $("signinErr").textContent = "Server error (" + r.status + ")."; return; }
     cfg = await r.json();
+    pollDirStatus();
     // ★ Same page, two jobs. Say which one you are doing — "Save and start" on a receiver that
     //   is already running would read as if it were about to do something drastic.
     if (cfg.configured) {

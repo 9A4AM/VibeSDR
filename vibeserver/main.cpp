@@ -1510,7 +1510,15 @@ int main(int argc, char** argv) {
                 r.agcSet = c.agcSet; r.agcSetLock = c.agcSetLock;
                 break;
             }
-            return vsconfig::toJson(out);
+            /* ★★ AND WHERE THE LISTING ENDED UP. vibedir::statusJson() was written for the setup
+             *  page and never read by anything, so the desktop owner ticked "List this server
+             *  publicly" and was told nothing — while the phone shows "accessible from
+             *  <slug>.vibeserver.vibesdr.net" straight away (Stuart, 2026-09-15: "we are missing
+             *  the friendly name return like we have on Android"). Folded into the config the page
+             *  already fetches; the page reads it back on load and on a poll. */
+            std::string j = vsconfig::toJson(out);
+            if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, ",\"dirStatus\":" + vibedir::statusJson());
+            return j;
         },
         [](const std::string& json, std::string& err) -> bool {
             // ★★★ RE-READ BEFORE WRITING, ALWAYS. There are now several writers: this process,
