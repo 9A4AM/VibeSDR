@@ -24612,6 +24612,15 @@ void LocalSdrShim::setSampleRate(double rate) {
         actual = (uint32_t)llround(rtlActualRate(rate));
     } else if (rsp) {
         impl->sdrp->setSampleRate(rate);   // also moves the IF bandwidth to match the span
+        /* ★★★ AND RE-INIT THE STREAM, NOT JUST UPDATE IT. Stuart, 2026-09-15: "Can we do an
+         *     SDRplay API restart on switching to DAB mode?" — yes, and for every rate change: the
+         *     in-place Fs update left the tuner's AGC silent (measured twice today); a fresh
+         *     Uninit/Init keeps the operator's tuning and gain and gives the API a clean loop. The
+         *     stall recovery has done exactly this for weeks. Half a second of gap, once. */
+        { std::string rerr;
+          if (!impl->sdrp->restartStream(rerr))
+              LOGI("RSP: stream re-init after the rate change failed: %s — carrying on with the in-place update", rerr.c_str());
+          else LOGI("RSP: stream re-initialised after the rate change to %.3f MS/s", rate / 1e6); }
         actual = (uint32_t)llround(rate);  // the RSP takes the rate it is given
     } else if (ahf) {
         // ★★★ SET THE DEVICE **HERE**, BEFORE THE ENGINE IS BUILT. This used to only compute
