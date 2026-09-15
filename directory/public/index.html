@@ -211,7 +211,7 @@
   .modesTag:hover { color:var(--text); border-color:var(--text); }
   /* ★ Right-aligned beside the grid square, not tucked against the name (Stuart, 2026-09-15). */
   .caps { display:inline-flex; align-items:center; gap:6px; margin-left:auto; padding-left:12px; }
-  .srv > summary .caps + .tag, .srv > summary .caps ~ .meta { margin-left:10px; }
+  .srv > summary .caps ~ .meta { margin-left:10px; }
   /* ★ A RADIO CARD IS A DOOR. It looked like one and did nothing (a colleague tapped it and
      nothing happened, 2026-09-15); now it opens that receiver through the front door. */
   a.rcLink { display:block; color:inherit; text-decoration:none; }
@@ -965,7 +965,7 @@ function serverBlock(s) {
   return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
-      <span>${esc(s.name)}</span>${serverCapBadges(s)}
+      <span>${esc(s.name)}</span>
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
       ${shareLeft(s) > 0 ? `<span class="tag temp" title="This listing ends when the share does — the receiver stays running, it just stops being advertised here">Temporary share \u00b7 ${esc(untilText(shareLeft(s)))} left</span>` : ''}
@@ -973,6 +973,7 @@ function serverBlock(s) {
            with different occupancy, so "2/10 listening" beside the server NAME is only ever true
            by accident — and on the receiver's own landing page it has always sat in the radio box
            (Stuart, 2026-08-22). This line says WHERE the server is; the cards say who is on what. -->
+      ${serverCapBadges(s)}
       <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding' : ''}</span>
     </summary>
     <div class="body">
