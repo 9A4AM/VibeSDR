@@ -3011,7 +3011,17 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *    settles for whichever side it is on and stops thrashing. */
     static auto lastRailOverride = std::chrono::steady_clock::time_point{};
     const auto  nowRail = std::chrono::steady_clock::now();
-    const bool  railDue = lastRailOverride.time_since_epoch().count() == 0 ||
+    /* ★★★ THE ADC PEAK CAN CONFIRM A RAIL, AND THEN THE MINUTE IS NOT NEEDED. The once-a-minute
+     *     rule guards against stepping blind between the two rails. When the measured peak sits
+     *     3 dB or more over the AGC's set point at the 59 rail (or under it at the 20 rail) the
+     *     direction is not a guess, and waiting a minute per rung left a DAB ensemble 10 dB over
+     *     target for a minute at a time (Lenovo, 2026-09-15 16:24: IF 59, peak -29.9, target -40,
+     *     one step, then nothing). The 6 s settle floor still applies between steps. */
+    const double peakNow = sdrp->adcPeakDbfs();
+    const int    aimNow  = sdrp->ifAgcSetPointDbfs();
+    const bool railConfirmed = std::isfinite(peakNow) &&
+        ((mean >= 57.0 && peakNow > aimNow + 3.0) || (mean <= 22.0 && peakNow < aimNow - 3.0));
+    const bool  railDue = railConfirmed || lastRailOverride.time_since_epoch().count() == 0 ||
         std::chrono::duration_cast<std::chrono::seconds>(nowRail - lastRailOverride).count() >= 60;
     const bool ifAtRail = (mean <= 22.0 || mean >= 57.0) && railDue;
     if (ifAtRail) lastRailOverride = nowRail;
