@@ -91,7 +91,7 @@ connection. These receivers are operated by independent third parties and are no
 controlled by the developer; their own logging and privacy practices are their
 responsibility.
 
-A VibeServer's owner can see, on their own admin page, the address, country and
+A VibeServer's owner can see, on their own admin page, the IP address, country and
 network of whoever is connected, and the frequency they are listening to. That
 view is held in the server's memory on the owner's hardware, is not sent to the
 developer or anywhere else, and lets the owner block abuse of their radio. Servers
@@ -99,12 +99,13 @@ reached through the public directory pass through Cloudflare's network on the wa
 as any website does.
 
 ### The VibeServer directory
-Server owners who choose to list a server register its name, its address and a
-**coarse** position: a Maidenhead grid locator, which names a square a few
+Server owners who choose to list a server register its name, its public web
+address (the tunnel hostname listeners connect to) and a **coarse** position: a Maidenhead grid locator, which names a square a few
 kilometres across, or a city-level position. VibeServer asks for this before it
 will start, because the directory exists to sort receivers by distance, but it is
 never an exact geographic location and the app never derives one. The directory
-records the registering address to limit abuse, and nothing about listeners:
+records the IP address each registration came from, to limit abuse, and nothing
+about listeners:
 browsing the list is an ordinary web request that is not logged by the developer.
 An owner can delist with one press, effective immediately.
 
