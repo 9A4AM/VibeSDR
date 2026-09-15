@@ -130,8 +130,21 @@ When you do, this is what happens:
    end-to-end encryption.
 
 The directory records the IP address each registration came from, to limit abuse,
-and nothing else about the owner. An owner can delist with one press, effective
-immediately, and switching public sharing off closes the tunnel.
+and nothing else about the owner.
+
+**Leaving is automatic.** A listing is only ever as current as the server behind
+it: VibeServer checks in while it runs, and a server that stops checking in simply
+drops off the list. There is nobody to contact and nothing to remember; switch
+public sharing off, or turn the machine off, and the listing goes with it. An owner
+who wants to be sure can also delist with one press, effective immediately. The
+friendly name is held for that server for a week, so a reboot, an outage or a
+holiday does not cost you it; after a week without the server it is released, to
+you on new hardware or to anybody else.
+
+The tunnel and the directory were built this way on purpose: the tunnel so that
+serving a radio never exposes your home connection, and the directory so that
+listing one never asks for more than a name and a rough position, and never keeps
+a record of you that outlives the server.
 
 ### On-device data
 The following are stored **only on your device** and are never transmitted to the
