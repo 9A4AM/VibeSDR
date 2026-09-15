@@ -198,6 +198,7 @@ struct Config {
      *  loop saturates the front end stays wherever it was put. This is the other half of the
      *  loop. On by default — half a gain control is not a safe default. */
     bool rfAgc = false;   // ★ see g_rspRfAgc — off until proven on air
+    bool rspDabDecim = false;   // ★ DAB at 4.096 MS/s decimated by 2 in the API (5 MHz filter, flat ensemble)
     /* ★ Where the RF AGC BEGINS, as a gain position (0 = least RF gain … lnaStates-1 = most).
      *  -1 = the middle. Without it the loop inherits whatever the start-up kick left behind —
      *  often an end stop — and has to walk several steps to get anywhere, which is precisely
@@ -394,6 +395,7 @@ struct RadioConfig {
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
     bool   rfAgc = false;
+    bool   rspDabDecim = false;
     int    rfAgcStart = -1;
     int    agcSet = -999;
     bool   agcSetLock = false;

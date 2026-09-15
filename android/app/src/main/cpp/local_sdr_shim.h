@@ -393,6 +393,7 @@ public:
     static void setVibeServerDabAgc(bool on, int targetDbfs);
     /** ★ The RF half of the gain loop — see vsSdrplayRfAgcTick. */
     static void setVibeServerRfAgc(bool on);
+    static void setVibeServerRspDabDecim(bool on);   // ★ see SdrplaySource::setDabDecimation
     /** ★ Gain POSITION the RF AGC begins from; -1 = the middle. */
     static void setVibeServerRfAgcStart(int pos);
     /** ★ Listeners may not move the AGC target — it decides how hard everyone's front end runs. */

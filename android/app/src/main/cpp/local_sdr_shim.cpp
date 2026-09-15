@@ -20870,6 +20870,12 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
 void LocalSdrShim::setVibeServerRfAgc(bool on) { g_rspRfAgc.store(on ? 1 : 0, std::memory_order_relaxed); }
+static std::atomic<bool> g_rspDabDecim{false};
+void LocalSdrShim::setVibeServerRspDabDecim(bool on) {
+    g_rspDabDecim.store(on, std::memory_order_relaxed);
+    Impl* impl = instance().p;
+    if (impl && impl->useSdrplay() && impl->sdrp) impl->sdrp->setDabDecimation(on);
+}
 void LocalSdrShim::setVibeServerRfAgcStart(int pos) { g_rspRfAgcStart.store(pos, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerAgcSetLock(bool locked) { g_rspAgcSetLock.store(locked); }
 void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
@@ -24747,6 +24753,7 @@ void LocalSdrShim::setSampleRate(double rate) {
         // and the audio came out pitch-shifted.
         actual = (uint32_t)llround(rtlActualRate(rate));
     } else if (rsp) {
+        impl->sdrp->setDabDecimation(g_rspDabDecim.load(std::memory_order_relaxed));   // ★ owner switch, read at every rate change
         impl->sdrp->setSampleRate(rate);   // also moves the IF bandwidth to match the span
         /* ★★★ AND RE-INIT THE STREAM, NOT JUST UPDATE IT. Stuart, 2026-09-15: "Can we do an
          *     SDRplay API restart on switching to DAB mode?" — yes, and for every rate change: the

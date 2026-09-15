@@ -501,14 +501,24 @@ void SdrplaySource::setSampleRate(double hz) {
     if (!open_ || !impl_->params || !impl_->params->devParams) return;
     if (hz < 2000000.0) hz = 2000000.0;      // zero-IF minimum — see open()
     curRate_ = hz;                           // remembered for reopen()
-    impl_->params->devParams->fsFreq.fsHz = hz;
-    // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
-    if (impl_->params->rxChannelA)
-        impl_->params->rxChannelA->tunerParams.bwType =
-            (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(hz);
+    /* ★ Decimated DAB — see setDabDecimation(). The converter runs at 2x through the 5 MHz
+     *   filter and the API hands back the requested rate. Every other rate: no decimation. */
+    const bool decim = dabDecim_ && hz > 2040000.0 && hz < 2060000.0;
+    impl_->params->devParams->fsFreq.fsHz = decim ? hz * 2.0 : hz;
+    if (impl_->params->rxChannelA) {
+        auto* ch = impl_->params->rxChannelA;
+        // ★ The IF bandwidth must follow the rate, or a wider span arrives already filtered.
+        ch->tunerParams.bwType = decim ? sdrplay_api_BW_5_000
+                                       : (sdrplay_api_Bw_MHzT)bandwidthKHzForRate(hz);
+        ch->ctrlParams.decimation.enable           = decim ? 1 : 0;
+        ch->ctrlParams.decimation.decimationFactor = decim ? 2 : 1;
+        ch->ctrlParams.decimation.wideBandSignal   = decim ? 1 : 0;
+    }
+    if (decim) std::fprintf(stderr, "sdrplay: %.0f S/s served as %.0f S/s decimated by 2 through the 5 MHz filter (DAB decimation)\n", hz, hz * 2.0);
     api().Update(impl_->dev.dev, impl_->dev.tuner,
                  (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Dev_Fs
-                                              | sdrplay_api_Update_Tuner_BwType),
+                                              | sdrplay_api_Update_Tuner_BwType
+                                              | sdrplay_api_Update_Ctrl_Decimation),
                  sdrplay_api_Update_Ext1_None);
     /* ★★★ A RATE CHANGE SILENCES THE AGC. Measured 2026-09-15 on the RSP1A entering DAB
      *     (3 MS/s -> 2.048): after this Update not one GainChange event arrived, so every readout

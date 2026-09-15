@@ -61,6 +61,15 @@ public:
 
     void setFrequency(double hz);
     void setSampleRate(double hz);
+    /** ★ DAB THROUGH THE API'S OWN DECIMATION. On: a 2.048 MS/s request is served as 4.096 MS/s
+     *  at the converter through the 5 MHz analogue filter, decimated by 2 inside the API with its
+     *  wideband filter, and delivered to us at 2.048 MS/s — so the whole 1.536 MHz ensemble passes
+     *  FLAT (the 1.536 filter's −3 dB points sit exactly on the outer carriers, 3 dB down on the
+     *  edge subchannels, where the RTL is given a 2.048 filter and loses nothing) and the
+     *  neighbours ±1.7 MHz away are removed digitally before the samples reach us. 4.096 keeps the
+     *  RSP1A's converter at 14 bits; 8.192 would not. Stuart's ask, 2026-09-15, for 10D. */
+    void setDabDecimation(bool on) { dabDecim_ = on; }
+    bool dabDecimation() const { return dabDecim_; }
     /** < 0 = the API's own AGC. Otherwise mapped onto LNA state + IF gain; see the .cpp. */
     void setGainTenthDb(int tenthDb);
     /** Bias-T for an active antenna or LNA at the mast. */
@@ -307,6 +316,7 @@ private:
     bool overload_ = false;
     std::atomic<bool> apiFailed_{false};
     std::atomic<bool> serviceDead_{false};
+    bool dabDecim_ = false;
     // ★★★ THE AGC'S OWN NUMBERS, from the gain-change EVENT. The API reports what the loop has
     //     actually done here; our copy of tunerParams.gain is only what WE last wrote, so with the
     //     AGC running it never moves — the readouts sat still and the IF slider never tracked

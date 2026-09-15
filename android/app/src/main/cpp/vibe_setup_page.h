@@ -2400,6 +2400,17 @@ async function renderHw() {
         from the first retune onward. Untick it below to control them by hand.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+        <input type="checkbox" id="rspDabDecim" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>DAB through the API's decimation (flat ensemble)</span></label>
+      <div class="hint">The RSP has no 2.048 MHz IF filter: for DAB it is given the 1.536 MHz one,
+        whose &minus;3 dB points sit exactly on the multiplex's outer carriers, so the edge
+        subchannels arrive 3 dB down &mdash; an RTL is given a 2.048 filter and loses nothing.
+        Ticked, the converter runs at 4.096 MS/s through the 5 MHz filter and the API decimates
+        by two with its own sharp filter: the whole ensemble passes flat, the neighbouring blocks
+        are removed digitally, and this server still receives 2.048 MS/s. 14-bit throughout.
+        Takes effect on the next DAB entry. Off by default until it has been compared on air.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rfAgc" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Automatic RF gain</span></label>
       <div class="hint"><b>The RSP's own IF AGC runs the IF stage; this moves the LNA to suit it.</b>
@@ -2574,6 +2585,7 @@ async function renderHw() {
   //   the wrong test for a setting whose default is true.
   // ★ OFF by default now — see g_rspRfAgc. `!!` is the right test again.
   if ($("rfAgc")) $("rfAgc").checked = !!radio().rfAgc;
+  if ($("rspDabDecim")) $("rspDabDecim").checked = !!radio().rspDabDecim;
   /* ★ REPAINT THE GAIN SECTION WHEN VibeAGC IS TOGGLED. renderGain() decides which gain controls
    *  VibeAGC has taken, so it has to run again the moment that answer changes — otherwise the
    *  rows stay as they were drawn on load and the greying only appears after a reload, which
@@ -3299,6 +3311,7 @@ function collectRadio() {
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
     ...($("rfAgc") ? {rfAgc: $("rfAgc").checked} : {}),
+    ...($("rspDabDecim") ? {rspDabDecim: $("rspDabDecim").checked} : {}),
     ...($("agcSet") ? {agcSet: +$("agcSet").value} : {}),
     ...($("agcSetLock") ? {agcSetLock: $("agcSetLock").checked} : {}),
     ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),
