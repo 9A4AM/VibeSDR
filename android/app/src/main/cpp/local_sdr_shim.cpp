@@ -3013,12 +3013,21 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     if (g_dabMode.load(std::memory_order_relaxed)) {
         static int  dabBlockSeen = -2;
         static auto dabCleanSince = std::chrono::steady_clock::time_point{};
+        static auto dabTunedAt    = std::chrono::steady_clock::time_point{};
         static bool dabLearned = false;
         const int blk = g_dabChannel.load(std::memory_order_relaxed);
         const auto q = g_dab.quality();
-        const bool perfect = q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
+        /* ★ "Runs clean" is judged AFTER error correction: 9A carries 6.6 % MSC bit errors before
+         *   Viterbi with zero FIB errors and clean audio, and the old test (MSC BER < 0.2 %) never
+         *   remembered it (2026-09-15 18:32). The FIB rate is the decoder's own verdict. */
+        const bool perfect = q.locked && q.fibRate >= 0.99f;
         if (blk != dabBlockSeen) {
-            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false;
+            dabBlockSeen = blk; dabCleanSince = {}; dabLearned = false; dabTunedAt = now;
+            /* ★★ A NEW MULTIPLEX IS A NEW SITUATION. The anti-hunting rule refuses a step that
+             *    reverses the last one — right within a block, wrong across blocks: a rung given
+             *    up in a dead block on the way past then could not be taken back on arrival
+             *    ("holding at state 6 … would only undo the last move", 9A, 18:32). */
+            lastDir = 0; outMs = 0; outDir = 0; oscWarned = false;
             int mem = -1;
             { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabLnaLoadLocked();
               auto it = g_dabLnaMem.find(blk); if (it != g_dabLnaMem.end()) mem = it->second; }
@@ -3053,6 +3062,11 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
             outMs = 0; outDir = 0; return;                 // ★ a clean multiplex is left alone
         }
         dabCleanSince = {};
+        /* ★ And the decoder gets three seconds to look before any rung moves — a rail reading one
+         *   second into a block is the retune, not the multiplex (8D on the way past, 18:32:18). */
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - dabTunedAt).count() < 3000) {
+            outMs = 0; outDir = 0; return;
+        }
         dabQuick = true;
     }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
