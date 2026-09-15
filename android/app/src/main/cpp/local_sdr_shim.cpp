@@ -3009,7 +3009,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     and left alone; otherwise the 30-50 window rule steers with a 2 s sustain instead of
      *     the FM curve (the 6 s settle floor between writes stands — it is what keeps the API
      *     alive). */
-    bool dabQuick = false;
+    bool dabQuick = false, dabWantUp = false;
     if (g_dabMode.load(std::memory_order_relaxed)) {
         static int  dabBlockSeen = -2;
         static auto dabCleanSince = std::chrono::steady_clock::time_point{};
@@ -3068,8 +3068,15 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
             outMs = 0; outDir = 0; return;
         }
         dabQuick = true;
+        /* ★★★ A WEAK MULTIPLEX WITH IF HEADROOM WANTS RF, WINDOW OR NOT. 10D sat at RF 2/9 with the
+         *     IF at 36 dB — inside 30-50, so the window rule held — while the decoder starved
+         *     ("nowhere near enough RF gain", 19:35). In DAB the multiplex is the guide: not
+         *     received fine, the IF still able to absorb a rung (≤ 52 dB) and the converter 6 dB
+         *     or more under its target → this is "below the window" and a rung goes back. */
+        { const double pk = sdrp->adcPeakDbfs(); const int am = sdrp->ifAgcSetPointDbfs();
+          dabWantUp = mean <= 52.0 && std::isfinite(pk) && pk < am - 6.0; }
     }
-    const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
+    const int dir = dabWantUp ? -1 : (mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0));
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
     outMs += kWindowMs;
