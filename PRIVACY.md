@@ -61,9 +61,14 @@ If any of this ever changes, this page will say so, at the top, before the chang
 
 ## Information the app uses
 
-### Location (optional)
-If you grant location permission, VibeSDR uses your device location **only** to
-sort and filter the list of available SDR instances by distance (nearest first).
+### Location (optional for listening)
+Listening needs no location at all. If you grant location permission, VibeSDR uses
+your device location **only** to sort and filter the list of receivers by distance
+(nearest first) and, when you plug an SDR into the device itself, to place a pin for
+that receiver on the app's map. Deny it and you lose only those two things.
+
+On every platform the app asks for **coarse** location only — never precise — even
+where the device could provide an exact position.
 
 - Your location is sent **only** to the public UberSDR instance directory
   (`instances.ubersdr.org`), rounded to about a kilometre, **at the moment you
@@ -92,11 +97,14 @@ reached through the public directory pass through Cloudflare's network on the wa
 as any website does.
 
 ### The VibeServer directory
-Server owners who choose to list a server register its name, address and approximate
-position with the directory. The directory records the registering address to limit
-abuse, and nothing about listeners: browsing the list is an ordinary web request
-that is not logged by the developer. An owner can delist with one press, effective
-immediately.
+Server owners who choose to list a server register its name, its address and a
+**coarse** position: a Maidenhead grid locator, which names a square a few
+kilometres across, or a city-level position. VibeServer asks for this before it
+will start, because the directory exists to sort receivers by distance, but it is
+never an exact geographic location and the app never derives one. The directory
+records the registering address to limit abuse, and nothing about listeners:
+browsing the list is an ordinary web request that is not logged by the developer.
+An owner can delist with one press, effective immediately.
 
 ### On-device data
 The following are stored **only on your device** and are never transmitted to the
