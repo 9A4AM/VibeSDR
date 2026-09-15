@@ -33,16 +33,29 @@ This is deliberate, and it is permanent.
   nothing to anyone.
 - **No bandwidth-sharing or proxy SDKs — ever.** Developers of apps like this one are
   regularly offered money to embed SDKs that use the phones of people running the app
-  as proxy exit nodes: other people's internet traffic, of unknown origin and purpose,
-  leaves through your connection, using your data allowance and your IP address,
-  usually with a consent screen nobody reads. VibeSDR has been approached with exactly
-  such an offer and refused it. It will refuse every future one, regardless of the
-  payment. Your device and your connection are not for sale, and not by us.
+  as proxy exit nodes ("proxyware"): other people's internet traffic, of unknown
+  origin and purpose, leaves through your connection, using your data allowance and
+  your IP address, usually behind a consent screen nobody reads. VibeSDR has been
+  approached with exactly such an offer and refused it. It will refuse every future
+  one, regardless of the payment. It would also be the exact inverse of what the
+  tunnel exists to do. Your device and your connection are not for sale, and not by
+  us.
 - **No accounts, no identifiers.** There is nothing to sign up for and no device
   identifier is generated, stored or sent.
+- **Privacy first in the design, not only in the policy.** VibeServer reaches the
+  internet through a Cloudflare tunnel rather than a forwarded port. That is slower
+  and less efficient than the port-forwarded servers other receiver software uses,
+  and it is chosen deliberately: nothing inbound ever touches the owner's home
+  address, nothing is exposed to internet scanners, and the address appears in no
+  listing. It protects the owner from exposure and inbound attack; it is not
+  end-to-end encryption — the tunnel terminates at Cloudflare's edge, as for any
+  site behind Cloudflare. An owner who prefers the speed of a direct, port-forwarded
+  server and is happy to manage their own exposure can run one; the tunnel is the
+  default, not the only option.
 - **Verifiable.** The full source of every released build is public at
-  <https://github.com/Stuey3D/VibeSDR>. Anyone can check that what this page says is
-  what the app does.
+  <https://github.com/Stuey3D/VibeSDR>, the dependency list with it, and anyone can
+  capture the app's network traffic and see exactly which endpoints it talks to.
+  What this page says is checkable in minutes, and with this app's audience it will be.
 
 If any of this ever changes, this page will say so, at the top, before the change ships.
 

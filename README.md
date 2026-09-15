@@ -234,8 +234,17 @@ running the app into a proxy exit node that other people's traffic leaves throug
 been offered money for exactly that and has refused, and will keep refusing, whatever it pays.
 Your phone is yours. Nothing in this app will ever use it, or you, as the product.
 
+The same thinking is why VibeServer reaches the internet through a Cloudflare tunnel rather than
+a forwarded port. A tunnel is slower and less efficient than a port-forwarded server, and it is
+chosen anyway: nothing inbound ever touches the owner's home address, nothing is exposed to
+scanners, and the address is never in any listing. It protects the owner from exposure; it is
+not end-to-end encryption, since the tunnel terminates at Cloudflare's edge like any site behind
+it. An owner who would rather take the speed and manage their own exposure can still run a
+direct, port-forwarded server; the tunnel is the default, not the only way.
+
 Because every released build's source is in this repository, none of this has to be taken on
-trust: it can be read. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
+trust: the dependency list is public, and anyone can capture the app's traffic and see exactly
+which endpoints it talks to. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
 
 ## Licence
 
