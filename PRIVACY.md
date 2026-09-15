@@ -94,6 +94,17 @@ for the decoders that show location-based data on a map. In both cases it is the
 Maidenhead grid square only, never a fix: a square a few kilometres on a side
 (about 5.6 km by 4.6 km in the UK), so it says which town, not which street.
 
+**A word of advice if you serve from somewhere remote.** A grid square hides a
+person well in a town, a suburb or a village, where it covers thousands of
+homes and is still accurate enough to sort by and to measure spots from. It does
+not hide a person whose square holds one farmhouse and nothing else: for them the
+square *is* the address, and a public listing would point straight at the front
+door. If that is you, do not use the device's location when you list a server.
+Enter the nearest town or city instead — the directory sorts just as well from
+twenty kilometres away, and nobody browsing it can tell the difference. The
+choice is always yours; the app never insists on the device's position, and it
+would rather you were listed a town over than listed at home.
+
 ### Connections to SDR receivers
 When you select an SDR instance, the app connects directly from your device to
 that third-party receiver to stream audio and spectrum data. Your device's IP
