@@ -498,6 +498,25 @@ void SdrplaySource::setSampleRate(double hz) {
                  (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Dev_Fs
                                               | sdrplay_api_Update_Tuner_BwType),
                  sdrplay_api_Update_Ext1_None);
+    /* ★★★ A RATE CHANGE SILENCES THE AGC. Measured 2026-09-15 on the RSP1A entering DAB
+     *     (3 MS/s -> 2.048): after this Update not one GainChange event arrived, so every readout
+     *     fell back to the struct's commanded 59 dB and the RF loop, steering on that echo,
+     *     walked the LNA from state 3 to 9. restartStream() already knows the cure — the loop
+     *     restarts on a CHANGE of agc.enable — so the same off/on is applied here, and the last
+     *     report is marked stale until the loop speaks again. */
+    if (impl_->params->rxChannelA) {
+        auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+        const auto want = agc.enable;
+        if (want != sdrplay_api_AGC_DISABLE) {
+            agc.enable = sdrplay_api_AGC_DISABLE;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+            agc.enable = want;
+            api().Update(impl_->dev.dev, impl_->dev.tuner,
+                         sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        }
+        liveStale_.store(true, std::memory_order_relaxed);
+    }
 }
 
 // ★★★ THE STREAM DIED BUT NOTHING SAID SO. See the header for the failure mode; this is the

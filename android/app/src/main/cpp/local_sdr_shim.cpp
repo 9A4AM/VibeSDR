@@ -2869,10 +2869,10 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     if (unhonoured >= 2) {
         unhonoured = 0;
         LOGI("RSP RF AGC: our gain writes are NOT being honoured — %d LNA steps and the API's own "
-             "gainVals.curr never moved from %.1f dB. Treating the API as stuck and restarting "
-             "its IF AGC in place. (Inferred from our own writes, NOT reported by the API — see "
-             "the DeviceFailure path for the case where it says so itself.)",
-             2, (double)structGainAtStep);
+             "gainVals.curr never moved from %.1f dB. Flagged as stuck (rspstat.gainStuck); the "
+             "listener may reset it from the chip. (Inferred from our own writes, NOT reported by "
+             "the API — see the DeviceFailure path for the case where it says so itself.)",
+             2, (double)sdrp->structGainDb());
         g_rspApiStuck.store(true, std::memory_order_relaxed);
         outMs = 0; outDir = 0;
         return;
@@ -8324,7 +8324,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     59 dB before the placement ever ran, and the placement then saw 40 dB "inside
              *     the window" and did nothing. With the order enforced the same start-up ends at
              *     RF 3/6, IF 50 dB (measured 14:23) instead of 0/6, IF 40. */
-            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
+            /* ★★★ AND ONLY ON A NUMBER THE AGC IS ACTUALLY SENDING. `ifHasMoved` proved the loop
+             *     was alive ONCE; it says nothing about now. After a DAB rate change the events
+             *     stopped, currentIfGr() echoed the commanded 59, and the loop stepped 3 -> 9
+             *     on it (Lenovo, 2026-09-15 15:00). ifAgcReporting() is the per-tick truth. */
+            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone
+                && sdrp->ifAgcReporting())
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`

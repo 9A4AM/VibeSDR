@@ -105,6 +105,12 @@ public:
 
     /** How many LNA states this model offers — 4 on an RSP1, 10 on an RSP1A/1B, 28 on a dx. */
     int  lnaStateCount() const;
+    /** ★ True only while the tuner's AGC has REPORTED since our last write — the one condition
+     *  under which currentIfGr()/systemGainDb() are measurements rather than echoes of the struct.
+     *  Measured 2026-09-15: after a DAB rate change no GainChange arrived, currentIfGr() fell back
+     *  to the commanded 59 dB, and the RF loop walked the LNA to its end stop on that echo. */
+    bool ifAgcReporting() const { return liveValid_.load(std::memory_order_relaxed)
+                                      && !liveStale_.load(std::memory_order_relaxed); }
     /** ★ How many LNA states exist AT THIS FREQUENCY. Fewer below 60 MHz and in L-band than in
      *  between, per the API's own per-band constants — the no-argument form answers for wherever
      *  the radio is tuned now. Offering a state the band does not have gives a gain loop a dead
