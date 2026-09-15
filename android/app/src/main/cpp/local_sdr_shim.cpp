@@ -5303,6 +5303,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ CPU genuinely cannot be split — the cost IS the one shared chain — but the time and the
      *    bytes belong to the socket, and were only missing because nobody had recorded them. */
     std::map<net::Socket*, double> sockSince;
+    /** ★★★ THE SHARED DIAL'S LIMIT BOOKKEEPING, PER SOCKET — the shared-dial twin of
+     *  ClientDsp::warned / handoverAt. On a shared VFO clientDsp is empty by design, so
+     *  enforceSharedSessionLimit() walked NOBODY: the countdown was shown and never acted on
+     *  (found 2026-09-15 while chasing a countdown that restarted on every foreground). Erased
+     *  with the socket. */
+    std::map<net::Socket*, int>    sockWarned;
+    std::map<net::Socket*, double> sockHandover;
+    /** ★★★ WHO WANTS THE ANALYSER — A SET, NOT A BOOLEAN. `rdsxOn` was one radio-wide flag that
+     *  stopDecoder() cleared whenever ANY decoder client left, so on a shared dial another
+     *  listener closing their decoder socket froze everybody else's Advanced RDS box until their
+     *  own socket happened to reopen (Stuart, 2026-09-15: "spectrum is moving but the RDS dials
+     *  frozen so it seems to be an intermittent bug"). The flag is now derived: a decoder-attached
+     *  `rds`, or any control socket that asked. Leaf mutex; recompute outside clientMtx or in. */
+    std::mutex rdsxMtx;
+    std::set<const net::Socket*> rdsxSocks;
+    bool rdsxDecoder = false;
+    void rdsxRecompute() {
+        bool on;
+        { std::lock_guard<std::mutex> lk(rdsxMtx); on = rdsxDecoder || !rdsxSocks.empty(); }
+        rdsxOn.store(on);
+        rx.setRdsNoiseCorrection(on);   // honest deviation readout, only while somebody reads it
+    }
     /** Last byte total and when, per socket — an uplink RATE needs two samples. */
     std::map<net::Socket*, std::pair<unsigned long long, double>> sockLastBytes;
     std::unique_ptr<vibedsp::Channelizer> chan_;
@@ -11962,8 +11984,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // spent. Do not let these two drift apart.
         if (type == "rdsx") {
             const bool on = jsonNum(msg, "on", v) && v != 0.0;
-            rdsxOn.store(on);
-            rx.setRdsNoiseCorrection(on);   // honest deviation readout, only while it is read
+            { std::lock_guard<std::mutex> lk(rdsxMtx);
+              if (on) rdsxSocks.insert(sock.get()); else rdsxSocks.erase(sock.get()); }
+            rdsxRecompute();                // see rdsxSocks: one listener's "off" is not everybody's
             return;
         }
         if (type == "deemph") {
@@ -14330,7 +14353,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Who this socket belongs to, before anything can ask. See sockSession.
         if (!session.empty())
             { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session;
-              sockSince[sock.get()] = Impl::nowSecs(); }
+              // ★★★ NOT nowSecs() — see turnStartForLocked. On a shared dial this stamp IS the
+              //     listener's clock (secsLeftFor falls back to it), and stamping it fresh handed
+              //     every new socket a full turn: the app pauses its spectrum socket in the
+              //     background and reopens it on return, so "every time I return to the app ...
+              //     the countdown timer resets" (Stuart, 2026-09-15; measured on the Airspy: two
+              //     sockets 15 s apart from one address both told 1800). Same rule as the
+              //     occupant and the per-client DSP: a reload does not buy a fresh half hour.
+              sockSince[sock.get()] = turnStartForLocked(sock->peerAddress(), Impl::nowSecs()); }
 
         // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
         // Registered immediately after the handshake, because the moment this client is published
@@ -15386,6 +15416,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (mine) iqStopDirect(); }                          // ★ and so does the direct-mode one
           sockSession.erase(sock.get());
           sockSince.erase(sock.get());
+          sockWarned.erase(sock.get());
+          sockHandover.erase(sock.get());
+          { std::lock_guard<std::mutex> rl(rdsxMtx); rdsxSocks.erase(sock.get()); }
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
@@ -15509,13 +15542,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // work and the extra bytes are paid for only while somebody is looking at them, and
         // there is no setting to explain (Stuart, 2026-07-26).
         if (ext == "rds") {
-            rdsxOn.store(true);
+            { std::lock_guard<std::mutex> lk(rdsxMtx); rdsxDecoder = true; }
+            rdsxRecompute();
             // ★ THE ANALYSER BEING OPEN IS THE SWITCH. The guard-band noise measurement exists
             // solely to make the DEVIATION READOUT honest, so it is worth its CPU exactly while
             // somebody is reading it — the same reasoning that gates the extended stream itself.
             // ★ It replaces an operator setting that also widened the channel filter; that half
             // was measured to cost 10 dB of RDS SNR and has been removed entirely.
-            rx.setRdsNoiseCorrection(true);
             return;
         }
         if (ext == "sstv")  { startSstv(msg);  return; }
@@ -15777,9 +15810,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void stopDecoder() {
         // ★ Whoever owned a decoder that is no longer running owns nothing.
         { std::lock_guard<std::mutex> lk(clientMtx); decoderSession.clear(); }
-        rdsxOn.store(false);
+        { std::lock_guard<std::mutex> lk(rdsxMtx); rdsxDecoder = false; }
+        rdsxRecompute();                   // ★ the decoder's half only — control-socket askers keep it
         { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder.clear(); }
-        rx.setRdsNoiseCorrection(false);   // nobody looking: stop paying for it
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
@@ -18066,6 +18099,111 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
     }
 
+    /** ★★★ THE SHARED DIAL — the same rule as enforceSharedSessionLimit, walked over SOCKETS.
+     *
+     *  On a shared VFO everyone is on one chain, so clientDsp is empty by design and the pass
+     *  above enumerates nobody: a 30-minute limit on the Airspy was displayed to every listener
+     *  and enforced on none (2026-09-15). This walks the spectrum sockets instead, with the
+     *  per-socket clock secsLeftFor() already shows, so the number on the screen and the moment
+     *  the server acts are read from ONE stamp. Hard: each listener at their own limit. Soft:
+     *  only when full and somebody is waiting, longest-over first, with the same notice.
+     *  ★ Skips itself where clientDsp is populated — a locked-centre receiver is handled above. */
+    void enforceSharedDialLimit(int limitMin) {
+        const bool soft = g_vsSessionLimitSoft.load();
+        const double now = Impl::nowSecs();
+        const int maxUsers = g_vsMaxUsers.load();
+
+        struct Cand { std::shared_ptr<net::Socket> sk; double since; std::string session; };
+        std::vector<Cand> over;
+        std::vector<std::pair<std::shared_ptr<net::Socket>, int>> toWarn;
+        int waiters = 0, listeners = 0;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            if (!clientDsp.empty()) return;              // per-client receivers: handled above
+            waiters = distinctWaitingLocked();
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            if (specClient) socks.push_back(specClient);
+            for (auto& s : specExtra) socks.push_back(s);
+            for (auto& sk : socks) {
+                if (!sk || !sk->isOpen()) continue;
+                ++listeners;
+                const std::string addr = sk->peerAddress();
+                if (addr.empty() || isLoopback(addr)) continue;   // the host's own listening
+                { std::lock_guard<std::mutex> al(adminSockMtx);
+                  if (adminSocks.count(sk.get())) continue; }     // the owner is exempt
+                auto si = sockSince.find(sk.get());
+                if (si == sockSince.end() || si->second <= 0) continue;
+                touchTurnLocked(addr, now);                     // still here — the turn does not lapse
+                const double left = (double)limitMin * 60.0 - (now - si->second);
+                if (left > 0) {
+                    const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
+                    int& w = sockWarned[sk.get()];
+                    if (stage > 0 && !(w & stage)) { w |= stage; toWarn.push_back({sk, (int)(left + 0.5)}); }
+                } else {
+                    std::string sess;
+                    { auto it = sockSession.find(sk.get()); if (it != sockSession.end()) sess = it->second; }
+                    over.push_back({sk, si->second, sess});
+                }
+            }
+        }
+
+        for (auto& w : toWarn) {
+            const std::string m = "{\"type\":\"session_warning\",\"secs\":"
+                                + std::to_string(w.second) + "}";
+            if (w.first->isOpen()) sendWs(w.first, 0x1, (const uint8_t*)m.data(), m.size());
+        }
+        if (over.empty()) return;
+        std::sort(over.begin(), over.end(), [](const Cand& a, const Cand& b){ return a.since < b.since; });
+
+        if (soft) {
+            const bool full = maxUsers > 0 && listeners >= maxUsers;
+            if (!full || waiters <= 0) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& o : over) sockHandover.erase(o.sk.get());
+                return;
+            }
+        }
+
+        auto& victim = over.front();
+        double due = 0;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          auto it = sockHandover.find(victim.sk.get()); if (it != sockHandover.end()) due = it->second; }
+        if (soft) {
+            if (due <= 0) {
+                { std::lock_guard<std::mutex> lk(clientMtx); sockHandover[victim.sk.get()] = now + kHandoverNoticeSec; }
+                const std::string m = "{\"type\":\"session_handover\",\"secs\":"
+                                    + std::to_string(kHandoverNoticeSec) + "}";
+                if (victim.sk->isOpen()) sendWs(victim.sk, 0x1, (const uint8_t*)m.data(), m.size());
+                LOGI("shared dial soft limit — longest listener [%s] over time, %ds notice",
+                     victim.session.c_str(), kHandoverNoticeSec);
+                return;
+            }
+            if (now < due) return;
+        }
+
+        // ── End this listener's session — same message, same windows as the per-client pass.
+        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
+                            + std::to_string(kSessionCooldownSec)
+                            + ",\"fresh\":" + std::to_string(limitMin * 60) + "}";
+        const std::string addr = victim.sk->peerAddress();
+        std::vector<std::shared_ptr<net::Socket>> auds;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          sockHandover.erase(victim.sk.get());
+          sockSince.erase(victim.sk.get());              // ★ not a candidate again while it drains
+          if (!addr.empty()) cooldownUntil[addr] = now + kSessionCooldownSec;
+          // ★ The same session's audio goes with it, as `au` does above.
+          auto same = [&](const std::shared_ptr<net::Socket>& a) {
+              if (!a || victim.session.empty()) return false;
+              auto it = sockSession.find(a.get());
+              return it != sockSession.end() && it->second == victim.session; };
+          if (same(audioClient)) auds.push_back(audioClient);
+          for (auto& a : audioExtra) if (same(a)) auds.push_back(a); }
+        LOGI("shared dial limit reached (%d min) — ending %s", limitMin, addr.c_str());
+        if (victim.sk->isOpen()) { sendWs(victim.sk, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(victim.sk); }
+        for (auto& a : auds) if (a && a->isOpen()) a->close();
+        LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
+    }
+
     /** ★★★ THE LISTENER WHO WENT AWAY — optional, off by default, shared receivers only.
      *
      *  ★★★ IT ASKS, IT DOES NOT KICK. A person on one frequency for an hour touches nothing and is
@@ -18168,7 +18306,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★★ A SHARED RADIO IS A DIFFERENT PROBLEM AND HAS ITS OWN PASS. Everything below this
         //     line reasons about `occupantSession` — a SINGLE occupant — which is right for a
         //     one-at-a-time receiver and meaningless where ten people are listening.
-        if (g_vsMaxUsers.load() > 1) { enforceSharedSessionLimit(limitMin); return; }
+        if (g_vsMaxUsers.load() > 1) { enforceSharedSessionLimit(limitMin); enforceSharedDialLimit(limitMin); return; }
 
         std::shared_ptr<net::Socket> spec, aud;
         std::string addr, sess; double since; int warned;
