@@ -105,7 +105,11 @@ When you do, this is what happens:
 1. **The tunnel.** VibeServer opens an outbound Cloudflare tunnel with a random
    hostname. It is outbound only: no port is opened on your router, nothing inbound
    ever reaches your home IP address, and that address is never published or
-   listed anywhere. The random hostname is different on every connection.
+   listed anywhere. The random hostname is different on every connection. Because
+   the tunnel is outbound, it does not care what your address is: it works on
+   Wi-Fi or cellular, and when your connection changes address — a home router
+   reconnecting with a new one, or a phone moving from Wi-Fi to cellular — the
+   tunnel reconnects and the listing carries on under the same friendly name.
 2. **Registration.** Through that tunnel VibeServer tells the directory three things:
    the name you gave the server, its **coarse** position — a Maidenhead grid
    locator, which names a square a few kilometres across, or a city-level position —
