@@ -11305,8 +11305,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (useSdrplay() && g_dabAgcOverride.load(std::memory_order_relaxed)) {
                     const int want = g_dabAgcTarget.load(std::memory_order_relaxed);
                     const int cur  = vsDesiredAgcSet();
-                    if (cur == -999 || cur > want) {
-                        LOGI("DAB: IF AGC target %d -> %d dBFS (OFDM peaks need the headroom)",
+                    /* ★ EITHER DIRECTION. This only ever LOWERED the target ("an owner who set
+                     *   -45 must not be raised"), which made the DAB target a ceiling, not a
+                     *   setting: with the normal target at -40 and the DAB one raised to -20 the
+                     *   entry did nothing. Measured 2026-09-15 21:35 on 10D — at -40 the IF AGC
+                     *   cannot get the strong neighbours down to target even at 59 dB, parks at
+                     *   the rail, and the RF loop reads only "too much". The owner switched the
+                     *   override on; what they typed is what DAB gets. */
+                    if (cur == -999 || cur != want) {
+                        LOGI("DAB: IF AGC target %d -> %d dBFS (owner's DAB target)",
                              cur == -999 ? -30 : cur, want);
                         LocalSdrShim::instance().setIfAgcSetPoint(want);
                     }

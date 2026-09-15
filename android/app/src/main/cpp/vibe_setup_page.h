@@ -2462,15 +2462,17 @@ async function renderHw() {
 
       <label id="dabAgcRow" style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="dabAgcOverride" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span class="lbl">Lower the IF AGC target for DAB</span></label>
-      <div class="hint">A DAB ensemble is 1536 carriers added together, so its peaks run about
-        10 dB above the average the AGC is levelling. An AGC holding the <em>average</em> at
-        &minus;30 dBFS therefore lets the <em>peaks</em> clip the converter &mdash; and clipped OFDM
-        is unrecoverable, so the ensemble breaks up while every figure on the signal page still
-        looks healthy. Measured on 10D: &minus;30 broke up, &minus;40 played.
-        <br>Ten decibels is almost exactly that peak margin, which is why it is the default. It is
-        restored the moment DAB is left, because a carrier does not need the headroom and would
-        only run quieter for it.
+        <span class="lbl">Use a separate IF AGC target for DAB</span></label>
+      <div class="hint">The target applies in either direction while DAB is on, and the normal one
+        comes back the moment DAB is left. Two things pull on it.
+        <br><b>Lower</b> gives OFDM its peak headroom: an ensemble is 1536 carriers added together,
+        so its peaks run about 10 dB above the average the AGC is levelling, and peaks that clip the
+        converter break the ensemble up while every figure on the signal page still looks healthy.
+        <br><b>Higher</b> keeps the IF AGC off its 59 dB end stop when strong blocks dominate the
+        band: at &minus;40 the IF loop could not bring the neighbours down to target even at maximum
+        reduction, sat pinned, and the RF gain loop &mdash; which works from where the IF loop
+        settles &mdash; read only &ldquo;too much&rdquo; and starved the weak block (10D, RSP1A,
+        2026-09-15). With a 14-bit converter, &minus;20 still leaves the OFDM peaks 10 dB of room.
         <br><br><b>This steers the RSP's own IF AGC</b>, which is the loop that runs the IF stage
         on this radio. The automatic RF gain above works from where that AGC settles, so lowering
         its target for DAB shifts the whole operating point &mdash; which is the intended effect.
