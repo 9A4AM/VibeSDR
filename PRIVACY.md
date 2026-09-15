@@ -65,7 +65,9 @@ If any of this ever changes, this page will say so, at the top, before the chang
 Listening needs no location at all. If you grant location permission, VibeSDR uses
 your device location **only** to sort and filter the list of receivers by distance
 (nearest first) and, when you plug an SDR into the device itself, to place a pin for
-that receiver on the app's map. Deny it and you lose only those two things.
+that receiver on the app's map and to work out the distance and bearing of the
+digital-mode spots it decodes. Deny it and you lose only those: the lists are
+unsorted and the spots are shown without a distance.
 
 On every platform the app asks for **coarse** location only — never precise — even
 where the device could provide an exact position.
