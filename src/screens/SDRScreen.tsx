@@ -377,7 +377,9 @@ function chatTs(rfc: string): string {
 // SAM omitted — the on-device DSP (VibeDSP) has no synchronous-AM demodulator yet.
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
-  { id: 'cwu', label: 'CW' },
+  // ★ BOTH CW SIDEBANDS — the server has always had cwu AND cwl (the web client offers both);
+  //   one 'CW' button here quietly threw the lower sideband away (Stuart, 2026-09-15).
+  { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
   // LSB + USB last so they're the two large bottom buttons (the SSB pair),
   // with USB as the final option (sits below LSB in the grid).
   { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
