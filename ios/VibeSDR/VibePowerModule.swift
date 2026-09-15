@@ -2660,9 +2660,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         drawAspectFit(overlay, in: rect)
       }
-      // FM-DX: inlay the resolved station logo bottom-LEFT (mirrors the FM-DX
-      // mark bottom-right). Aspect-fit onto a rounded dark tile so any favicon reads.
-      if npArtworkType == "fmdx", let logo = stationLogoImg {
+      // The resolved station logo, inlaid bottom-LEFT opposite the server-type mark bottom-right.
+      // ★ EVERY server type, not FM-DX alone: the SDR screen now sends the RDS logo on FM and the
+      //   DAB service's logo (2026-09-14), and the card showed neither because this branch was
+      //   FM-DX only (Stuart, 2026-09-15: "the station logo inlaid into the opposite side").
+      if let logo = stationLogoImg {
         let lrect = CGRect(x: pad, y: size.height - inset - pad, width: inset, height: inset)
         let tile = UIBezierPath(roundedRect: lrect, cornerRadius: inset * 0.14)
         UIColor(white: 1.0, alpha: 0.92).setFill(); tile.fill()

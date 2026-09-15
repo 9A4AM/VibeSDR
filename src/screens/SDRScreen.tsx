@@ -3967,6 +3967,18 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  stays pressed for the reports that follow it. */
           if (!dabOnRef.current) { setDabBoxOpen(true); dabOnRef.current = true; }
           setDabOn(true);
+          /* ★★★ THE PLAYING SERVICE IS THE LIVE STATION. RDS feeds liveStation through
+           *  onMetadata; DAB never did on this path — only the programme PICKER set it — so on
+           *  a service chosen from the DAB box the lock-screen card read "225648 kHz AM · 100k
+           *  step" with a bookmark for an artist (Stuart, 2026-09-15 01:45). The name, the live
+           *  text and the DAB badge come from the state report, exactly as RDS's do. */
+          const playing = st.services.find((x) => x.sid === st.sid);
+          const svcName = playing?.label || '';
+          if (svcName) {
+            liveStationRef.current = svcName;
+            liveBadgeRef.current = 'DAB';
+            setLiveStation((s) => ({ ...s, name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' }));
+          }
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
           //   remembered multiplex on first tune), and a header that names the block we ASKED for
           //   while decoding another is exactly the "asked/actual" confusion the physical-layer
@@ -7489,7 +7501,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       const st = mediaSkip === 'bookmark'
         ? 'bookmark skip'
         : (step >= 1000 ? `${trim(step / 1e3, 1)} kHz step` : `${step} Hz step`);
-      const fqLine = `${fq} ${status.mode.toUpperCase()}`;
+      // ★ In DAB the mode is DAB, whatever demodulator sits idle underneath (the card said AM).
+      const fqLine = `${fq} ${dabOnRef.current ? 'DAB' : status.mode.toUpperCase()}`;
       // A live RDS/DAB station name becomes the TITLE (so it's prominent AND so a
       // DAB programme skip — which doesn't change the frequency — still changes the
       // now-playing metadata, forcing the lock-screen card to refresh). Otherwise
@@ -7515,8 +7528,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       VibePowerModule?.setNowPlaying(title, artist);
       // Local hardware / RTL-TCP reuse serverType 'ubersdr' for the client, but get
       // their own album-art inset so the card is distinct from a network session.
+      /* ★ 'vibeserver' for a VibeServer session AND for this phone's own dongle (which is a
+       *  VibeServer core): the old 'local' type had no mark asset, so every VibeServer card was
+       *  the odd one out with a blank corner while UberSDR, OWRX, Kiwi, FM-DX and RTL-TCP all
+       *  carried theirs (Stuart, 2026-09-15). logo_vibeserver.imageset is the mark. */
       const artType = route.params.isTcp ? 'rtltcp'
-                    : route.params.isLocal ? 'local'
+                    : (route.params.isLocal || route.params.serverType === 'vibeserver') ? 'vibeserver'
                     : (route.params.serverType ?? 'ubersdr');
       VibePowerModule?.setArtwork(artType);  // native caches per type
     }, 300);
