@@ -2947,6 +2947,45 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         }
     }
     if (sdrp->secondsSinceAgcRestart() < 6.0) { outMs = 0; outDir = 0; return; }
+    /* ★★★ IN DAB THE MULTIPLEX DRIVES THE RF GAIN, NOT THE 30-50 WINDOW. Stuart, 2026-09-15:
+     *     "in DAB mode we have proper multiplex metrics we can use to drive the RF gain. Tune to
+     *     multiplex, gain too low, multiplex advises you it's too low … use the metrics to set the
+     *     coarse RF gain then let it be driven by the IF AGC afterwards." The window rule cannot
+     *     see MER: on 10D it held RF at 2/9 with the IF at 36 dB, inside the window, for ten
+     *     minutes while the ensemble never resolved. Here: a perfectly decoding ensemble is left
+     *     alone; a weak or unlocked one gets an RF rung UP while the IF still has room to absorb
+     *     it (reduction ≤ 52 dB), one rung per settle floor, MER re-read after each; a pinned IF
+     *     with the level over target still takes the rung DOWN through the rail path below. */
+    if (g_dabMode.load(std::memory_order_relaxed)) {
+        const auto q = g_dab.quality();
+        const bool perfect = q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
+        const bool weak    = !q.locked || q.merDb < 12.0f || q.mscBer > 0.02;
+        const bool ifRoom  = mean <= 52.0;
+        if (perfect) { outMs = 0; outDir = 0; return; }
+        if (weak && ifRoom) {
+            if (lastMove.time_since_epoch().count() != 0 &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < 6000)
+                return;
+            const int n = sdrp->lnaStateCount();
+            const int cur = sdrp->currentLnaState();
+            const int lo  = std::max(0, lnaFloor);
+            const int want = std::max(lo, cur - 1);          // ★ less state = more RF gain
+            if (want == cur) { outMs = 0; return; }           // already at the top the owner allows
+            LOGI("RSP RF AGC (DAB): multiplex %s — MER %.1f dB, FIB %.0f%%, MSC BER %.4f, IF reduction %.0f dB "
+                 "with room to absorb — RF gain state %d -> %d (ADC peak %.1f dBFS)",
+                 q.locked ? "weak" : "not locked", (double)q.merDb, (double)q.fibRate * 100.0, q.mscBer,
+                 mean, cur, want, sdrp->adcPeakDbfs());
+            grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
+            LocalSdrShim::instance().setLnaState(want);
+            g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
+            g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+            lastMove = now; lastDir = -1; lastMean = mean; outMs = 0; outDir = 0;
+            return;
+        }
+        if (mean < 57.0) { outMs = 0; outDir = 0; return; }   // locked and fine, or no room: hold
+        /* pinned at the rail with a weak or over-driven ensemble: fall through to the rail step */
+    }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
