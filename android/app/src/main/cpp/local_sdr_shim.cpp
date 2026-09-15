@@ -2957,34 +2957,72 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     it (reduction ≤ 52 dB), one rung per settle floor, MER re-read after each; a pinned IF
      *     with the level over target still takes the rung DOWN through the rail path below. */
     if (g_dabMode.load(std::memory_order_relaxed)) {
+        /* ★★★ ONE CONSIDERED MOVE PER TUNE, THEN HANDS OFF. Stuart: "we take a quick snapshot of
+         *     the multiplex when tuning to it, work out the rough gain then set it in one move,
+         *     then let the IF take over" — and "do not hammer the RF gain, it locks up the API".
+         *     Every LNA write restarts the tuner's AGC, so rung-by-rung stepping is exactly the
+         *     hammering. Here: a new multiplex starts a snapshot timer; 8 s after the AGC has
+         *     settled the IF reduction, the ADC peak and the decoder's verdict are read ONCE and
+         *     turned into a rung count — over target at the rail: rungs DOWN by (peak − target) /
+         *     ~20 dB; weak or unlocked with IF headroom: rungs UP by (59 − reduction − 6) / ~20 dB,
+         *     at least one — applied in a single write. After that the IF AGC owns it; the ensemble
+         *     is re-read every 20 s and corrected by at most ONE rung if still wrong. */
+        static double  dabCentreSeen = 0.0;
+        static auto    dabTuneAt     = std::chrono::steady_clock::time_point{};
+        static bool    dabPlaced     = false;
+        static auto    dabLastCheck  = std::chrono::steady_clock::time_point{};
+        constexpr double kRungDb = 20.0;                         // ★ measured 2026-09-11 (~21 dB)
+        const double centre = LocalSdrShim::instance().listenFrequency();
+        if (std::fabs(centre - dabCentreSeen) > 1000.0) {
+            dabCentreSeen = centre; dabTuneAt = now; dabPlaced = false; dabLastCheck = {};
+        }
         const auto q = g_dab.quality();
         const bool perfect = q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
         const bool weak    = !q.locked || q.merDb < 12.0f || q.mscBer > 0.02;
-        const bool ifRoom  = mean <= 52.0;
-        if (perfect) { outMs = 0; outDir = 0; return; }
-        if (weak && ifRoom) {
-            if (lastMove.time_since_epoch().count() != 0 &&
-                std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < 6000)
-                return;
-            const int n = sdrp->lnaStateCount();
-            const int cur = sdrp->currentLnaState();
-            const int lo  = std::max(0, lnaFloor);
-            const int want = std::max(lo, cur - 1);          // ★ less state = more RF gain
-            if (want == cur) { outMs = 0; return; }           // already at the top the owner allows
-            LOGI("RSP RF AGC (DAB): multiplex %s — MER %.1f dB, FIB %.0f%%, MSC BER %.4f, IF reduction %.0f dB "
-                 "with room to absorb — RF gain state %d -> %d (ADC peak %.1f dBFS)",
-                 q.locked ? "weak" : "not locked", (double)q.merDb, (double)q.fibRate * 100.0, q.mscBer,
-                 mean, cur, want, sdrp->adcPeakDbfs());
-            grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
-            LocalSdrShim::instance().setLnaState(want);
-            g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
-            g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
-            lastMove = now; lastDir = -1; lastMean = mean; outMs = 0; outDir = 0;
-            return;
+        const double peak  = sdrp->adcPeakDbfs();
+        const int    aim   = sdrp->ifAgcSetPointDbfs();
+        const long long sinceTune = std::chrono::duration_cast<std::chrono::seconds>(now - dabTuneAt).count();
+        const long long sinceChk  = dabLastCheck.time_since_epoch().count() == 0 ? 1000
+                                  : std::chrono::duration_cast<std::chrono::seconds>(now - dabLastCheck).count();
+        if (perfect) { dabPlaced = true; outMs = 0; outDir = 0; return; }
+        if (!dabPlaced && sinceTune < 8) return;                 // ★ the snapshot waits for the AGC
+        if (dabPlaced && sinceChk < 20) return;                  // ★ hands off between checks
+        const int n = sdrp->lnaStateCount();
+        const int cur = sdrp->currentLnaState();
+        const int lo  = std::max(0, lnaFloor);
+        int rungs = 0;                                            // + = less RF gain (state up)
+        if (mean >= 57.0 && std::isfinite(peak) && peak > aim + 3.0)
+            rungs = std::max(1, (int)std::lround((peak - aim) / kRungDb));
+        else if (weak && mean <= 52.0 && std::isfinite(peak) && peak < aim - 6.0) {
+            /* ★ THE ADC IS THE SAFETY ON A DEAD BLOCK (Stuart: "when tuning through dead blocks
+             *   we monitor the noise floor to make sure we don't over-gain and overload"). The
+             *   climb is bounded by BOTH headrooms — what the IF can still absorb and how far the
+             *   converter's peak sits below the target — and an unlocked block, where there may
+             *   be nothing to find, is allowed one rung per look, never a leap. */
+            const int byIf  = (int)std::floor((59.0 - mean - 6.0) / kRungDb);
+            const int byAdc = (int)std::floor((aim - 6.0 - peak) / kRungDb);
+            int up = std::max(1, std::min(byIf, byAdc));
+            if (!q.locked) up = 1;
+            rungs = -up;
         }
-        if (mean < 57.0) { outMs = 0; outDir = 0; return; }   // locked and fine, or no room: hold
-        /* pinned at the rail with a weak or over-driven ensemble: fall through to the rail step */
+        if (dabPlaced && rungs != 0) rungs = rungs > 0 ? 1 : -1;  // ★ a correction is ONE rung
+        dabLastCheck = now;
+        if (rungs == 0) { dabPlaced = true; outMs = 0; outDir = 0; return; }
+        const int want = std::min(n - 1, std::max(lo, cur + rungs));
+        if (want == cur) { dabPlaced = true; outMs = 0; outDir = 0; return; }
+        LOGI("RSP RF AGC (DAB): %s — MER %.1f dB, FIB %.0f%%, MSC BER %.4f, IF reduction %.0f dB, "
+             "ADC peak %.1f vs %d dBFS — %s: RF gain state %d -> %d",
+             q.locked ? (weak ? "multiplex weak" : "multiplex over-driven") : "multiplex not locked",
+             (double)q.merDb, (double)q.fibRate * 100.0, q.mscBer, mean, peak, aim,
+             dabPlaced ? "one-rung correction" : "one move from the snapshot", cur, want);
+        grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
+        LocalSdrShim::instance().setLnaState(want);
+        g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
+        g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+        lastMove = now; lastDir = rungs > 0 ? +1 : -1; lastMean = mean; outMs = 0; outDir = 0;
+        dabPlaced = true;
+        return;
     }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
