@@ -19029,13 +19029,46 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                           //   about it needs the librtlsdr reopen path below.
                                           || (useHackRf() && hrf));
                 if (recoverable) {
-                    const double waitS = std::min(30.0, 2.0 * (double)(srcRestarts + 1));
+                    /* ★★★ NEVER TWO STREAM RESTARTS INSIDE TEN SECONDS. 2026-09-15 19:48 on the
+                     *     Lenovo: a block-stepping burst (13 multiplexes in 8 s) stalled the RSP,
+                     *     a re-Init at 19:48:46 cured it, the counter reset on the first sample,
+                     *     and a second "attempt 1" went in FOUR SECONDS LATER while the hops were
+                     *     still landing. That Uninit hung for 22 s, the API service stopped
+                     *     answering (command 12 timed out), and the radio was dead until the
+                     *     service was restarted by hand. The back-off below resets with the
+                     *     counter; this floor does not. */
+                    const double waitS = std::max(10.0, std::min(30.0, 2.0 * (double)(srcRestarts + 1)));
                     if (nowSecs() - lastRestartAt >= waitS) {
                         ++srcRestarts;
                         lastRestartAt = nowSecs();
                         std::string rerr;
                         bool ok = false;
-                        if (useSdrplay() && sdrp) {
+                        if (useSdrplay() && sdrp && sdrp->serviceUnresponsive()) {
+                            /* ★★★ THE SERVICE ITSELF HAS STOPPED ANSWERING — no re-Init or reopen
+                             *     from this process will ever land (every one said
+                             *     AlreadyInitialised for three minutes on 2026-09-15). On Linux the
+                             *     root helper can restart sdrplay_apiService and then us, which is
+                             *     exactly what Stuart did by hand ("a full api teardown does the
+                             *     trick"). Asked for ONCE per wedge; anywhere without the helper,
+                             *     say what to do instead of pretending to try. */
+                            static bool asked = false;
+                            if (!asked) {
+                                asked = true;
+                                std::string aerr;
+                                LocalSdrShim::AdminActionFn fn;
+                                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminActionFn; }
+                                if (fn && fn("sdrplay-restart", aerr)) {
+                                    LOGE("the SDRplay API service has stopped responding — asked the maintenance helper to restart it (and this server)");
+                                    rerr = "API service not responding — restart requested";
+                                } else {
+                                    LOGE("the SDRplay API service has stopped responding and this server cannot restart it%s%s — restart the sdrplay service by hand (Linux: systemctl restart sdrplay; macOS: relaunch the SDRplay API)",
+                                         aerr.empty() ? "" : ": ", aerr.c_str());
+                                    rerr = "API service not responding";
+                                }
+                            } else {
+                                rerr = "API service not responding — waiting for the restart";
+                            }
+                        } else if (useSdrplay() && sdrp) {
                             // ★★★ ESCALATE, exactly as the Airspy does below. Re-Init cures a
                             // STALL — the API quietly stopping the callback with every handle
                             // still valid — and that is the commoner fault, so it goes first.
@@ -19077,8 +19110,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     // are not alternatives.
                 } else if (!silent) {
                     // Healthy again: the next stall gets a full set of tries from scratch.
+                    // ★ lastRestartAt is deliberately KEPT — it carries the ten-second floor above
+                    //   across the reset (the 4 s double restart of 2026-09-15).
                     srcRestarts = 0;
-                    lastRestartAt = 0.0;
                 }
 
                 // ★★★ SILENCE WE ASKED FOR IS NOT A FAULT. This tested only for silence, so the

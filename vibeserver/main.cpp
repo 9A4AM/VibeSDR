@@ -2827,8 +2827,11 @@ int main(int argc, char** argv) {
         //        terminal, one layer down.
         //     ★ Validated HERE TOO, so a typo never reaches the helper and the admin page gets an
         //       immediate answer rather than silence.
+        // ★ sdrplay-restart is asked for by the stall watchdog, never drawn on the page: the
+        //   SDRplay API service stopped answering and only a restart of the service cures it.
         static const char* kActions[] = { "reboot", "shutdown", "restart",
-                                          "update-check", "update", "update-all" };
+                                          "update-check", "update", "update-all",
+                                          "sdrplay-restart" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
         if (!known) { err = "unknown action: " + action; return false; }

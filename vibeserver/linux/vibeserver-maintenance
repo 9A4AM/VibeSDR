@@ -52,6 +52,16 @@ log() { echo "$*"; }
 
 case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
+  # ★ Asked for by the server's own stall watchdog, not by a button: sdrplay_apiService stopped
+  #   answering ("WaitForResponse ... timed out - suspect Service problem"), every re-Init said
+  #   AlreadyInitialised, and nothing an unprivileged process can send will clear it. The service
+  #   is restarted and then VibeServer, which is what the owner did by hand on 2026-09-15.
+  sdrplay-restart) log "restarting the SDRplay API service, then vibeserver"
+                for u in sdrplay.service sdrplay_apiService.service; do
+                  systemctl cat "$u" >/dev/null 2>&1 && { systemctl restart "$u"; log "restarted $u"; break; }
+                done
+                sleep 3
+                systemctl restart vibeserver ;;
   reboot)       log "rebooting";                 systemctl reboot ;;
   shutdown)     log "powering off";              systemctl poweroff ;;
   update-check) log "checking for updates"

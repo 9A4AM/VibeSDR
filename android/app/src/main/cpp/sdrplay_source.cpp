@@ -445,8 +445,20 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
 }
 
 void SdrplaySource::close() {
-    if (impl_ && impl_->streaming) { api().Uninit(impl_->dev.dev); impl_->streaming = false; }
-    if (impl_ && impl_->selected)  { api().ReleaseDevice(&impl_->dev); impl_->selected = false; }
+    /* ★★★ UNDER api_mtx, LIKE EVERY OTHER API-TOUCHING CALL — measured 2026-09-15 19:51 on the
+     *     Lenovo: the stall watchdog was inside reopen() with Uninit hung for 20 s on a service
+     *     that had stopped answering, the idle release fired on another thread and ran THIS with
+     *     no lock, and the two teardowns of one device struct ended in SIGSEGV (status=11). The
+     *     mutex is recursive, so reopen() closing its own device is unaffected; the release
+     *     simply waits its turn and then closes whatever the reopen left. */
+    if (!impl_) { open_ = false; return; }
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    if (impl_->streaming) {
+        const sdrplay_api_ErrT ue = api().Uninit(impl_->dev.dev);
+        if (ue == sdrplay_api_ServiceNotResponding) serviceDead_.store(true, std::memory_order_relaxed);
+        impl_->streaming = false;
+    }
+    if (impl_->selected)  { api().ReleaseDevice(&impl_->dev); impl_->selected = false; }
     if (open_) apiClose();
     open_ = false;
 }
@@ -537,6 +549,12 @@ bool SdrplaySource::restartStream(std::string& err) {
         const sdrplay_api_ErrT ue = api().Uninit(impl_->dev.dev);
         if (ue != sdrplay_api_Success)
             std::fprintf(stderr, "sdrplay restart: Uninit said %s - continuing anyway\n", errStr(ue));
+        /* ★★★ A SERVICE THAT DID NOT ANSWER HAS NOT UNINITIALISED ANYTHING. 2026-09-15 19:49: Uninit
+         *     said ServiceNotResponding, we carried on, Init said AlreadyInitialised — and so did
+         *     every Init after it, for ever, because the stream was still up inside a service that
+         *     was no longer listening. Nothing this process can send will cure that: the flag tells
+         *     the watchdog to stop re-Initing and ask for the service itself to be restarted. */
+        if (ue == sdrplay_api_ServiceNotResponding) serviceDead_.store(true, std::memory_order_relaxed);
         impl_->streaming = false;
     }
 
@@ -552,10 +570,15 @@ bool SdrplaySource::restartStream(std::string& err) {
     if (e != sdrplay_api_Success) {
         err = std::string("re-Init: ") + errStr(e);
         std::fprintf(stderr, "sdrplay restart FAILED: %s\n", err.c_str());
+        // ★ "Already initialised" after our own Uninit means the Uninit never landed — the service
+        //   is wedged with the stream up. Same verdict as ServiceNotResponding (see above).
+        if (e == sdrplay_api_AlreadyInitialised || e == sdrplay_api_ServiceNotResponding)
+            serviceDead_.store(true, std::memory_order_relaxed);
         return false;
     }
     impl_->streaming = true;
     lost_ = false;
+    serviceDead_.store(false, std::memory_order_relaxed);
 
     if (impl_->params && impl_->params->rxChannelA) {
         auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
@@ -639,8 +662,11 @@ bool SdrplaySource::reopen(std::string& err) {
     // in particular fails SILENTLY when a step is missed (see open()).
     if (!open(idx, rate, centre, gain, err)) {
         std::fprintf(stderr, "sdrplay reopen FAILED: %s\n", err.c_str());
+        if (err.find("ServiceNotResponding") != std::string::npos || err.find("AlreadyInitialised") != std::string::npos)
+            serviceDead_.store(true, std::memory_order_relaxed);
         return false;
     }
+    serviceDead_.store(false, std::memory_order_relaxed);
     std::fprintf(stderr, "sdrplay: device reopened after a re-enumeration (serial %s)\n",
                  serial.empty() ? "unknown" : serial.c_str());
     return true;

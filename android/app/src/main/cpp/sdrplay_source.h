@@ -232,6 +232,12 @@ public:
      *  so no false positives on a radio that is merely settled. Cleared by the caller once it has
      *  acted on it. */
     bool apiFailed() const { return apiFailed_.load(std::memory_order_relaxed); }
+    /* ★ The API SERVICE (sdrplay_apiService) has stopped answering: Uninit said
+     *   ServiceNotResponding, or Init said AlreadyInitialised after an Uninit that never landed.
+     *   No call from this process cures it — the service has to be restarted (Linux: the
+     *   maintenance helper does it; elsewhere the operator is told). Cleared by a successful
+     *   Init. Measured 2026-09-15 19:49 on the Lenovo RSP1A. */
+    bool serviceUnresponsive() const { return serviceDead_.load(std::memory_order_relaxed); }
     void clearApiFailed() { apiFailed_.store(false, std::memory_order_relaxed); }
 
     /** Ask the tuner to recalibrate its DC offset now — the offset is gain-dependent, so this is
@@ -300,6 +306,7 @@ private:
     bool paused_ = false;
     bool overload_ = false;
     std::atomic<bool> apiFailed_{false};
+    std::atomic<bool> serviceDead_{false};
     // ★★★ THE AGC'S OWN NUMBERS, from the gain-change EVENT. The API reports what the loop has
     //     actually done here; our copy of tunerParams.gain is only what WE last wrote, so with the
     //     AGC running it never moves — the readouts sat still and the IF slider never tracked
