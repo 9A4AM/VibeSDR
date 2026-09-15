@@ -2860,6 +2860,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
              pk, over ? ", OVERLOAD" : "", cur, want, ddir < 0 ? "more" : "less", mean, sdrp->systemGainDb());
         grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
         LocalSdrShim::instance().setLnaState(want);
+        sfericHold(6.0);   // ★ a ~20 dB step across the band is not a strike either
         g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
         g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
@@ -8565,7 +8566,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   block change and re-held 200 ms after every release, five times a minute. */
                 if (dabOn && blkNow != dabArmedBlock) { dabArmedBlock = blkNow; dabHoldArmedAt = nowH; }
                 if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
-                    sdrp->setIfAgc(true);
+                    sdrp->setIfAgc(true); sfericHold(10.0);   // ★ the loop ramps the band on re-enable — not a strike
                     dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
                     LOGI("RSP IF AGC: released — %s", dabOn ? "block changed" : "DAB left");
                 } else if (dabIfHeld) {
@@ -8579,7 +8580,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (!drift) dabDriftSince = {};
                     else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = nowH;
                     else if (std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5) {
-                        sdrp->setIfAgc(true);
+                        sdrp->setIfAgc(true); sfericHold(10.0);
                         dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
                         LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS%s for 5 s", pk, sdrp->overloaded() ? " (overload)" : "");
                     }
@@ -8589,6 +8590,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (gr >= 24 && gr <= 55) {
                         sdrp->setIfAgc(false);
                         sdrp->setIfGainReduction(gr);
+                        sfericHold(6.0);   // ★ Stuart, 00:20: "getting a storm warning on the RSP" — our toggles, not lightning
                         dabIfHeld = true; dabHeldBlock = blkNow; dabDriftSince = {};
                         LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, sdrp->adcPeakDbfs());
                         vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
@@ -15149,7 +15151,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     adminSocks.insert(sock.get());
             }
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
-            if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
+            if (adminAuthed) {
+                LOGI("admin session — controls unlocked, no session limit");
+                /* ★ AND TELL THE CLIENT, or its menu stays locked: the page only sets its own
+                 *   adminUnlocked from an `admin` message, which until now was sent only in
+                 *   answer to the password box — so an admin-ticket session showed ADMIN MODE at
+                 *   the top and greyed gain controls in the menu (Stuart, 2026-09-15: "in admin
+                 *   mode the controls still remain locked in the menu"). */
+                sendText(sock, "{\"type\":\"admin\",\"ok\":true}");
+            }
         }
 
         // ★ A client that cannot take Opus, on a server that does not allow raw,
@@ -15793,11 +15803,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ AND END DAB. It is a listener's mode, not a receiver setting — nobody is left to
              *  hear it, and leaving it on hands the next person a radio whose every control is
              *  inert. See dabRestore. */
-            if (stillEmpty && g_dabMode.load(std::memory_order_relaxed)) {
+            // ★ Not during teardown — see stopLocked: a restore here raced the shutdown into an abort.
+            if (stillEmpty && !stopping.load() && g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("[DAB] last listener left — restoring the receiver");
                 dabRestore();
             }
-            if (stillEmpty) armIdlePark();
+            if (stillEmpty && !stopping.load()) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
         }
         /* ★★★ SAY WHAT THEY ACTUALLY GOT. "spectrum WS disconnected" after nine seconds is
@@ -22297,6 +22308,15 @@ void LocalSdrShim::stop() {
 void LocalSdrShim::stopLocked() {
     if (!p) return;
     Impl* impl = p; p = nullptr;
+    /* ★★★ STOPPING IS DECLARED FIRST, BEFORE A SINGLE SOCKET IS CLOSED. Closing the clients
+     *     below runs their disconnect handlers, and the last one to go found nobody watching and
+     *     did what it always does: "[DAB] last listener left — restoring the receiver" — a full
+     *     DAB exit, rate change, source rebuild and thread restarts — in the middle of this
+     *     teardown. Lenovo 2026-09-15 21:40:30: "Stopping…", the restore 0.6 s later, and
+     *     "terminate called without an active exception" (a thread object destroyed while
+     *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
+     *     AFTER the clients were stopped, which is exactly too late. */
+    impl->stopping.store(true);
 
     impl->serverRunning.store(false);
     // ★★★ AND STOP LISTENING NOW, NOT WHEN THE TEARDOWN FINISHES. Everything below this line can
@@ -22448,6 +22468,7 @@ void LocalSdrShim::stopLocked() {
     }
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
+    impl->stopDabClock();     // ★ joined here, not left for ~Impl to destroy while running
     impl->stopDspThread();
     impl->teardownAudio();
     impl->rx.stop();
