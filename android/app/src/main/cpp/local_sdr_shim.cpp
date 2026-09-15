@@ -2832,8 +2832,16 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         const bool over = sdrp->overloaded();
         const int curNow = sdrp->currentLnaState();
         if (over) dabOverState = std::max(dabOverState, curNow);
-        int ddir = over || (std::isfinite(pk) && pk > -6.0) ? +1
-                 : (std::isfinite(pk) && pk < -14.0) ? -1 : 0;
+        /* ★★★ THE IF AGC ABSORBS EVERY RUNG WE ADD, SO THE PEAK METER CANNOT SEE THEM. 22:52:
+         *     3 -> 2 -> 1 -> 0 at -25, -24, -23 dBFS while the IF went 52, 53, 56, 57 — the
+         *     tuner's loop took each rung straight back off, the converter never moved, the
+         *     front end ended wide open ("massively overcooked") and the API overloaded. So the
+         *     IF readout is the second input: a rung is only added while the IF loop still has
+         *     room to give (under 52 dB), and a loop pinned at its rail (58+) means too much RF
+         *     already, whatever the meter says. Stuart's hand-found optimum was state 3 with
+         *     the IF at 47-55: gain up to where the IF sits high but not pinned. */
+        int ddir = over || (std::isfinite(pk) && pk > -6.0) || mean >= 58.0 ? +1
+                 : (std::isfinite(pk) && pk < -14.0 && mean < 52.0) ? -1 : 0;
         if (ddir < 0 && dabOverState >= 0 && curNow - 1 <= dabOverState) ddir = 0;   // ★ the ceiling
         if (ddir == 0) { outMs = 0; outDir = 0; return; }
         if (ddir != outDir) { outDir = ddir; outMs = 0; }
