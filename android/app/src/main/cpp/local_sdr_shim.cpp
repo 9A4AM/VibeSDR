@@ -7970,7 +7970,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             //     vanishes with no trace of why.
                             const int savedLna = g_vsSavedLna.load(), savedGr = g_vsSavedIfGr.load();
                             const int savedAgc = g_vsSavedIfAgc.load();
-                            if (savedLna >= 0) sdrp->setLnaState(savedLna);
+                            /* ★★★ NOT THE SAVED LNA WHILE THE RF LOOP IS ON. The saved state was 0 —
+                             *     MAXIMUM RF gain — so every handover put the front end at full gain
+                             *     for the 12 s grace before "starting from RF gain 1/6" pulled it
+                             *     back (Stuart, 2026-09-15: "MW seems to start at maximum RF gain
+                             *     rather than 1 out of x — I thought we were operating on the side of
+                             *     caution"). With the RF loop on, its start rule owns the front end
+                             *     and the kick's own step 1 (position 1) is the cautious place to
+                             *     hand over from. The saved LNA is the owner's MANUAL setting and
+                             *     still applies when the loop is off. */
+                            const bool rfLoop = g_rspRfAgc.load(std::memory_order_relaxed);
+                            if (savedLna >= 0 && !rfLoop) sdrp->setLnaState(savedLna);
                             // ★ AGC BEFORE the manual IF reduction: it owns the gain path, so
                             //   setting the reduction first and then enabling AGC would let the
                             //   loop immediately undo it. Same ordering rule as ahf_control.
