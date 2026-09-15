@@ -3089,6 +3089,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ Advanced RDS. Separate from activeDecoder on purpose: it is a server-side analyser, not
   // a DecoderClient decoder, and the two can be open at once without fighting.
   const [advRdsOpen, setAdvRdsOpen] = useState(false);
+  // ★ DAB has no RDS: entering it closes the Advanced RDS box, which otherwise sat underneath the
+  //   DAB list (Stuart's screenshot, 2026-09-15 01:28). Below both states it reads, deliberately.
+  useEffect(() => { if (dabOn) setAdvRdsOpen(false); }, [dabOn]);
   /* ★ On a bus, not in state: it arrives every other spectrum frame — see services/valueBus.ts. */
   const advRdsBus = useRef(createValueBus<RdsExt | null>(null)).current;
   // ★ RAW is per user, per SESSION — deliberately not persisted. It is a diagnostic view, and
