@@ -605,7 +605,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <select id="rawIqLan" style="max-width:14em"></select></span>
           <span class="note" id="rawIqLanFixed" style="margin:0">250 kHz on the local network, 48 kHz through the tunnel</span>
         </span>
-        <span id="rawIqLocked" class="row hide" style="gap:6px;align-items:center;flex-wrap:wrap">
+        <span id="rawIqLocked" class="row" style="gap:6px;align-items:center;flex-wrap:wrap;display:none">
           <select id="rawIqStreams" style="max-width:14em"></select>
           <span class="note" style="margin:0">250 kHz each on the local network, 48 kHz through the tunnel</span>
         </span>
