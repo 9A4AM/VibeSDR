@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <atomic>
+#include <chrono>
 #include <string>
 
 namespace vibe {
