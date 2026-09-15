@@ -699,8 +699,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             across tuners and known broken on the RTL-SDR Blog v4, and this server never uses it.
             VibeSDR's own loop measures how close the signal is to overloading the converter and
             moves the tuner a step at a time, the way an SDRplay does in hardware.
-            <br>The gain above becomes the STARTING point; from there it may use the tuner's whole
-            range in either direction. Leave it off and the gain stays exactly where you set it.</div></label>
+            <br>The <b>starting gain</b> at the bottom of this card is where the loop begins; from
+            there it may use the tuner's whole range in either direction. Leave it off and the gain
+            stays exactly where you set it.</div></label>
         <!-- ★★ THE TUNER'S IF FILTER, beside VibeAGC because they are the pair an owner sets once
              and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
              the AGC because a client re-asserted its stored value, this one because it had no
