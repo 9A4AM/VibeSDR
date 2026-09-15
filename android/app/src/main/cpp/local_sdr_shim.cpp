@@ -8317,7 +8317,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ The RF loop steers from THEIR reduction, so it must not run until that number is
              *   demonstrably alive — see ifHasMoved above. The coarse placement has no such
              *   requirement: it measures the band itself. */
-            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved)
+            /* ★★★ AND NOT BEFORE THE COARSE PLACEMENT HAS HAD ITS TURN. The design is "one big
+             *     jump from our own measurement, THEN the 30-50 rule" — but the coarse step waits
+             *     4 s after arming and this loop needed only 1 s of a 7 dB excess, so on the
+             *     Lenovo RSP1A (2026-09-15 14:07) it stepped to minimum RF gain on the handover's
+             *     59 dB before the placement ever ran, and the placement then saw 40 dB "inside
+             *     the window" and did nothing. With the order enforced the same start-up ends at
+             *     RF 3/6, IF 50 dB (measured 14:23) instead of 0/6, IF 40. */
+            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`
