@@ -70,10 +70,11 @@ filter the server directories by distance, and, when you plug an SDR into the
 device itself, place your own receiver on the map so the digital-mode spots it
 decodes can be shown with a distance and bearing. Deny it and you lose only those:
 the directories are unsorted, and spots still appear on the map but with no
-accurate distance, because your own position defaults to 0° latitude, 0°
-longitude — you will appear just off West Africa on the equator. You can fix that
-without sharing your real location at all: enter the nearest city or a Maidenhead
-grid reference by hand and the app uses that instead.
+distance or bearing, because the app has no position of its own to measure from
+(it holds 0° latitude, 0° longitude — "Null Island" — as the marker for
+"unknown", draws no receiver on the map, and offers a *Set location* button). You
+can fix that without sharing your real location at all: enter the nearest city or
+a Maidenhead grid reference by hand and the app uses that instead.
 
 **Serving.** Listing a server publicly is the one thing that needs a position,
 because the directory exists to sort receivers by distance. With the default
@@ -82,7 +83,8 @@ not start the server without one. It can come from the device's coarse location
 (not on Linux, where there is none), reduced to a Maidenhead grid reference, or
 you can enter a city or grid reference yourself. Serving on your local network
 only, or through your own port forwarding, needs no location at all; listeners on
-such a server simply meet the same 0° limitation described above for spots.
+such a server simply see spots and transmitters without a distance, as described
+above, unless you set a city or grid reference.
 
 **Where it goes.** All directory sorting and every map view is handled on the
 device: no directory, and no receiver, is ever told where a listener is. A
