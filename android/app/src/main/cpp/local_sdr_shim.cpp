@@ -2922,6 +2922,30 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     leaves it its 5 s decay to come down. Judging inside that window judges the restart:
      *     on DAB every block hop produced "59.0 dB for 1.0 s → step down" one second after the
      *     hop, until the front end was starved (Lenovo RSP1A, 2026-09-15 15:51). */
+    /* ★★★ A SILENT AGC WITH THE LEVEL OVER TARGET IS A DEAD AGC — RESTART IT. Enabled, not one
+     *     GainChange since its last restart, and the ADC peak 6 dB or more above the set point
+     *     for 8 s: the loop is not running. Measured after a DAB rate change (2026-09-15): the
+     *     readout echoed 59, the real reduction was ~28, the peak sat at -14 dBFS against -40.
+     *     The restart parks gRdB at 40 and re-enables, the same transition the stall recovery
+     *     uses; at most once every 12 s, and the RF loop stays out of it meanwhile. */
+    {
+        static auto lastKick = std::chrono::steady_clock::time_point{};
+        const double since = sdrp->secondsSinceAgcRestart();
+        const double peak  = sdrp->adcPeakDbfs();
+        const int    aim   = sdrp->ifAgcSetPointDbfs();
+        if (since >= 8.0 && !sdrp->ifAgcReporting() && std::isfinite(peak) && peak > aim + 6.0) {
+            const auto nowK = std::chrono::steady_clock::now();
+            if (lastKick.time_since_epoch().count() == 0 ||
+                std::chrono::duration_cast<std::chrono::seconds>(nowK - lastKick).count() >= 12) {
+                lastKick = nowK;
+                LOGI("RSP IF AGC: silent for %.0f s with the level %.1f dB over its %d dBFS target "
+                     "(ADC peak %.1f) — restarting its loop in place", since, peak - aim, aim, peak);
+                sdrp->restartIfAgc(40);
+                g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
+                outMs = 0; outDir = 0; return;
+            }
+        }
+    }
     if (sdrp->secondsSinceAgcRestart() < 6.0) { outMs = 0; outDir = 0; return; }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
@@ -7972,6 +7996,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
+                            /* ★ SAY IT ON THE VTS TOO. The flashing chip stays; this is the sentence
+                             *   that explains the bouncing noise floor to somebody who has never
+                             *   seen it (Stuart, 2026-09-15: "a VTS notification too so users get a
+                             *   prominent message and idea what is going on"). */
+                            { const std::string body = "{\"type\":\"notice\",\"text\":\"Setting the receiver's gain \xe2\x80\x94 "
+                                  "the noise floor will bounce for about half a minute while the AGC finds its level.\"}";
+                              for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
                                  sdrp->currentLnaState(),
                                  sdrp->lnaStateCount() - 1 - sdrp->currentLnaState(),
@@ -8330,6 +8361,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      "initialising indicator goes NOW, not when the six-step kick ended.",
                      sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
                      sdrp->currentIfGr());
+                { const int n = std::max(1, sdrp->lnaStateCount() - 1);
+                  const std::string body = "{\"type\":\"notice\",\"text\":\"Gain set \xe2\x80\x94 RF gain "
+                      + std::to_string(n - sdrp->currentLnaState()) + "/" + std::to_string(n)
+                      + ", IF reduction " + std::to_string(sdrp->currentIfGr()) + " dB. The AGC now holds it.\"}";
+                  for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
             }
 
             /* ★★★ THE RADIO'S OWN IF AGC RUNS THE IF. WE RUN THE RF, FROM ITS READINGS.

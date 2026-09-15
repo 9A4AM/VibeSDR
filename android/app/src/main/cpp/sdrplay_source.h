@@ -124,6 +124,13 @@ public:
             std::chrono::steady_clock::now().time_since_epoch()).count();
         return (now - t) / 1000.0;
     }
+    /** ★ The IF AGC's set point as configured (dBFS). */
+    int ifAgcSetPointDbfs() const;
+    /** ★★ RESTART A SILENT IF AGC: disable, park gRdB at `gr`, enable — the same transition the
+     *  stall recovery makes, callable when the loop has gone quiet while the level sits over
+     *  target (2026-09-15: after a DAB rate change no GainChange ever came, the readout echoed
+     *  59 while the real reduction was ~28 and the ADC peaked 26 dB over target). */
+    void restartIfAgc(int gr);
     void noteAgcRestart() {
         agcRestartedAtMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);

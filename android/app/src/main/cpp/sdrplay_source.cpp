@@ -906,11 +906,16 @@ void SdrplaySource::setLnaState(int state) {
      * ★ So write back what the AGC last REPORTED, which makes the gRdB half of the update a
      *   no-op. liveValid_ is false only before the first event; then the struct value stands, as
      *   it did before. */
-    if (liveValid_.load(std::memory_order_relaxed)) {
+    /* ★ ONLY A FRESH REPORT IS WRITTEN BACK. A stale one — the AGC has not spoken since our last
+     *   write — is whatever it said on another band or before a rate change, and writing it into
+     *   gRdB SETS the reduction to that old figure (measured 2026-09-15: 28 dB from medium wave
+     *   carried into DAB, system gain 37.7 dB, ADC peak -14 dBFS). Leave the struct alone then. */
+    if (liveValid_.load(std::memory_order_relaxed) && !liveStale_.load(std::memory_order_relaxed)) {
         const int gr = liveGr_.load(std::memory_order_relaxed);
         if (gr >= 20 && gr <= 59)
             impl_->params->rxChannelA->tunerParams.gain.gRdB = (float)gr;
     }
+    liveStale_.store(true, std::memory_order_relaxed);
     if (open_) {
         api().Update(impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
@@ -1018,6 +1023,27 @@ void SdrplaySource::setIfAgcSetPoint(int dBfs) {
     impl_->params->rxChannelA->ctrlParams.agc.setPoint_dBfs = dBfs;
     if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+}
+
+int SdrplaySource::ifAgcSetPointDbfs() const {
+    if (!impl_->params || !impl_->params->rxChannelA) return -30;
+    return impl_->params->rxChannelA->ctrlParams.agc.setPoint_dBfs;
+}
+
+void SdrplaySource::restartIfAgc(int gr) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return;
+    auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+    const auto want = agc.enable == sdrplay_api_AGC_DISABLE ? sdrplay_api_AGC_CTRL_EN : agc.enable;
+    agc.enable = sdrplay_api_AGC_DISABLE;
+    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+    if (gr < 20) gr = 20; if (gr > 59) gr = 59;
+    impl_->params->rxChannelA->tunerParams.gain.gRdB = (float)gr;
+    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    agc.enable = want;
+    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+    liveStale_.store(true, std::memory_order_relaxed);
+    noteAgcRestart();
 }
 
 void SdrplaySource::setIfAgcDynamics(int attackMs, int decayMs, int delayMs, int threshDb) {
