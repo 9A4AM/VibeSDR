@@ -570,6 +570,23 @@ bool SdrplaySource::restartStream(std::string& err) {
             noteAgcRestart();
         }
     }
+    /* ★★ RE-ASSERT THE FRONT-END FILTERS. Init re-sends the params struct, but a notch Update
+     *    issued while the stream was down is lost — measured 2026-09-15: entering DAB, the auto
+     *    notch switched the DAB notch off in the struct, the re-init landed on top, and the tuner
+     *    kept the notch IN while every readout said off (Stuart: "the DAB notch says its off but
+     *    the gain levels say its on still"). Written again from the struct, the way a fresh open
+     *    would see them. */
+    if (impl_->params->devParams && hasRfNotch()) {
+        switch (impl_->dev.hwVer) {
+            case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
+                api().Update(impl_->dev.dev, impl_->dev.tuner,
+                             (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Rsp1a_RfNotchControl
+                                                          | sdrplay_api_Update_Rsp1a_RfDabNotchControl),
+                             sdrplay_api_Update_Ext1_None);
+                break;
+            default: break;
+        }
+    }
     std::fprintf(stderr, "sdrplay stream re-initialised after a stall\n");
     return true;
 }
