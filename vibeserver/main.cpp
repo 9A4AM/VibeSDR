@@ -128,7 +128,7 @@ struct Opts {
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
     int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
-    bool        rawIqLanFull = false;    // ★ full capture rate on the LAN — see RadioConfig::rawIqLanFull
+    int         rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling — see RadioConfig::rawIqLanMaxHz
     int         nbWide = 1;              // wide impulse blanker — see RadioConfig::nbWide
     std::string blockedModes;            // modes/decoders switched off — see Config::blockedModes
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
@@ -459,7 +459,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits;
-    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanFull = c.rawIqLanFull; o.nbWide = c.nbWide;
+    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -500,7 +500,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits;
-    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanFull = o.rawIqLanFull; c.nbWide = o.nbWide;
+    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1288,7 +1288,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
-    LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanFull);
+    LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanMaxHz);
     LocalSdrShim::setVibeServerNbWide(o.nbWide);
     LocalSdrShim::setVibeServerBlockedModes(o.blockedModes);
 
@@ -1966,7 +1966,7 @@ int main(int argc, char** argv) {
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
             r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost;
-            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanFull = next.rawIqLanFull; r.nbWide = next.nbWide;
+            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide;
             r.blockedModes = next.blockedModes;
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm

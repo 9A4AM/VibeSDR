@@ -220,9 +220,10 @@ struct Config {
     bool dabRateBoost = false;
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
     int  rawIqMax = 0;            // ★ total raw IQ listeners at once; 0 = host default
-    /** ★ Offer the FULL capture rate on the local network (a one-listener radio only; the tunnel
-     *  is always 48 kHz). Off = 250 kHz ceiling, which a Pi Zero, a phone or Wi-Fi can carry. */
-    bool rawIqLanFull = false;
+    /** ★ The highest raw IQ rate offered on the local network, in Hz (a one-listener radio only;
+     *  the tunnel is always 48 kHz). The full span is offered when the capture rate is within
+     *  it — no resampling, no cut-out. 0 = no ceiling. Chosen from the radio's own rates. */
+    int  rawIqLanMaxHz = 0;
     int  nbWide = 1;              // ★ wide impulse blanker on the raw capture: 0 off, 1 auto (HF only), 2 on
     /** Modes and decoders switched off on this receiver, comma separated (e.g. "dab").
      *  ★ Bands say WHERE this aerial is useful; this says WHAT it is useful for. An amplified
@@ -445,7 +446,7 @@ struct RadioConfig {
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
-    bool rawIqLanFull = false;    // ★ offer the full capture rate on the LAN (one-listener radio only)
+    int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)
     int    nbWide = 1;             // ★ wide impulse blanker: 0 off, 1 auto (below 30 MHz), 2 on
     std::string blockedModes;      // per radio — see Config::blockedModes
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)

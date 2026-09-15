@@ -126,7 +126,7 @@ const K = {
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
   idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
-  rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanFull: 'vs_rawiqlanfull',
+  rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
@@ -171,7 +171,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★ RAW IQ OUT: 0 off, 1 local network, 2 local and public; and the stream cap (0 = default). */
   const [rawIq, setRawIq]           = useState(0);
   const [rawIqMax, setRawIqMax]     = useState(0);
-  const [rawIqLanFull, setRawIqLanFull] = useState(false);
+  const [rawIqLanMaxHz, setRawIqLanMaxHz] = useState(0);
   /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
   const [idleSaver, setIdleSaver]   = useState(false);
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
@@ -513,7 +513,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setIdleKick(Number(await g(K.idleKick)) || 0);
           setRawIq(Number(await g(K.rawIq)) || 0);
           setRawIqMax(Number(await g(K.rawIqMax)) || 0);
-          setRawIqLanFull((await g(K.rawIqLanFull)) === '1');
+          setRawIqLanMaxHz(Number(await g(K.rawIqLanMaxHz)) || 0);
           setIdleSaver((await g(K.idleSaver)) === '1');
           setLockedCentre(Number(await g(K.lockedCentre)) || 0);
           // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
@@ -906,7 +906,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const live = useRef<any>({});
   live.current = {
     limitSoft, idleKick, idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace,
-    antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanFull,
+    antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
   };
 
   const start = useCallback(async () => {
@@ -924,7 +924,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)],
-      [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanFull, live.current.rawIqLanFull ? '1' : '0'],
+      [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
       [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
@@ -995,7 +995,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq,
         // ★ One stream on a one-listener radio; the count only means something on a locked window.
         rawIqMax: radioUse === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
-        rawIqLanFull: radioUse !== 'locked' && live.current.rawIqLanFull,
+        rawIqLanMaxHz: radioUse !== 'locked' ? live.current.rawIqLanMaxHz : 0,
         idleGraceSec: live.current.idleGrace,
         antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
         landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2189,13 +2189,16 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   {rawIq > 0 && radioUse !== 'locked' && maxUsers <= 1 && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Local network up to</Text>
-                      {([[false, '250 kHz'], [true, 'Full span']] as const).map(([v, lbl]) => (
-                        <TouchableOpacity key={lbl} onPress={() => setRawIqLanFull(v)}
-                          style={[styles.card, { borderColor: rawIqLanFull === v ? C.green : C.border,
-                                                 backgroundColor: rawIqLanFull === v ? C.green + '18' : 'transparent',
+                      {/* ★ The radio's own rates — no choice needs a resampler. */}
+                      {rateOptions.filter(o => o.value > 0).map(o => {
+                        const sel = (rawIqLanMaxHz || rateOptions[rateOptions.length - 1]?.value) === o.value;
+                        return (
+                        <TouchableOpacity key={o.value} onPress={() => setRawIqLanMaxHz(o.value)}
+                          style={[styles.card, { borderColor: sel ? C.green : C.border,
+                                                 backgroundColor: sel ? C.green + '18' : 'transparent',
                                                  paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
-                          <Text style={{ color: rawIqLanFull === v ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>{lbl}</Text>
-                        </TouchableOpacity>))}
+                          <Text style={{ color: sel ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
+                        </TouchableOpacity>); })}
                     </View>
                   )}
                   {rawIq > 0 && radioUse === 'locked' && (

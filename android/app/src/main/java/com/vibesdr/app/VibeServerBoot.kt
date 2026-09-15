@@ -153,7 +153,7 @@ object VibeServerBoot {
             VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.s("blockedModes"))
             // ★ Raw IQ out — the owner's mode and cap, same source as every other setting here.
             VibeLocalSDR.setRawIq(cfg.s("rawIq").toIntOrNull() ?: 0, cfg.s("rawIqMax").toIntOrNull() ?: 0,
-                                  cfg.b("rawIqLanFull", false))
+                                  cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)
             // ★ Wide impulse blanker — off / auto (HF only) / on; auto when unset.
             VibeLocalSDR.setNbWide(cfg.s("nbWide").toIntOrNull() ?: 1)
             // ★★★ THE RESTING GAIN IS NOT AN ADVANCED SETTING, AND GATING IT ON `adv` THREW IT AWAY.

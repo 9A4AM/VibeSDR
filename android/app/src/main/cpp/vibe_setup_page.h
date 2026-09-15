@@ -602,10 +602,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <span>Offer it</span></label>
           <span class="row" style="gap:6px;align-items:center;flex:0 0 auto">
             <span class="lbl" style="margin:0">Local network up to</span>
-            <select id="rawIqLan" style="max-width:14em">
-              <option value="0">250 kHz</option>
-              <option value="1" id="rawIqLanFullOpt">Full span</option>
-            </select></span>
+            <select id="rawIqLan" style="max-width:14em"></select></span>
         </span>
         <span id="rawIqLocked" class="row hide" style="gap:6px;align-items:center;flex-wrap:wrap">
           <select id="rawIqStreams" style="max-width:14em"></select>
@@ -620,7 +617,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           (paired by a six-character code in the VibeIQ bridge) &mdash; that rate is what stays
           reliable end to end. On your own network the ceiling is yours: 250 kHz suits any machine
           and any Wi-Fi; the radio's full span is for a trunking app on a wired Pi 4 or better
-          &mdash; at 2.4 MHz it is about 40 Mb/s, which Wi-Fi will not carry cleanly. The port only
+          &mdash; the choices are this radio's own rates, and the full span is offered only while
+          the capture rate is within the one you pick. 2.4 MHz is about 40 Mb/s, which Wi-Fi will
+          not carry cleanly; a wired Pi 4 or better manages it. The port only
           opens while somebody has it on and closes with their session, and a stream being read
           counts as using the radio.
           <br><b id="rawIqShared" class="hide">Not available on a shared dial: with one VFO for
@@ -1296,10 +1295,17 @@ function rawIqAvail() {
       `<option value="${i + 1}">${i + 1} stream${i ? "s" : ""} at once</option>`).join("");
     sel.value = cur && parseInt(cur, 10) <= n ? cur : "0";
   }
-  // ★ Name the full span, so the choice is a number and not a word.
-  const opt = $("rawIqLanFullOpt");
-  const rate = parseInt(($("rate") && $("rate").value) || "0", 10);
-  if (opt) opt.textContent = rate > 0 ? `Full span (${(rate / 1e6).toFixed(rate % 1e6 ? 3 : 0).replace(/\.?0+$/, "")} MHz)` : "Full span";
+  // ★★ THE CEILING IS ONE OF THIS RADIO'S OWN RATES — an RTL offers 1.024 / 2.048 / 2.4, an
+  //    RSP 2 MHz and up, an HF+ 768 kHz — so no choice ever needs a resampler (Stuart,
+  //    2026-09-15: "the dropdown for local network needs to have 2.4 and 2 MHz rates").
+  //    250 kHz belongs to the locked window, where each stream is a channel.
+  { const sel = $("rawIqLan");
+    const cur = sel.value;
+    const rates = $("rate") ? [...$("rate").options].map(o => parseInt(o.value, 10)).filter(v => v > 0) : [];
+    const mhz = (v) => `${(v / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz`;
+    sel.innerHTML = rates.map(v => `<option value="${v}">${mhz(v)}</option>`).join("")
+                  || `<option value="0">Full span</option>`;
+    sel.value = rates.includes(parseInt(cur, 10)) ? cur : String(rates[rates.length - 1] || 0); }
   const on = single ? $("rawIqOn").checked : locked ? parseInt($("rawIqStreams").value || "0", 10) > 0 : false;
   $("rawIqLocalRow").classList.toggle("hide", shared || !on);
   $("rawIqLan").disabled = !on;
@@ -2948,11 +2954,12 @@ function fill() {
   $("idleKick").value = r.idleKickMin || 0;
   if ($("nbWide"))   $("nbWide").value = String(r.nbWide === undefined || r.nbWide === null ? 1 : r.nbWide);
   if ($("rawIqOn")) {
-    // ★ One stored shape (rawIq 0/1/2 + rawIqMax + rawIqLanFull), two faces: see rawIqAvail.
+    // ★ One stored shape (rawIq 0/1/2 + rawIqMax + rawIqLanMaxHz), two faces: see rawIqAvail.
     $("rawIqOn").checked = (r.rawIq || 0) > 0;
     $("rawIqLocalOnly").checked = (r.rawIq || 0) === 1;
-    $("rawIqLan").value = r.rawIqLanFull ? "1" : "0";
     rawIqAvail();
+    if (r.rawIqLanMaxHz > 0 && [...$("rawIqLan").options].some(o => o.value === String(r.rawIqLanMaxHz)))
+      $("rawIqLan").value = String(r.rawIqLanMaxHz);
     if (radio().mode === "locked") $("rawIqStreams").value = (r.rawIq || 0) > 0 ? String(Math.max(1, r.rawIqMax || 1)) : "0";
     for (const id of ["rawIqOn", "rawIqStreams", "rawIqLan", "rawIqLocalOnly"])
       $(id).addEventListener("change", rawIqAvail);
@@ -3220,7 +3227,7 @@ function collectRadio() {
       return {
         rawIq: on ? ($("rawIqLocalOnly").checked ? 1 : 2) : 0,
         rawIqMax: on ? streams : 0,
-        rawIqLanFull: on && !locked && $("rawIqLan").value === "1",
+        rawIqLanMaxHz: on && !locked ? parseInt($("rawIqLan").value || "0", 10) : 0,
       };
     })(),
     // ★ Wide impulse blanker: 0 off, 1 auto (HF only), 2 on.
