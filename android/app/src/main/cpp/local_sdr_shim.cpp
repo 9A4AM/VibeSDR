@@ -3613,6 +3613,10 @@ static int vsRawIqDefaultMax() {
 #endif
 }
 static int vsRawIqMax() { const int m = g_vsRawIqMax.load(std::memory_order_relaxed); return m > 0 ? m : vsRawIqDefaultMax(); }
+/** ★ The owner's "maximum rate on the local network": false = 250 kHz, true = the full capture
+ *  rate. It was implicit — full was offered to any one-listener radio with IQ out on — which is
+ *  wrong for a Pi Zero, a phone or a Wi-Fi link, and the setup page could not say otherwise. */
+static std::atomic<bool> g_vsRawIqLanFull{false};
 static bool isPrivateIp(const std::string& ip) {
     if (isLoopback(ip)) return true;
     std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
@@ -11347,12 +11351,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "rawIq") {
             /* ★ Owner setting: mode 0/1/2 and the total cap (0 = default for this host). */
-            double m = -1, mx = -1;
-            const bool hasM = jsonNum(msg, "mode", m), hasMax = jsonNum(msg, "max", mx);
-            if ((hasM || hasMax) && adminGate("raw IQ out")) {
+            double m = -1, mx = -1, lf = -1;
+            const bool hasM = jsonNum(msg, "mode", m), hasMax = jsonNum(msg, "max", mx), hasLf = jsonNum(msg, "lanFull", lf);
+            if ((hasM || hasMax || hasLf) && adminGate("raw IQ out")) {
                 if (hasM)   g_vsRawIqMode.store(std::max(0, std::min(2, (int)m)), std::memory_order_relaxed);
                 if (hasMax) g_vsRawIqMax.store(std::max(0, (int)mx), std::memory_order_relaxed);
-                vsPersist("{\"rawIq\":" + std::to_string(g_vsRawIqMode.load()) + ",\"rawIqMax\":" + std::to_string(g_vsRawIqMax.load()) + "}");
+                if (hasLf)  g_vsRawIqLanFull.store(lf != 0.0, std::memory_order_relaxed);
+                vsPersist("{\"rawIq\":" + std::to_string(g_vsRawIqMode.load()) + ",\"rawIqMax\":" + std::to_string(g_vsRawIqMax.load())
+                          + ",\"rawIqLanFull\":" + (g_vsRawIqLanFull.load() ? "true" : "false") + "}");
                 LOGI("raw IQ out: mode %d, cap %d (default %d)", g_vsRawIqMode.load(), g_vsRawIqMax.load(), vsRawIqDefaultMax());
                 sendHwInfo(sock);
             }
@@ -16041,6 +16047,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  offer — the owner has IQ out off, the radio is shared, or DAB has it. */
     int iqFullRateOffered() const {
         if (g_vsRawIqMode.load(std::memory_order_relaxed) == 0) return 0;
+        if (!g_vsRawIqLanFull.load(std::memory_order_relaxed)) return 0;   // ★ the owner's LAN ceiling
         if (g_vsMaxUsers.load() > 1) return 0;
         if (g_dabMode.load(std::memory_order_relaxed)) return 0;
         return (int)std::lround(sampleRate);
@@ -20538,9 +20545,10 @@ void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     LOGI("wide impulse blanker: %s", mode == 0 ? "off" : mode == 2 ? "on" : "auto (below 30 MHz)");
 }
-void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers) {
+void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers, bool lanFull) {
     g_vsRawIqMode.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     g_vsRawIqMax.store(std::max(0, maxUsers), std::memory_order_relaxed);
+    g_vsRawIqLanFull.store(lanFull, std::memory_order_relaxed);
 }
 /** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
 void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {

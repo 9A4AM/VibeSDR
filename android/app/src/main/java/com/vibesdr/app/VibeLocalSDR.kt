@@ -221,8 +221,8 @@ object VibeLocalSDR {
     fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
     private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
     /** ★ Raw IQ out: 0 off, 1 local only, 2 local + public; max 0 = this phone's default (1). */
-    fun setRawIq(mode: Int, max: Int) { ensureLoaded(); nativeSetRawIq(mode, max) }
-    private external fun nativeSetRawIq(mode: Int, max: Int)
+    fun setRawIq(mode: Int, max: Int, lanFull: Boolean = false) { ensureLoaded(); nativeSetRawIq(mode, max, lanFull) }
+    private external fun nativeSetRawIq(mode: Int, max: Int, lanFull: Boolean)
     fun setNbWide(mode: Int) { ensureLoaded(); nativeSetNbWide(mode) }
     private external fun nativeSetNbWide(mode: Int)
 

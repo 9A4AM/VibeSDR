@@ -981,8 +981,8 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTuneLimits(JNIEnv* env, jobject,
  *  serves the browser setup page (g_vsNativeSetup), so anything added there is invisible on a
  *  phone — which is exactly what happened: "none of the new settings are on the xcover". */
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, jint max) {
-    vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max);
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, jint max, jboolean lanFull) {
+    vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max, lanFull == JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {

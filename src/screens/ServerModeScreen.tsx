@@ -126,7 +126,7 @@ const K = {
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
   idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
-  rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax',
+  rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanFull: 'vs_rawiqlanfull',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
@@ -171,6 +171,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★ RAW IQ OUT: 0 off, 1 local network, 2 local and public; and the stream cap (0 = default). */
   const [rawIq, setRawIq]           = useState(0);
   const [rawIqMax, setRawIqMax]     = useState(0);
+  const [rawIqLanFull, setRawIqLanFull] = useState(false);
   /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
   const [idleSaver, setIdleSaver]   = useState(false);
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
@@ -512,6 +513,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setIdleKick(Number(await g(K.idleKick)) || 0);
           setRawIq(Number(await g(K.rawIq)) || 0);
           setRawIqMax(Number(await g(K.rawIqMax)) || 0);
+          setRawIqLanFull((await g(K.rawIqLanFull)) === '1');
           setIdleSaver((await g(K.idleSaver)) === '1');
           setLockedCentre(Number(await g(K.lockedCentre)) || 0);
           // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
@@ -904,7 +906,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const live = useRef<any>({});
   live.current = {
     limitSoft, idleKick, idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace,
-    antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax,
+    antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanFull,
   };
 
   const start = useCallback(async () => {
@@ -922,7 +924,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)],
-      [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)],
+      [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanFull, live.current.rawIqLanFull ? '1' : '0'],
       [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
@@ -990,7 +992,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
         //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
         //   should be in the GUI on the app screen on the phone").
-        rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq, rawIqMax: live.current.rawIqMax,
+        rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq,
+        // ★ One stream on a one-listener radio; the count only means something on a locked window.
+        rawIqMax: radioUse === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
+        rawIqLanFull: radioUse !== 'locked' && live.current.rawIqLanFull,
         idleGraceSec: live.current.idleGrace,
         antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
         landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2181,7 +2186,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                       </TouchableOpacity>);
                     })}
                   </View>
-                  {rawIq > 0 && !(maxUsers > 1 && radioUse !== 'locked') && (
+                  {rawIq > 0 && radioUse !== 'locked' && maxUsers <= 1 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Local network up to</Text>
+                      {([[false, '250 kHz'], [true, 'Full span']] as const).map(([v, lbl]) => (
+                        <TouchableOpacity key={lbl} onPress={() => setRawIqLanFull(v)}
+                          style={[styles.card, { borderColor: rawIqLanFull === v ? C.green : C.border,
+                                                 backgroundColor: rawIqLanFull === v ? C.green + '18' : 'transparent',
+                                                 paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
+                          <Text style={{ color: rawIqLanFull === v ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>{lbl}</Text>
+                        </TouchableOpacity>))}
+                    </View>
+                  )}
+                  {rawIq > 0 && radioUse === 'locked' && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                       <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
                       <TextInput
@@ -2197,11 +2214,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   )}
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     A listener can take the channel they are tuned to as an rtl_tcp stream, for a
-                    decoder that does not run in a browser. Up to 250 kHz on your local network;
-                    48 kHz through the tunnel, paired by a six-character code in the VibeIQ bridge.
-                    The port only opens while somebody has it on, and closes with their session.{'\n\n'}
-                    Default is one stream on a phone. Each 250 kHz stream is about 4 Mb/s on the
-                    LAN and a little more DSP; the tunnel stream is 0.8 Mb/s of upload.
+                    decoder that does not run in a browser. Always 48 kHz through the tunnel, paired
+                    by a six-character code in the VibeIQ bridge — that is the rate that stays
+                    reliable end to end. On your own network the ceiling is yours: 250 kHz suits any
+                    phone and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
+                    link. The port only opens while somebody has it on, and closes with their session.
                     {maxUsers > 1 && radioUse !== 'locked'
                       ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
                       : ''}

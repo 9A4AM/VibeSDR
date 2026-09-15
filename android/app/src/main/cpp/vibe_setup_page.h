@@ -590,25 +590,42 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <!-- ★★★ RAW IQ OUT. A listener may take the channel they are tuned to as an rtl_tcp stream
            for a decoder the browser cannot run. Never on a shared dial (the server refuses it):
            an rtl_tcp client's tune would move everybody (Stuart, 2026-09-09). -->
+      <!-- ★★★ RAW IQ OUT, SHAPED BY THE RADIO'S MODE (Stuart, 2026-09-15: "what use is it being
+           able to set 3 raw IQ streams when only one user is allowed on the radio at a time").
+           One listener: a tick and a LAN rate. Locked window: how many streams, out of the
+           listener slots. Shared dial: not offered, and it says why. The server enforces all of
+           it — see iqFullRateOffered() and the shared-dial refusal in the shim. -->
       <label style="margin-top:12px" id="rawIqRow"><span class="lbl">Raw IQ out</span>
-        <select id="rawIq">
-          <option value="0">Off</option>
-          <option value="1">Local network only</option>
-          <option value="2">Local &amp; public (through the tunnel)</option>
-        </select>
+        <span id="rawIqSingle" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="row" style="gap:8px;align-items:center;flex:0 0 auto">
+            <input type="checkbox" id="rawIqOn" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Offer it</span></label>
+          <span class="row" style="gap:6px;align-items:center;flex:0 0 auto">
+            <span class="lbl" style="margin:0">Local network up to</span>
+            <select id="rawIqLan" style="max-width:14em">
+              <option value="0">250 kHz</option>
+              <option value="1" id="rawIqLanFullOpt">Full span</option>
+            </select></span>
+        </span>
+        <span id="rawIqLocked" class="row hide" style="gap:6px;align-items:center;flex-wrap:wrap">
+          <select id="rawIqStreams" style="max-width:14em"></select>
+          <span class="note" style="margin:0">250 kHz each on the local network</span>
+        </span>
+        <label class="row" id="rawIqLocalRow" style="gap:8px;align-items:center;margin-top:6px">
+          <input type="checkbox" id="rawIqLocalOnly" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Local network only &mdash; not through the tunnel</span></label>
         <div class="hint">Lets a listener take the channel they are tuned to as an
-          <b>rtl_tcp</b> stream &mdash; up to 250 kHz on your local network (or the radio's full
-          bandwidth when it has one listener, for a trunking app &mdash; that one wants a wired
-          Pi 4 or better; a Pi Zero or a phone should offer the lower rates), 48 kHz through the
-          tunnel (paired by a six-character code in the VibeIQ bridge) &mdash; for a decoder that
-          does not run in a browser: DSD, a DMR/P25 decoder, a data mode. The port only opens
-          while somebody has it on and closes with their session. A stream that is being read
-          counts as using the radio, so the idle prompt leaves it alone.
-          <br><b>Never on a shared dial</b>: with one VFO for everybody an rtl_tcp client's tune
-          would move every listener, so the server refuses it there. One-listener radios and
-          locked windows only.
-          <br><b id="rawIqShared" class="hide">Not available in shared VFO mode. Set Listeners
-          to 1, or lock the centre, to offer it.</b></div></label>
+          <b>rtl_tcp</b> stream, for a decoder that does not run in a browser: DSD, a DMR/P25
+          decoder, a data mode, a trunking app. <b>Through the tunnel it is always 48 kHz</b>
+          (paired by a six-character code in the VibeIQ bridge) &mdash; that rate is what stays
+          reliable end to end. On your own network the ceiling is yours: 250 kHz suits any machine
+          and any Wi-Fi; the radio's full span is for a trunking app on a wired Pi 4 or better
+          &mdash; at 2.4 MHz it is about 40 Mb/s, which Wi-Fi will not carry cleanly. The port only
+          opens while somebody has it on and closes with their session, and a stream being read
+          counts as using the radio.
+          <br><b id="rawIqShared" class="hide">Not available on a shared dial: with one VFO for
+          everybody an rtl_tcp client's tune would move every listener. Set Listeners to 1, or lock
+          the centre, to offer it.</b></div></label>
       <label style="margin-top:12px" id="nbWideRow"><span class="lbl">Impulse noise blanker</span>
         <select id="nbWide">
           <option value="0">Off</option>
@@ -622,14 +639,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
           below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
           listener also has their own blanker on their own channel, in the audio menu.</div></label>
-      <label id="rawIqMaxRow"><span class="lbl">Raw IQ streams at once</span>
-        <span style="display:flex;gap:8px;align-items:center">
-          <input type="number" id="rawIqMax" min="0" max="16" step="1" placeholder="default" style="max-width:8em">
-          <button type="button" class="ghost" id="rawIqMaxDefault">Default</button>
-        </span>
-        <div class="hint">Empty means the machine's default: one on a phone, three on a Pi or a
-          small box, four on eight cores or more. Each 250 kHz stream is about 4 Mb/s on the LAN
-          and one more channel of DSP; a tunnel stream is 0.8 Mb/s of upload.</div></label>
+      <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever
+           meant something on a locked window) -->
     </div>
       <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
            range IS the limit, so offering these there would be two answers to one question
@@ -1268,16 +1279,30 @@ function syncUncompressed() {
  *  row stays — the owner should see WHY it is off — but the choice is forced to Off and disabled
  *  until the radio is one listener or a locked window. */
 function rawIqAvail() {
-  const sel = $("rawIq"); if (!sel) return;
+  if (!$("rawIqOn")) return;
   const n = parseInt($("users").value || "1", 10);
-  const shared = radio().mode !== "locked" && n > 1;
-  if (shared) sel.value = "0";
-  sel.disabled = shared;
-  const mx = $("rawIqMax"), mxRow = $("rawIqMaxRow");
-  if (mx) mx.disabled = shared;
-  if (mxRow) mxRow.classList.toggle("hide", shared || sel.value === "0");
-  const why = $("rawIqShared");
-  if (why) why.classList.toggle("hide", !shared);
+  const locked = radio().mode === "locked";
+  const shared = !locked && n > 1;
+  const single = !shared && !locked;
+  $("rawIqSingle").classList.toggle("hide", !single);
+  $("rawIqLocked").classList.toggle("hide", !(locked && !shared));
+  $("rawIqShared").classList.toggle("hide", !shared);
+  // ★ The streams dropdown is built from the listener count, so it can never offer more streams
+  //   than there are people to hold them.
+  if (locked) {
+    const sel = $("rawIqStreams");
+    const cur = sel.value;
+    sel.innerHTML = `<option value="0">Off</option>` + Array.from({ length: Math.max(1, n) }, (_, i) =>
+      `<option value="${i + 1}">${i + 1} stream${i ? "s" : ""} at once</option>`).join("");
+    sel.value = cur && parseInt(cur, 10) <= n ? cur : "0";
+  }
+  // ★ Name the full span, so the choice is a number and not a word.
+  const opt = $("rawIqLanFullOpt");
+  const rate = parseInt(($("rate") && $("rate").value) || "0", 10);
+  if (opt) opt.textContent = rate > 0 ? `Full span (${(rate / 1e6).toFixed(rate % 1e6 ? 3 : 0).replace(/\.?0+$/, "")} MHz)` : "Full span";
+  const on = single ? $("rawIqOn").checked : locked ? parseInt($("rawIqStreams").value || "0", 10) > 0 : false;
+  $("rawIqLocalRow").classList.toggle("hide", shared || !on);
+  $("rawIqLan").disabled = !on;
 }
 function usersNote() {
   rawIqAvail();
@@ -2921,11 +2946,18 @@ function fill() {
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   $("idleKick").value = r.idleKickMin || 0;
-  if ($("rawIq"))    $("rawIq").value = String(r.rawIq || 0);
   if ($("nbWide"))   $("nbWide").value = String(r.nbWide === undefined || r.nbWide === null ? 1 : r.nbWide);
-  if ($("rawIqMax")) $("rawIqMax").value = r.rawIqMax > 0 ? String(r.rawIqMax) : "";
-  if ($("rawIqMaxDefault")) $("rawIqMaxDefault").addEventListener("click", () => { $("rawIqMax").value = ""; });
-  if ($("rawIq")) $("rawIq").addEventListener("change", rawIqAvail);
+  if ($("rawIqOn")) {
+    // ★ One stored shape (rawIq 0/1/2 + rawIqMax + rawIqLanFull), two faces: see rawIqAvail.
+    $("rawIqOn").checked = (r.rawIq || 0) > 0;
+    $("rawIqLocalOnly").checked = (r.rawIq || 0) === 1;
+    $("rawIqLan").value = r.rawIqLanFull ? "1" : "0";
+    rawIqAvail();
+    if (radio().mode === "locked") $("rawIqStreams").value = (r.rawIq || 0) > 0 ? String(Math.max(1, r.rawIqMax || 1)) : "0";
+    for (const id of ["rawIqOn", "rawIqStreams", "rawIqLan", "rawIqLocalOnly"])
+      $(id).addEventListener("change", rawIqAvail);
+    if ($("rate")) $("rate").addEventListener("change", rawIqAvail);
+  }
   rawIqAvail();
   // ★★★ SHOWN ON EVERY RADIO, AND THE OLD REASONING WAS EXACTLY BACKWARDS. It used to hide on a
   //     one-listener receiver — "there is nobody to reclaim the slot FOR" — which is the opposite
@@ -3177,8 +3209,20 @@ function collectRadio() {
     idleKickMin: parseInt($("idleKick").value || "0", 10),
     // ★ Raw IQ out: the mode and the cap (0 = the machine's default). The server refuses it on a
     //   shared dial whatever is saved here — see the note by the control.
-    rawIq: parseInt($("rawIq").value || "0", 10),
-    rawIqMax: parseInt($("rawIqMax").value || "0", 10),
+    // ★ Raw IQ out, folded back into the stored shape. One listener: on/off + LAN ceiling,
+    //   one stream. Locked window: the stream count IS the switch. Shared dial: off.
+    ...(() => {
+      const n = parseInt($("users").value || "1", 10);
+      const locked = radio().mode === "locked";
+      const shared = !locked && n > 1;
+      const streams = locked ? parseInt($("rawIqStreams").value || "0", 10) : ($("rawIqOn").checked ? 1 : 0);
+      const on = !shared && streams > 0;
+      return {
+        rawIq: on ? ($("rawIqLocalOnly").checked ? 1 : 2) : 0,
+        rawIqMax: on ? streams : 0,
+        rawIqLanFull: on && !locked && $("rawIqLan").value === "1",
+      };
+    })(),
     // ★ Wide impulse blanker: 0 off, 1 auto (HF only), 2 on.
     nbWide: parseInt($("nbWide").value || "1", 10),
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
