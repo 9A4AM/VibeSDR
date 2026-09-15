@@ -222,8 +222,18 @@ On the watch, the Crown is disarmed until you deliberately arm it.
 
 ## Privacy
 
-No personal data, no analytics, no ads, no tracking. Location is optional and used only to sort
-receivers by distance. See [`PRIVACY.md`](PRIVACY.md).
+No personal data, no analytics, no ads, no tracking, and no third-party SDK of any kind. There is
+nothing in these apps that reports to the developer, and nothing in them that belongs to anyone
+else. Location is optional, coarse, and used only to sort receivers by distance.
+
+That is a position, not an accident of being small. Companies approach hobby apps with paid
+SDKs — analytics, advertising, and lately "bandwidth sharing" SDKs that quietly turn every phone
+running the app into a proxy exit node that other people's traffic leaves through. VibeSDR has
+been offered money for exactly that and has refused, and will keep refusing, whatever it pays.
+Your phone is yours. Nothing in this app will ever use it, or you, as the product.
+
+Because every released build's source is in this repository, none of this has to be taken on
+trust: it can be read. See [`PRIVACY.md`](PRIVACY.md) for the full policy.
 
 ## Licence
 

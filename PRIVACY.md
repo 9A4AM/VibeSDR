@@ -1,6 +1,6 @@
 # VibeSDR — Privacy Policy
 
-_Last updated: 29 July 2026_
+_Last updated: 15 September 2026_
 
 This policy covers the whole VibeSDR family:
 
@@ -20,16 +20,41 @@ developer.** There are no analytics, no advertising, no tracking, and no develop
 servers that receive your data. There are no accounts and nothing to sign in to.
 Everything the app stores stays on your device, or in your own iCloud account.
 
+## Our position
+
+This is deliberate, and it is permanent.
+
+- **No third-party SDKs.** The apps contain no analytics, advertising, attribution,
+  crash-reporting or "monetisation" libraries from anyone. The only code that runs
+  is VibeSDR's own, the open-source radio libraries it is built from, and the
+  platform's frameworks.
+- **No bandwidth-sharing or proxy SDKs — ever.** Developers of apps like this one are
+  regularly offered money to embed SDKs that use the phones of people running the app
+  as proxy exit nodes: other people's internet traffic, of unknown origin and purpose,
+  leaves through your connection, using your data allowance and your IP address,
+  usually with a consent screen nobody reads. VibeSDR has been approached with exactly
+  such an offer and refused it. It will refuse every future one, regardless of the
+  payment. Your device and your connection are not for sale, and not by us.
+- **No accounts, no identifiers.** There is nothing to sign up for and no device
+  identifier is generated, stored or sent.
+- **Verifiable.** The full source of every released build is public at
+  <https://github.com/Stuey3D/VibeSDR>. Anyone can check that what this page says is
+  what the app does.
+
+If any of this ever changes, this page will say so, at the top, before the change ships.
+
 ## Information the app uses
 
 ### Location (optional)
 If you grant location permission, VibeSDR uses your device location **only** to
 sort and filter the list of available SDR instances by distance (nearest first).
 
-- Your location is sent **only** to the public instance directory
-  (`instances.ubersdr.org`) as latitude/longitude **at the moment you refresh the
-  list**, so it can return instances ordered by distance. It is not stored by the
-  app or by the developer.
+- Your location is sent **only** to the public UberSDR instance directory
+  (`instances.ubersdr.org`), rounded to about a kilometre, **at the moment you
+  refresh the list**, so it can return instances ordered by distance. It is not
+  stored by the app or by the developer.
+- The VibeServer directory (`vibeserver.vibesdr.net`) receives **no location at
+  all**: the app downloads the list and sorts it by distance on your device.
 - Location is **entirely optional**. If you deny or disable it, every other feature
   of the app continues to work normally — you can still browse and use every
   instance; the list simply won't be sorted by distance.
@@ -42,6 +67,20 @@ address is necessarily visible to the receiver you connect to, as with any netwo
 connection. These receivers are operated by independent third parties and are not
 controlled by the developer; their own logging and privacy practices are their
 responsibility.
+
+A VibeServer's owner can see, on their own admin page, the address, country and
+network of whoever is connected, and the frequency they are listening to. That
+view is held in the server's memory on the owner's hardware, is not sent to the
+developer or anywhere else, and lets the owner block abuse of their radio. Servers
+reached through the public directory pass through Cloudflare's network on the way,
+as any website does.
+
+### The VibeServer directory
+Server owners who choose to list a server register its name, address and approximate
+position with the directory. The directory records the registering address to limit
+abuse, and nothing about listeners: browsing the list is an ordinary web request
+that is not logged by the developer. An owner can delist with one press, effective
+immediately.
 
 ### On-device data
 The following are stored **only on your device** and are never transmitted to the
@@ -80,6 +119,12 @@ nothing from it, and it phones home to nobody. If you choose to make it reachabl
 from the internet, anyone you give the address to can connect and listen, and the
 connection logs it keeps are yours alone — so set a PIN if it is not meant to be
 public.
+
+### Diagnostics
+If something breaks you can build a diagnostics report from the app and share it
+yourself, through the system share sheet. It is assembled on demand, shown to you
+first, and never sent by the app. It contains no PIN, password, callsign or precise
+location.
 
 ## Permissions
 
