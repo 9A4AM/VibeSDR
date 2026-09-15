@@ -2620,6 +2620,8 @@ static std::atomic<bool> g_rspAgcSetLock{false};
  *  start-up kick — which is what made it walk several steps and disturb the IF AGC. */
 static std::atomic<int>  g_rspRfAgcStart{-1};
 static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
+static std::atomic<bool> g_dabIfHeld{false};      // ★ the DAB IF hold is in force (see the hold block)
+static std::atomic<bool> g_dabOverClear{false};   // ★ the hold was released for overload — the RF ceiling was its doing
 /** ★ WHEN the loop last settled the LNA (monotonic secs) — the "gain memory" the kick may hand
  *  over from. Stuart, 2026-09-15: "if we have a gain memory then we use that, speeds the whole
  *  process up, but starting from scratch or if it's not been used in a long time then play it
@@ -2828,8 +2830,14 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         static int dabOverState = -1, dabRuleBlock = -2;
         const int blkR = g_dabChannel.load(std::memory_order_relaxed);
         if (blkR != dabRuleBlock) { dabRuleBlock = blkR; dabOverState = -1; }
+        if (g_dabOverClear.exchange(false, std::memory_order_relaxed)) dabOverState = -1;
         const double pk = sdrp->adcPeakDbfs();
-        const bool over = sdrp->overloaded();
+        /* ★ An overload while the IF is HELD LOW is the IF's doing, not the LNA's: 10D 23:44:12
+         *   held 26 dB (a transient from the coarse jump), the API overloaded at a filtered peak
+         *   of -10 and -20, and two rungs were taken away and their ceiling remembered — the
+         *   block ended at 2/9. The hold releases itself on overload; the LNA steps back only
+         *   when the IF has no room left to give (≥ 45 dB) or is not held at all. */
+        const bool over = sdrp->overloaded() && (!g_dabIfHeld.load(std::memory_order_relaxed) || mean >= 45.0);
         const int curNow = sdrp->currentLnaState();
         if (over) dabOverState = std::max(dabOverState, curNow);
         /* ★★★ THE IF AGC ABSORBS EVERY RUNG WE ADD, SO THE PEAK METER CANNOT SEE THEM. 22:52:
@@ -8567,7 +8575,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (dabOn && blkNow != dabArmedBlock) { dabArmedBlock = blkNow; dabHoldArmedAt = nowH; }
                 if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
                     sdrp->setIfAgc(true); sfericHold(10.0);   // ★ the loop ramps the band on re-enable — not a strike
-                    dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
+                    dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH; g_dabIfHeld.store(false, std::memory_order_relaxed);
                     LOGI("RSP IF AGC: released — %s", dabOn ? "block changed" : "DAB left");
                 } else if (dabIfHeld) {
                     /* ★ Released only for a reason the AGC can answer: the converter near the
@@ -8576,22 +8584,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   the loop could only have gone from 55 to 59 and back, and did, every
                      *   5 s. The RF rule owns the level in DAB now; the IF just holds still. */
                     const double pk = sdrp->adcPeakDbfs();
-                    const bool drift = sdrp->overloaded() || (std::isfinite(pk) && (pk > -3.0 || pk < -35.0));
-                    if (!drift) dabDriftSince = {};
+                    const bool over = sdrp->overloaded();
+                    const bool drift = std::isfinite(pk) && (pk > -3.0 || pk < -35.0);
+                    if (!drift && !over) dabDriftSince = {};
                     else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = nowH;
-                    else if (std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5) {
+                    /* ★ Overload releases AT ONCE — the IF loop is the fast, fine control and the
+                     *   one that can answer it; a level drift waits 5 s. */
+                    if (over || std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5) {
                         sdrp->setIfAgc(true); sfericHold(10.0);
                         dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
-                        LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS%s for 5 s", pk, sdrp->overloaded() ? " (overload)" : "");
+                        g_dabIfHeld.store(false, std::memory_order_relaxed);
+                        if (over) g_dabOverClear.store(true, std::memory_order_relaxed);
+                        LOGI("RSP IF AGC: released to re-settle — ADC peak %.1f dBFS%s", pk, over ? " (overload — the IF loop takes it)" : " for 5 s");
                     }
                 } else if (dabOn && sdrpAgcWanted && !sdrpSettling && graceDone && sdrp->ifAgcReporting()
+                           && sdrp->secondsSinceAgcRestart() >= 6.0     // ★ settled after the last LNA write / re-init — 23:44:12 held a 26 dB transient
                            && std::chrono::duration_cast<std::chrono::seconds>(nowH - dabHoldArmedAt).count() >= 8) {
                     const int gr = sdrp->currentIfGr();
                     if (gr >= 24 && gr <= 55) {
                         sdrp->setIfAgc(false);
                         sdrp->setIfGainReduction(gr);
                         sfericHold(6.0);   // ★ Stuart, 00:20: "getting a storm warning on the RSP" — our toggles, not lightning
-                        dabIfHeld = true; dabHeldBlock = blkNow; dabDriftSince = {};
+                        dabIfHeld = true; g_dabIfHeld.store(true, std::memory_order_relaxed); dabHeldBlock = blkNow; dabDriftSince = {};
                         LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, sdrp->adcPeakDbfs());
                         vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
                     }
