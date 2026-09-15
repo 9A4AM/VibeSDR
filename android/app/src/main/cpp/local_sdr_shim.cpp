@@ -2917,6 +2917,12 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         return;
     }
 
+    /* ★★★ NOT WHILE THE IF AGC IS STILL RECOVERING FROM A RESTART. Our own LNA write, a rate
+     *     change and a stream restart all disable/enable the AGC, which parks it at 59 dB and
+     *     leaves it its 5 s decay to come down. Judging inside that window judges the restart:
+     *     on DAB every block hop produced "59.0 dB for 1.0 s → step down" one second after the
+     *     hop, until the front end was starved (Lenovo RSP1A, 2026-09-15 15:51). */
+    if (sdrp->secondsSinceAgcRestart() < 6.0) { outMs = 0; outDir = 0; return; }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
@@ -3002,8 +3008,9 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
              "taking the step anyway, because staying here leaves it no control at all",
              mean <= 22.0 ? "maximum-gain" : "minimum-gain", mean);
     LOGI("RSP RF AGC: IF reduction averaged %.1f dB for %.1f s, %s the %d-%d dB window "
-         "(%.0f dB past the trigger) — RF gain state %d -> %d",
-         mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want);
+         "(%.0f dB past the trigger) — RF gain state %d -> %d (ADC peak %.1f dBFS, system gain %.1f dB)",
+         mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want,
+         sdrp->adcPeakDbfs(), sdrp->systemGainDb());
     /* ★ Remember what we stepped ON. The next settled window checks whether this moved; if it
      *   never does, we are steering by a frozen number and must stop. See the open-loop test. */
     grAtLastStep     = (int)llround(mean);

@@ -111,6 +111,23 @@ public:
      *  to the commanded 59 dB, and the RF loop walked the LNA to its end stop on that echo. */
     bool ifAgcReporting() const { return liveValid_.load(std::memory_order_relaxed)
                                       && !liveStale_.load(std::memory_order_relaxed); }
+    /** ★ Seconds since the IF AGC's loop was last RESTARTED by us — every disable/enable dance
+     *  (an LNA write, a rate change, a stream restart) puts it back at its 59 dB rail and it then
+     *  takes its decay (5 s) to come down. A reading inside that window is the restart, not the
+     *  signal. Measured 2026-09-15: each DAB block hop produced "59 dB for 1.0 s" one second after
+     *  the hop and an RF step down, until the front end was starved. */
+    double secondsSinceAgcRestart() const {
+        const long long t = agcRestartedAtMs_.load(std::memory_order_relaxed);
+        if (t <= 0) return 1e9;
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        return (now - t) / 1000.0;
+    }
+    void noteAgcRestart() {
+        agcRestartedAtMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+    }
+    std::atomic<long long> agcRestartedAtMs_{0};
     /** ★ How many LNA states exist AT THIS FREQUENCY. Fewer below 60 MHz and in L-band than in
      *  between, per the API's own per-band constants — the no-argument form answers for wherever
      *  the radio is tuned now. Offering a state the band does not have gives a gain loop a dead

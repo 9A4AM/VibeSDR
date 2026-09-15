@@ -514,6 +514,7 @@ void SdrplaySource::setSampleRate(double hz) {
             agc.enable = want;
             api().Update(impl_->dev.dev, impl_->dev.tuner,
                          sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+            noteAgcRestart();
         }
         liveStale_.store(true, std::memory_order_relaxed);
     }
@@ -566,6 +567,7 @@ bool SdrplaySource::restartStream(std::string& err) {
             agc.enable = want;
             api().Update(impl_->dev.dev, impl_->dev.tuner,
                          sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+            noteAgcRestart();
         }
     }
     std::fprintf(stderr, "sdrplay stream re-initialised after a stall\n");
@@ -937,6 +939,7 @@ void SdrplaySource::setLnaState(int state) {
         agc.enable = want;
         api().Update(impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        noteAgcRestart();
     }
 }
 
