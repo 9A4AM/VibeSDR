@@ -139,7 +139,15 @@ public sharing off, or turn the machine off, and the listing goes with it. An ow
 who wants to be sure can also delist with one press, effective immediately. The
 friendly name is held for that server for a week, so a reboot, an outage or a
 holiday does not cost you it; after a week without the server it is released, to
-you on new hardware or to anybody else.
+you on new hardware or to anybody else. The name belongs to the server's own
+identifier, which lives in its configuration: keep that configuration across a
+reinstall and the name comes back with it; lose it and the old name frees itself a
+week later, with no person to ask.
+
+**No email address, no account, no contact details.** Listing a server never asks
+who you are. Some directories collect an email address at sign-up; this one holds
+nothing that could identify the owner, which is also why there is nothing to
+recover, nothing to leak and nothing to make a data-protection request about.
 
 The tunnel and the directory were built this way on purpose: the tunnel so that
 serving a radio never exposes your home connection, and the directory so that
