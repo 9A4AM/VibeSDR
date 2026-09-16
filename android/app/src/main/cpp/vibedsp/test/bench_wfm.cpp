@@ -44,7 +44,9 @@ int main(int argc, char** argv) {
     RxPipeline pipe;
     RxPipeline::Callbacks cb;
     cb.audio = onAud; cb.spectrum = onSpec;
-    pipe.start(fs, 1024, 20.0, 48000, cb);
+    const double fps = std::getenv("VIBE_BENCH_FPS") ? std::atof(std::getenv("VIBE_BENCH_FPS")) : 20.0;   // ★ spectrum frame rate under test
+    const int bins = std::getenv("VIBE_BENCH_BINS") ? std::atoi(std::getenv("VIBE_BENCH_BINS")) : 1024;
+    pipe.start(fs, bins, fps, 48000, cb);
     pipe.setTune(fc, nfm ? RxPipeline::Mode::NFM : RxPipeline::Mode::WFM,
                  nfm ? 12500.0 : (std::getenv("VIBE_BENCH_BW") ? std::atof(std::getenv("VIBE_BENCH_BW")) : 200000.0));   // ★ VIBE_BENCH_BW: the WFM width under test
 
