@@ -834,6 +834,7 @@ static std::string dabStatusJson() {
  *  ★ DAB is exclusive by nature: an ensemble IS the capture, so there is no shared-dial meaning
  *    to preserve while it runs. */
 static std::atomic<int>    g_dabSavedGain{-1};
+static std::atomic<int>    g_dabSavedLna{-1};    // ★ the RSP's LNA state on DAB entry — MW gets it back on exit
 /* ★★★ THE ACTUAL STATE, NOT JUST THE LOCK. The exit path used to restore only g_vsLockedCentre
  *  and g_vsLockedRate, guarded by `if (c > 0.0)` — so on a receiver with NO centre lock (c == 0)
  *  it restored NOTHING. The dongle stayed on the multiplex at 2.048 MS/s while the client
@@ -9274,6 +9275,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_vsLockedCentre.store(g_dabSavedCentre.load());
         g_vsLockedRate.store(g_dabSavedRate.load());
         LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+        { const int l = g_dabSavedLna.exchange(-1, std::memory_order_relaxed);
+          if (l >= 0 && useSdrplay() && sdrp && l != sdrp->currentLnaState()) {
+              LOGI("RSP RF AGC: DAB left — LNA state back to %d, where the carrier had it", l);
+              LocalSdrShim::instance().setLnaState(l);
+              g_rspRfAgcLastLna.store(l, std::memory_order_relaxed);
+          } }
         g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
         LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
         /* ★ And give the AGC target back. -999 means the owner had never set one, so restore the
@@ -11454,6 +11461,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
                 g_dabSavedAgcOn.store(g_rtlAgc.load(std::memory_order_relaxed));
+                /* ★ The RSP's LNA state too. DAB's rule opens the front end for a weak
+                 *   multiplex; back on medium wave that state pinned the IF at 59 and the window
+                 *   rule took a rung 7 s after EVERY return (suite runs 1-3, 23:55-00:25, one
+                 *   step per exit). The state the carrier had is the state it gets back. */
+                g_dabSavedLna.store(useSdrplay() && sdrp ? sdrp->currentLnaState() : -1, std::memory_order_relaxed);
                 /* ★ The RSP's IF AGC target, dropped to leave OFDM its peak headroom — see
                  *   kDabAgcSetPoint. Only when this radio HAS one, and only if it is not already
                  *   at or below it: an owner who has deliberately set -45 must not be raised. */
