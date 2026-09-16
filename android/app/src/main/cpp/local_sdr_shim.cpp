@@ -2622,6 +2622,7 @@ static std::atomic<int>  g_rspRfAgcStart{-1};
 static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
 static std::atomic<bool> g_dabIfHeld{false};      // ★ the DAB IF hold is in force (see the hold block)
 static std::atomic<bool> g_dabOverClear{false};   // ★ the hold was released for overload — the RF ceiling was its doing
+static std::atomic<long long> g_dabRfStepAt{0};    // ★ steady-clock seconds of the DAB rule's last LNA write — the hold waits 8 s after it
 /** ★ WHEN the loop last settled the LNA (monotonic secs) — the "gain memory" the kick may hand
  *  over from. Stuart, 2026-09-15: "if we have a gain memory then we use that, speeds the whole
  *  process up, but starting from scratch or if it's not been used in a long time then play it
@@ -2848,7 +2849,13 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *     room to give (under 52 dB), and a loop pinned at its rail (58+) means too much RF
          *     already, whatever the meter says. Stuart's hand-found optimum was state 3 with
          *     the IF at 47-55: gain up to where the IF sits high but not pinned. */
-        int ddir = over || (std::isfinite(pk) && pk > -6.0) || mean >= 58.0 ? +1
+        /* ★★ A HOT PEAK IS THE IF LOOP'S TO ANSWER WHILE IT HAS ROOM. Suite run 1 (23:54): 11D at
+         *    state 7 with the IF at 38-42 dB read a -0.5 dBFS spike, the LNA went to 8, the IF
+         *    loop ran to its 20 dB rail, -19 dBFS wanted the rung back, and 7 <-> 8 thrashed with
+         *    every step breaking frames — while the IF had 20 dB of room the whole time. The LNA
+         *    steps back for a hot peak only once the IF loop is high (≥ 50 dB), or the API says
+         *    overload, or the loop is pinned at 58+. */
+        int ddir = over || mean >= 58.0 || (mean >= 50.0 && std::isfinite(pk) && pk > -6.0) ? +1
                  : (std::isfinite(pk) && pk < -14.0 && mean < 52.0) ? -1 : 0;
         if (ddir < 0 && dabOverState >= 0 && curNow - 1 <= dabOverState) ddir = 0;   // ★ the ceiling
         if (ddir == 0) { outMs = 0; outDir = 0; return; }
@@ -2869,6 +2876,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
         LocalSdrShim::instance().setLnaState(want);
         sfericHold(6.0);   // ★ a ~20 dB step across the band is not a strike either
+        g_dabRfStepAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
         g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
         g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
@@ -8590,7 +8598,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     else if (dabDriftSince.time_since_epoch().count() == 0) dabDriftSince = nowH;
                     /* ★ Overload releases AT ONCE — the IF loop is the fast, fine control and the
                      *   one that can answer it; a level drift waits 5 s. */
-                    if (over || std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5) {
+                    if (over || (dabDriftSince.time_since_epoch().count() != 0 &&
+                                 std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5)) {   // ★ an unset timer read as 'since 1970' and released 70 ms after every hold
                         sdrp->setIfAgc(true); sfericHold(10.0);
                         dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
                         g_dabIfHeld.store(false, std::memory_order_relaxed);
@@ -8599,6 +8608,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 } else if (dabOn && sdrpAgcWanted && !sdrpSettling && graceDone && sdrp->ifAgcReporting()
                            && sdrp->secondsSinceAgcRestart() >= 6.0     // ★ settled after the last LNA write / re-init — 23:44:12 held a 26 dB transient
+                           && (std::chrono::duration_cast<std::chrono::seconds>(nowH.time_since_epoch()).count() - g_dabRfStepAt.load(std::memory_order_relaxed)) >= 8   // ★ and the RF rule quiet for 8 s
                            && std::chrono::duration_cast<std::chrono::seconds>(nowH - dabHoldArmedAt).count() >= 8) {
                     const int gr = sdrp->currentIfGr();
                     if (gr >= 24 && gr <= 55) {
