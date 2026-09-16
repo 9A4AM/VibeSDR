@@ -171,8 +171,12 @@ void ZoomSpectrum::rebuild_() {
 // Collect decimated samples until there are `fftN_` of them, then FFT, crop and emit — but only
 // when the rate gate allows, so a high zoom does not quietly raise the frame rate.
 void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const float*, int)>& cb) {
-    for (int i = 0; i < n; ++i) {
-        acc_[accN_++] = x[i];
+    // ★ Block copies into the window, not a sample-at-a-time store (2026-09-16); the transform
+    //   fires at exactly the same sample as before.
+    for (int i = 0; i < n; ) {
+        const int chunk = std::min(n - i, fftN_ - accN_);
+        std::memcpy(acc_.data() + accN_, x + i, (size_t)chunk * sizeof(cf32));
+        accN_ += chunk; i += chunk;
         if (accN_ < fftN_) continue;
         // Transform EVERY window; the rate gate decides when to SEND, not whether to compute.
         {

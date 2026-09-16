@@ -78,6 +78,19 @@ set(VIBEDSP_SRC "")
 foreach(f ${VIBEDSP_NAMES})
     list(APPEND VIBEDSP_SRC "${CPP_DIR}/vibedsp/${f}")
 endforeach()
+# ── 32-bit ARM (2026-09-16) ────────────────────────────────────────────────────
+# ★ armv7l (a 32-bit OS on a Pi 2/3/4, or an armeabi-v7a-class board) has NEON — every kernel in
+#   vibedsp and the DAB headers now builds for it (see vibedsp/neon_compat.h) but only if the
+#   compiler is TOLD; Debian's armhf default is VFPv3-D16 with no NEON.
+# ★ armv6l (Pi Zero W, Pi 1) has no NEON at all: the scalar path, ARM mode (Thumb-1 cannot do the
+#   hard-float ABI), and libatomic for the 64-bit atomics the pipeline's counters use.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv7")
+  add_compile_options(-mfpu=neon-vfpv4)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
+  add_compile_options(-marm -march=armv6 -mfpu=vfp)
+  link_libraries(atomic)
+endif()
+
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
