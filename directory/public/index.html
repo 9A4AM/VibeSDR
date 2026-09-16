@@ -459,6 +459,9 @@
   .dBand:hover rect:first-child { fill-opacity: 1; }
   .dGap    { fill: rgba(255,176,0,.05); }
   .dGapTx  { fill: var(--dim); font-size: 9px; text-anchor: middle; letter-spacing: .08em; }
+  /* ★ The captions on the glass: the title in the panel's phosphor, the hint dimmer beside it. */
+  .dCap    { fill: var(--phosphor); font-size: 10px; letter-spacing: .1em; font-weight: 600; text-anchor: start; }
+  .dCapSub { fill: var(--dim); letter-spacing: .03em; font-weight: 400; text-transform: none; }
   /* ★ The VFO needles: amber for the first, red for the one that closes the range. Both heavier
        than a hairline — this is a needle on a dial, not a gridline. */
   .dNeedle { stroke-width: 2; }
@@ -545,7 +548,7 @@
          ★ Two lines, because one was already at the edge of readable and this doubles it. -->
     <div class="dialSteps">Filter the servers by any of these, alone or together:
       <ul>
-        <li><b>Frequency</b> — click a band on the band plan (several can be selected), or use the arrows to place the two markers on the dial; one marker asks who can hear that frequency, both mark a range. Zoom with the buttons and drag the yellow box on the overview to move the zoomed view.</li>
+        <li><b>Frequency</b> — click a band on the band plan (several can be selected), or use the arrows to place the two markers on the dial; one marker asks who can hear that frequency, both mark a range. Zoom with the buttons; on the Full Network Range dial, drag the yellow box to move the Zoomed View.</li>
         <li><b>Location</b> — choose a country, several countries, or a whole region.</li>
         <li><b>Modes &amp; decoders</b> — the buttons below the dial keep only servers that offer them.</li>
       </ul></div>
@@ -1641,7 +1644,12 @@ function tickStep(spanHz, px) {
  * ★★ The needles are the SEARCH and they persist while you travel: place one at 145 MHz, drag the
  *    viewport to 70 cm, place the second, and the pair is the query. Nothing is lost by moving.
  */
-const DETAIL_H = 96, OVER_H = 62, DIAL_GAP = 18;
+const DETAIL_H = 96, OVER_H = 62, DIAL_GAP = 34;
+// ★ Each dial carries its own caption on the glass, so the reader is told which instrument is
+//   which before reading it (Stuart, 2026-09-16: "have the top dial titled detailed or zoomed …
+//   bottom dial … Full Network Range, move the yellow box to change the zoomed in range").
+//   CAP_H is the room the caption takes above the row; the rows themselves are unchanged.
+const CAP_H = 16;
 
 /** ★ The window a first-time visitor lands on: DC to the top of 2 m, where the plan really shows.
  *   Region-aware, because the plan is — and clamped to what the network can actually hear. */
@@ -1682,18 +1690,21 @@ function renderDial() {
   // ── the DETAIL dial ───────────────────────────────────────────────────────────────────────
   const det = all.map((g) => ({ ...g, lo: Math.max(g.lo, view[0]), hi: Math.min(g.hi, view[1]) }))
                  .filter((g) => g.hi > g.lo);
+  parts.push(`<text class="dCap" x="6" y="11">ZOOMED VIEW <tspan class="dCapSub">— place the red and yellow markers here</tspan></text>`);
   if (det.some((g) => g.state !== 'gap')) {
-    parts.push(drawRow(det, 0, W, { kind: 'detail', h: DETAIL_H, bandH: 20, labels: true }));
+    parts.push(drawRow(det, CAP_H, W, { kind: 'detail', h: DETAIL_H, bandH: 20, labels: true }));
   } else {
     // ★ Nobody covers the window. Say so on the glass — do not jump them somewhere else.
-    parts.push(`<text class="dGapTx" x="${W / 2}" y="${DETAIL_H / 2}">nothing in the network covers `
+    parts.push(`<text class="dGapTx" x="${W / 2}" y="${CAP_H + DETAIL_H / 2}">nothing in the network covers `
       + `${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))}</text>`);
   }
 
   // ── the WHOLE NETWORK, underneath, with the viewport on it ─────────────────────────────────
-  const oy = DETAIL_H + DIAL_GAP;
-  // ★ A hairline between them: two instruments, not one tall one.
-  parts.push(`<line class="dSplit" x1="0" y1="${DETAIL_H + DIAL_GAP / 2}" x2="${W}" y2="${DETAIL_H + DIAL_GAP / 2}"/>`);
+  const oy = CAP_H + DETAIL_H + DIAL_GAP;
+  // ★ A hairline between them, then the second caption: two instruments, not one tall one.
+  const splitY = CAP_H + DETAIL_H + Math.round(DIAL_GAP * 0.4);
+  parts.push(`<line class="dSplit" x1="0" y1="${splitY}" x2="${W}" y2="${splitY}"/>`);
+  parts.push(`<text class="dCap" x="6" y="${oy - 5}">FULL NETWORK RANGE <tspan class="dCapSub">— drag the yellow box to move the zoomed view</tspan></text>`);
   parts.push(drawRow(all, oy, W, { kind: 'over', h: OVER_H, bandH: 11, labels: false }));
   const orow = DIAL_ROWS[DIAL_ROWS.length - 1];
   if (orow) {
@@ -1728,7 +1739,7 @@ function renderDial() {
   }
   // ★ Two facts, each named — "500 Hz – 146 MHz of 500 Hz – 2 GHz" read as a puzzle (review, 2026-09-16).
   document.getElementById('dialExtent').textContent =
-    `${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}, currently viewing ${prettyHz(view[0])} – ${prettyHz(view[1])}`;
+    `${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}, currently zoomed in on ${prettyHz(view[0])} – ${prettyHz(view[1])}`;
   document.getElementById('zAll').disabled = !zoomed;
   document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
   document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
