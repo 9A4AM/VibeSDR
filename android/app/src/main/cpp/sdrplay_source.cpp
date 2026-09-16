@@ -1335,6 +1335,8 @@ void SdrplaySource::dcRecalibrate() {}
 int SdrplaySource::currentIfGr() const { return 0; }
 float SdrplaySource::structGainDb() const { return -999.0f; }
 int SdrplaySource::currentLnaState() const { return 0; }
+int  SdrplaySource::ifAgcSetPointDbfs() const { return -30; }   // ★ no-SDRplay stub (Android/iOS link)
+void SdrplaySource::restartIfAgc(int) {}
 int SdrplaySource::bandwidthKHzForRate(double) { return 0; }
 }  // namespace vibe
 
