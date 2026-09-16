@@ -5564,6 +5564,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the landing bug were written against paths that never ran on the radio reporting it
      *  (2026-08-16). This one is populated at the handshake, for all of them. */
     std::map<net::Socket*, std::string> sockSession;
+    /* ★★★ SQUELCH ON A SHARED DIAL IS PER SESSION (Stuart, 2026-09-16: "a new user joining and
+     *     hearing silence is the worst thing"). It used to be one global gate: the first listener
+     *     to set it muted EVERYBODY, and a newcomer heard nothing with no idea why. It is only a
+     *     mute keyed on the signal level, so it is the one control that can be truly independent
+     *     even when the dial is shared — the demodulation and the Opus encode stay single, and a
+     *     squelched listener is simply handed silence packets from a second encoder that runs in
+     *     lockstep. Keyed by session so the spectrum socket that carries the message and the audio
+     *     socket that receives the silence are the same listener. Guarded by clientMtx. */
+    struct SessionSquelch { bool on = false; float db = -100.0f; };
+    std::map<std::string, SessionSquelch> sessionSquelch;
+#ifdef VIBE_HAVE_OPUS
+    vibe::OpusAudioEncoder opusSilence;   // ★ zeros in, silence packets out, one per 20 ms like opusEnc
+#endif
     /** ★★ WHEN THIS SOCKET ARRIVED. On a SHARED dial there is one DSP fanned out to everybody, so
      *  an extra listener has no per-client chain and the admin table showed dashes for everything
      *  about them — including how long they had been there, which is not a DSP fact at all but a
@@ -9835,8 +9848,46 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  stream here, so the frames are built ONCE and fanned out — encoding per listener would
      *  produce different packet boundaries from the same samples and cost N times the CPU for no
      *  difference anyone can hear. */
+    /** Split the shared dial's audio sockets into the ones that hear the audio and the ones whose
+     *  own squelch is closed right now (their session's threshold against the shared channel
+     *  level), then send each group its own stream — the silence group from opusSilence. */
+    void sendAudioPcmSquelchAware(const std::vector<std::shared_ptr<net::Socket>>& socks,
+                                  const int16_t* pcm, int count, int ch) {
+        std::vector<std::shared_ptr<net::Socket>> open, muted;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            const float level = channelDb.load();
+            for (auto& sk : socks) {
+                bool closed = false;
+                if (sk) {
+                    auto it = sockSession.find(sk.get());
+                    if (it != sockSession.end()) {
+                        auto q = sessionSquelch.find(it->second);
+                        if (q != sessionSquelch.end() && q->second.on && level < q->second.db) closed = true;
+                    }
+                }
+                (closed ? muted : open).push_back(sk);
+            }
+        }
+        if (!open.empty()) sendAudioPcm(open, pcm, count, ch);
+        if (!muted.empty()) {
+            std::vector<int16_t> zeros((size_t)count * ch, 0);
+            sendAudioPcm(muted, zeros.data(), count, ch, /*silence=*/true);
+        }
+#ifdef VIBE_HAVE_OPUS
+        else if (audioWantsOpus.load()) {
+            // ★ Keep the silence encoder in lockstep even while nobody is muted, so the moment
+            //   somebody is, its first packet is not a half-filled frame.
+            std::vector<int16_t> zeros((size_t)count * (ch == 1 && !audioForceMono.load() ? 2 : ch), 0);
+            std::vector<std::vector<uint8_t>> drop;
+            opusSilence.setBitrate(opusBitrateFor(ch));
+            opusSilence.encode(zeros.data(), count, ch == 1 && !audioForceMono.load() ? 2 : ch, drop);
+        }
+#endif
+    }
+
     void sendAudioPcm(const std::vector<std::shared_ptr<net::Socket>>& socks,
-                      const int16_t* pcm, int count, int ch) {
+                      const int16_t* pcm, int count, int ch, bool silence = false) {
         if (socks.empty()) return;
         auto fanOut = [&](const std::vector<uint8_t>& frame) {
             for (auto& sk : socks)
@@ -9867,9 +9918,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
         // current web client — is never sent it, so nothing breaks; it gets PCM below.
         if (audioWantsOpus.load()) {
-            opusEnc.setBitrate(opusBitrateFor(contentCh));
+            vibe::OpusAudioEncoder& enc = silence ? opusSilence : opusEnc;   // ★ two streams, one shape
+            enc.setBitrate(opusBitrateFor(contentCh));
             std::vector<std::vector<uint8_t>> packets;
-            opusEnc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
+            enc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;   // always 48 kHz
             for (auto& pkt : packets) {
                 std::vector<uint8_t> frame; frame.reserve(6 + pkt.size());
@@ -10002,7 +10054,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 int s = (int)lround(nrOut[i] * 32767.0f);
                 pcm0[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
             }
-            sendAudioPcm(socks, pcm0.data(), n2, 1);
+            sendAudioPcmSquelchAware(socks, pcm0.data(), n2, 1);
             return;
         }
 
@@ -10019,7 +10071,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
         }
-        sendAudioPcm(socks, pcm.data(), count, ch);
+        sendAudioPcmSquelchAware(socks, pcm.data(), count, ch);
     }
 
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
@@ -12316,10 +12368,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // audio controls the local app has — and keeps the DSP server-side, so
         // the client stays a thin renderer (no duplicate DSP to drift).
         if (type == "squelch") {
-            if (!sharedGate("squelch")) return;
-            // db <= -100 means "off", matching the app's own convention.
-            if (jsonNum(msg, "db", v))
-                LocalSdrShim::instance().setSquelch(v > -100.0, (float)v);
+            // ★ This listener's own gate, never the radio's — see sessionSquelch. db <= -100 = off.
+            if (jsonNum(msg, "db", v)) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                auto it = sockSession.find(sock.get());
+                const std::string ses = it != sockSession.end() ? it->second : std::string();
+                if (!ses.empty()) { auto& q = sessionSquelch[ses]; q.on = v > -100.0; q.db = (float)v; }
+                else LocalSdrShim::instance().setSquelch(v > -100.0, (float)v);   // a socket with no session: the old whole-radio gate
+            }
             return;
         }
         if (type == "nr") {
@@ -15858,7 +15914,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           { bool mine = false;
             { std::lock_guard<std::mutex> dl(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
             if (mine) iqStopDirect(); }                          // ★ and so does the direct-mode one
-          sockSession.erase(sock.get());
+          {   // ★ and its squelch, once no socket of that session remains
+              auto it = sockSession.find(sock.get());
+              const std::string ses = it != sockSession.end() ? it->second : std::string();
+              sockSession.erase(sock.get());
+              if (!ses.empty()) {
+                  bool left = false;
+                  for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
+                  if (!left) sessionSquelch.erase(ses);
+              }
+          }
           sockSince.erase(sock.get());
           sockWarned.erase(sock.get());
           sockHandover.erase(sock.get());
