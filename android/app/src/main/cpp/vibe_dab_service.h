@@ -251,7 +251,8 @@ public:
              *     lock" was this, not the gain. */
             {
                 const DabStats& s = rx_.stats();
-                const bool noFib = s.locked && s.fibsTotal > 0 && s.fibRate < 0.05;
+                // ★ fibsTotal is the acquisition frame's count and does not grow; fibRate is the live rate.
+                const bool noFib = s.locked && s.fibRate < 0.05;
                 const auto nowW = std::chrono::steady_clock::now();
                 if (!noFib) noFibSince_ = {};
                 else if (noFibSince_.time_since_epoch().count() == 0) noFibSince_ = nowW;
