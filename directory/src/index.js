@@ -539,6 +539,51 @@ async function delist(request, env) {
   return json({ delisted: true });
 }
 
+/* ══ EiBi SHORTWAVE SCHEDULE, SERVED COMPACT ═══════════════════════════════════════════════
+ * ★ The directory's "what's on" search and receiver ranking. eibispace.de publishes one CSV per
+ *   season (sked-a26.csv from the last Sunday in March, sked-b26.csv from the last Sunday in
+ *   October); it is fetched here, reduced to the fields the page uses, and cached for a day in
+ *   the edge cache so the visitor never pulls the 1 MB file and eibispace sees one fetch a day.
+ * ★ Fields, per row: [kHz, time "0000-2400", days, ITU home country, station, language, target
+ *   area, transmitter-site code, persistence]. Persistence 8 (inactive) is dropped. Utility
+ *   stations carry persistence 90+ and are kept — DDK and Northwood are what people hunt.
+ * ★ ISO-8859-1 on the wire; decoded here so "Bécharé" survives. */
+function eibiSeasonFile(d = new Date()) {
+  const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+  const lastSun = (yy, mm) => { const t = new Date(Date.UTC(yy, mm, 0)); return t.getUTCDate() - t.getUTCDay(); };
+  const aStart = Date.UTC(y, 2, lastSun(y, 3)), bStart = Date.UTC(y, 9, lastSun(y, 10));
+  const t = d.getTime();
+  if (t >= bStart) return `sked-b${String(y % 100).padStart(2, '0')}.csv`;
+  if (t >= aStart) return `sked-a${String(y % 100).padStart(2, '0')}.csv`;
+  return `sked-b${String((y - 1) % 100).padStart(2, '0')}.csv`;
+}
+async function eibi(request) {
+  const cache = caches.default;
+  const key = new Request(new URL('/api/eibi', request.url).toString(), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const file = eibiSeasonFile();
+  const up = await fetch(`http://www.eibispace.de/dx/${file}`, { cf: { cacheTtl: 3600 } });
+  if (!up.ok) return json({ error: `eibispace.de answered ${up.status}` }, 502);
+  const text = new TextDecoder('iso-8859-1').decode(await up.arrayBuffer());
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const f = line.split(';');
+    if (f.length < 9) continue;
+    const khz = parseFloat(f[0]);
+    if (!(khz > 0)) continue;
+    const persist = parseInt(f[8], 10) || 0;
+    if (persist === 8) continue;
+    const st = f[4].trim();
+    if (!st) continue;
+    rows.push([khz, f[1].trim(), f[2].trim(), f[3].trim(), st, f[5].trim(), f[6].trim(), f[7].trim(), persist]);
+  }
+  const body = JSON.stringify({ season: file.replace(/^sked-|\.csv$/g, ''), fetched: new Date().toISOString().slice(0, 16) + 'Z', rows });
+  const res = new Response(body, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=3600, s-maxage=86400', 'access-control-allow-origin': '*' } });
+  await cache.put(key, res.clone());
+  return res;
+}
+
 async function list(env) {
   // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
   //     not selected. See schema.sql.
@@ -874,6 +919,7 @@ export default {
       if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
       if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);
+      if (p === '/api/eibi' && request.method === 'GET') return await eibi(request);
       if (p === '/api/iq' && request.method === 'POST') return await iqRegister(request, env);
       if (p === '/api/iq/off' && request.method === 'POST') return await iqOff(request, env);
       if (p.startsWith('/api/iq/') && request.method === 'GET') return await iqLookup(p.slice('/api/iq/'.length), env);
