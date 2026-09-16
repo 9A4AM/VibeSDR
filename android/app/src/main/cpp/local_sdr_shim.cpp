@@ -5479,6 +5479,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** Is THIS listener the one decoding RDS for its frequency? See rdsClaim(). */
         bool rdsDecode = false;
         std::atomic<bool> nrOn{false}, notchOn{false};
+        /* ★★★ THIS LISTENER'S SQUELCH (2026-09-16, Discord: xavxx, "Jr squelch doesn't work at any
+         *     level" on an x86 VibeServer). The only squelch handler was the SHARED-dial one, applied
+         *     in the one-VFO audio path — and every listener on a VibeServer has had its own
+         *     pipeline since V5, so the message landed, set a gate that feeds nobody, and the audio
+         *     never changed. Same family as the NR/notch fall-through above. The gate compares
+         *     against sigChanDb, the very figure this listener's `sig` message carries, so the needle
+         *     the client draws and the muting agree by construction. */
+        std::atomic<bool>  squelchOn{false};
+        std::atomic<float> squelchDb{-100.0f};
+        std::atomic<float> sigChanDb{-200.0f};   // the per-listener channel peak sent as sig.chan
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
         std::atomic<bool> stereoOn{true};
@@ -6325,9 +6335,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             outFrames = (int)fx.size();
         }
 
+        // ★ Squelch: this listener's gate against this listener's own channel level (sig.chan).
+        //   Applied after the decoders (they need the raw audio) and after the effects.
+        const bool squelched = c->squelchOn.load(std::memory_order_relaxed)
+                            && c->sigChanDb.load(std::memory_order_relaxed) < c->squelchDb.load(std::memory_order_relaxed);
         std::vector<int16_t> buf((size_t)outFrames * ch);
         for (int i = 0; i < outFrames * ch; i++) {
-            float v = out[i];
+            float v = squelched ? 0.0f : out[i];
             v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
             buf[i] = (int16_t)std::lround(v * 32767.0f);
         }
@@ -8936,6 +8950,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             if (v > pk) pk = v;
                         }
                         mine = pk;
+                        c->sigChanDb.store(pk, std::memory_order_relaxed);
                     }
                     /* ★★★ THE CONVERTER'S OWN FIGURES RIDE WITH THE SIGNAL ONES, AND THEY HAVE TO
                      *     BE SENT PERIODICALLY OR THEY ARE NOT A MEASUREMENT. `adcPeak` already
@@ -10871,6 +10886,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     and the audio did not change. See the note on ClientDsp's effect state.
             //     ★ Deliberately NOT admin-gated, unlike gain: these change only what THIS
             //       listener hears, so there is nothing shared to protect.
+            if (type == "squelch") {
+                // db <= -100 means "off", the app's and Jr's convention (see the shared handler).
+                double q;
+                if (jsonNum(msg, "db", q)) { me->squelchOn.store(q > -100.0); me->squelchDb.store((float)q); }
+                return;
+            }
             if (type == "nr") {
                 me->nrOn.store(jsonOn(msg));
                 double st;
