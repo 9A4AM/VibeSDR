@@ -900,9 +900,14 @@ function radioLine(r, s) {
   const max = Number(r.maxListeners) || (s && s.maxListeners) || 0;
   // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact.
   const sharedDial = max > 1 && !r.locked;
-  const kind = max <= 1 ? '<span title="One person listens at a time; the next waits for a free slot">one listener at a time</span>'
-             : r.locked ? '<span title="Everyone tunes their own frequency inside a window the owner has fixed">individual VFOs · locked RF centre</span>'
-                        : '<span title="Everyone hears the same dial — whoever tunes it moves it for all">shared VFO · unlocked RF centre</span>';
+  const kind = max <= 1 ? 'one listener at a time'
+             : r.locked ? 'individual VFOs · locked RF centre'
+                        : 'shared VFO · unlocked RF centre';
+  // ★ The plain-language gloss rides on the line's title — the bits are escaped, so a span in
+  //   them printed as text (Stuart's screenshot, 2026-09-16 18:03).
+  const kindTitle = max <= 1 ? 'One person listens at a time; the next waits for a free slot'
+                  : r.locked ? 'Everyone tunes their own frequency inside a window the owner has fixed'
+                             : 'Everyone hears the same dial — whoever tunes it moves it for all';
 
   const bits = [esc(range), esc(kind)];
   if (restricted && !(lo > 0) && !named.length) bits.push('restricted range');
@@ -946,7 +951,7 @@ function radioLine(r, s) {
   const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(cleanRadioName(r.name || r.driver || 'Radio'))}</span>
         <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
-      <div class="rcSub">${bits.join(' · ')}</div>
+      <div class="rcSub" title="${esc(kindTitle)}">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
       ${etiquette}
       ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
