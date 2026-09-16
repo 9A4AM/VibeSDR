@@ -563,13 +563,9 @@
            Region 1 and 1705 in Region 2; a dial labelled with the wrong plan tells a visitor a band
            ends where it does not. If switching region ever appears to add or remove a server,
            something has been computed from a label that should have been computed from a number. -->
-      <label for="rgn">Band plan</label>
-      <select id="rgn">
-        <option value="auto">follow the receivers</option>
-        <option value="1">ITU Region 1 · Europe, Africa</option>
-        <option value="2">ITU Region 2 · the Americas</option>
-        <option value="3">ITU Region 3 · Asia-Pacific</option>
-      </select>
+      <!-- ★ The band-plan dropdown is gone (Stuart, 2026-09-16: "an extra box"). The plan follows
+           the receivers on screen — all of them, or the ones the Location filter keeps — see
+           activeRegion(). -->
       <!-- ★★ TWO PANELS, NOT ONE ROW OF KEYS. The app keeps tuning and zoom on separate plates
               because they are different acts — one moves you along the dial, the other changes how
               much of it you can see — and muscle memory is built on that separation (Stuart,
@@ -1382,7 +1378,9 @@ const CONTINENTS = [
 //   not still sitting in the file doing the same job slightly differently.
 let dialView = null;                // the viewer's zoom window in Hz, or null for the whole network
 
-try { regionSel = localStorage.getItem('vsRegion') || 'auto'; } catch { /* private mode */ }
+// ★ Always 'auto' now — the plan follows the receivers (or the Location filter). A remembered
+//   manual choice from before the dropdown was removed is ignored on purpose.
+regionSel = 'auto';
 
 function loadPlan() {
   return fetch('/bandplan.json', { cache: 'no-store' })
@@ -2271,7 +2269,7 @@ function wireDial() {
   });
 
   wireCountryPicker();
-  document.getElementById('rgn').addEventListener('change', (e) => {
+  document.getElementById('rgn')?.addEventListener('change', (e) => {
     regionSel = e.target.value;
     try { localStorage.setItem('vsRegion', regionSel); } catch { /* private mode */ }
     // ★★★ LABELS ONLY. Nothing here touches which servers are listed or what is green — if a
