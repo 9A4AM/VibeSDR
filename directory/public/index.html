@@ -1664,7 +1664,9 @@ function renderDial() {
   }
 
   const H = oy + OVER_H;
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
+  // ★ width 100 %, not the measured pixel width: an SVG a few px wider than its box widens the
+  //   whole page and every row on the right clips (headless render at 430 px, 2026-09-16).
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block;max-width:100%"
                          role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
 
   // ★ Never let a simulation be mistaken for the estate.
