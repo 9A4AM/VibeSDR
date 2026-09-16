@@ -195,6 +195,13 @@ static inline cf32 dotCplx(const float* t, const float* z, int K) {
 #endif
 }
 
+// ✗ TRIED AND REJECTED (2026-09-16): a dotCplx variant with the taps stored pair-duplicated
+//   [t0 t0 t1 t1 …] so the interleaved samples multiply straight through with plain loads and no
+//   vld2q de-interleave. Measured on the Pi 3 (Cortex-A53, ARMv7 NEON): WFM 1.92 MS/s 55.5 % →
+//   62.1 % of a core, NFM 250 kS/s 5.4 % → 6.5 %. Twice the tap loads cost more than the
+//   de-interleave saved — the A53 is load-bound here, not shuffle-bound. Do not retry without a
+//   different reason. Commit 1a09ae5a's successor carries the full experiment.
+
 // ── Complex magnitude, four at a time ───────────────────────────────────────
 // |z| for n interleaved samples. AM detection and the noise blanker each did a scalar sqrt per
 // IQ sample; the recurrences that follow them stay scalar, the square roots do not have to.
