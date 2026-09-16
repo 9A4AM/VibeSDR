@@ -2855,8 +2855,12 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *    every step breaking frames — while the IF had 20 dB of room the whole time. The LNA
          *    steps back for a hot peak only once the IF loop is high (≥ 50 dB), or the API says
          *    overload, or the loop is pinned at 58+. */
-        int ddir = over || mean >= 58.0 || (mean >= 50.0 && std::isfinite(pk) && pk > -6.0) ? +1
-                 : (std::isfinite(pk) && pk < -14.0 && mean < 52.0) ? -1 : 0;
+        /* ★ Suite run 2, 10D: 5 -> 0 one rung at a time with the IF reading 37, 42, 45, 49, 51 —
+         *   every step passed "under 52", the loop absorbed each rung, state 0 overloaded and the
+         *   block ended pinned at 59 with 7 % erased. A rung is ~5 dB here, so the IF needs ten
+         *   of room before another is added (< 48), and 55+ already means too much RF. */
+        int ddir = over || mean >= 55.0 || (mean >= 50.0 && std::isfinite(pk) && pk > -6.0) ? +1
+                 : (std::isfinite(pk) && pk < -14.0 && mean < 48.0) ? -1 : 0;
         if (ddir < 0 && dabOverState >= 0 && curNow - 1 <= dabOverState) ddir = 0;   // ★ the ceiling
         if (ddir == 0) { outMs = 0; outDir = 0; return; }
         if (ddir != outDir) { outDir = ddir; outMs = 0; }
