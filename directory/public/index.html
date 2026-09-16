@@ -283,7 +283,8 @@
        single long string re-centres the whole header every time the text changes. */
   .dialHint2 { display: block; }
   .dialSteps { flex-basis: 100%; color: var(--dim); font-size: 11.5px; line-height: 1.55; letter-spacing: .02em; text-transform: none; font-weight: 400; }   /* ★ not the title's capitals — three sentences in caps are unreadable */
-  .dialSteps ol { margin: 4px 0 0; padding-left: 18px; }
+  .dialSteps ol, .dialSteps ul { margin: 4px 0 0; padding-left: 18px; }
+  .dialSteps b { color: var(--text); font-weight: 600; }
   .dialSteps li { margin: 2px 0; }
   /* ★★ PHONES (Stuart's iPhone, 2026-09-16): the badge rows ran off the right edge — .caps and
      .rcRight never wrapped — and the server name folded into three lines to make room; the
@@ -542,12 +543,12 @@
              reachable only by pressing a button twice on a hunch. Stuart asked for a line; this is
              it, written from the handler rather than from the screen (see the marker keys' listeners).
          ★ Two lines, because one was already at the edge of readable and this doubles it. -->
-    <div class="dialSteps">To filter servers:
-      <ol>
-        <li>Set a frequency range — click a band on the band plan (several can be selected), or use the tuning arrows to drop the two markers on the dial. Use the zoom buttons to zoom in and out, and drag the yellow box on the overview to move the zoomed range.</li>
-        <li>Optional: use the dropdown to choose a country, several countries, or a whole region for the receivers.</li>
-        <li>Optional: use the mode buttons to see which decoders and demodulators a server offers.</li>
-      </ol></div>
+    <div class="dialSteps">Filter the servers by any of these, alone or together:
+      <ul>
+        <li><b>Frequency</b> — click a band on the band plan (several can be selected), or use the arrows to place the two markers on the dial; one marker asks who can hear that frequency, both mark a range. Zoom with the buttons and drag the yellow box on the overview to move the zoomed view.</li>
+        <li><b>Location</b> — choose a country, several countries, or a whole region.</li>
+        <li><b>Modes &amp; decoders</b> — the buttons below the dial keep only servers that offer them.</li>
+      </ul></div>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -2293,7 +2294,9 @@ window.addEventListener('resize', () => {
 
 function applyFilters() {
   const shown = ALL.filter(matches);
-  const active = bandsOn.size > 0 || redSet || yelSet || modesOn.size > 0;
+  // ★ Any filter on its own is a search — a country alone ("all servers in Brazil"), a mode alone,
+  //   or a marker. The top line and the criteria line follow (Stuart, 2026-09-16).
+  const active = bandsOn.size > 0 || redSet || yelSet || modesOn.size > 0 || countriesOn.size > 0;
 
   const sum = document.getElementById('filterSummary');
   if (!active) sum.textContent = '';
@@ -2309,7 +2312,8 @@ function applyFilters() {
       : redSet ? ` · can hear ${prettyHz(needleV)}` : yelSet ? ` · can hear ${prettyHz(needleA)}` : '';
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
     const modeTxt = modesOn.size ? ` · with ${[...modesOn].map((m) => MODE_NAMES[m]).join(' + ')}` : '';
-    sum.textContent = `Search criteria${bandTxt}${rangeTxt}${modeTxt}`
+    const ctyTxt = countriesOn.size ? ` · in ${[...countriesOn].map((c) => countryName(c)).join(', ')}` : '';
+    sum.textContent = `Search criteria${ctyTxt}${bandTxt}${rangeTxt}${modeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
       + (mute ? ` ${mute} ${mute === 1 ? 'has' : 'have'} not published a tuning range and cannot`
                 + ` be matched by frequency.` : '');
