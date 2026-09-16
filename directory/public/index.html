@@ -1896,8 +1896,12 @@ function drawRow(segsIn, y0, W, opt) {
     if (!over) {
       const w = labelPx(prettyHz(hz)) + 8;
       const lx = Math.max(1, Math.min(W - w - 1, nx - w / 2));
-      p.push(`<rect class="dVfoBox ${cls}${idle}" x="${lx.toFixed(1)}" y="${BOT - 15}" width="${w.toFixed(1)}" height="14" rx="2"/>`);
-      p.push(`<text class="dVfoTx" x="${(lx + w / 2).toFixed(1)}" y="${BOT - 4.5}">${esc(prettyHz(hz))}</text>`);
+      // ★ Two markers side by side share the space: the yellow label sits one row up when the
+      //   red one would cover it (both faded at the centre before anyone has touched them).
+      const xo = hzToXIn(axis, cls === 'a' ? needleV : needleA);
+      const lift = (cls === 'a' && xo !== null && Math.abs(xo - nx) < w + 4) ? 16 : 0;
+      p.push(`<rect class="dVfoBox ${cls}${idle}" x="${lx.toFixed(1)}" y="${BOT - 15 - lift}" width="${w.toFixed(1)}" height="14" rx="2"/>`);
+      p.push(`<text class="dVfoTx" x="${(lx + w / 2).toFixed(1)}" y="${BOT - 4.5 - lift}">${esc(prettyHz(hz))}</text>`);
     }
     p.push(`<title>${cls === 'a' ? 'Yellow marker' : 'Red marker'} · ${esc(prettyHz(hz))}${isSet ? '' : ' (not set — drag it, or use its arrows and SET)'}</title>`);
   }
