@@ -282,6 +282,9 @@
   /* ★ The second line sits under the first rather than running on — the row is centred, and a
        single long string re-centres the whole header every time the text changes. */
   .dialHint2 { display: block; }
+  .dialSteps { flex-basis: 100%; color: var(--dim); font-size: 11px; line-height: 1.55; letter-spacing: .02em; }
+  .dialSteps ol { margin: 4px 0 0; padding-left: 18px; }
+  .dialSteps li { margin: 2px 0; }
   /* ★★ PHONES (Stuart's iPhone, 2026-09-16): the badge rows ran off the right edge — .caps and
      .rcRight never wrapped — and the server name folded into three lines to make room; the
      second dial hint talked about ⌘-scroll to a thumb. Placed after the base rules so they win. */
@@ -409,7 +412,8 @@
   /* ★ It has to LOOK tappable or nobody will tap it — an underline and a pointer, not a button
    *  chrome, because it is still the count first and a shortcut second. Only styled when it has
    *  content, so an empty span is not a dangling underline. */
-  .countJump:not(:empty) { cursor: pointer; text-decoration: underline;
+  .countJump .jump { text-decoration: underline; color: var(--accent); }
+  .countJump:not(:empty) { cursor: pointer; text-decoration: none;
                            text-underline-offset: 3px; text-decoration-style: dotted; }
   .countJump:not(:empty):hover, .countJump:not(:empty):focus-visible { color: var(--accent); }
   .dBandHit { fill: transparent; cursor: pointer; }
@@ -523,15 +527,19 @@
      ★ Step 3 of briefs/BRIEF-directory-network-dial.md: the union bar. Click, drag, band labels and
        zoom are steps 4-6 and are not here yet. -->
 <section class="dialWrap" id="dialWrap" hidden>
-  <div class="dialTitle"><span>What the network can hear</span><b id="dialExtent"></b>
+  <div class="dialTitle"><span>What the network can hear:</span><b id="dialExtent"></b>
     <!-- ★★★ THE DIAL IS DISCOVERABLE; THE VFO KEY IS NOT. Clicking a dial to tune is obvious, and
              the hint said only that. Nothing said that VFO PRESSES CYCLE — anchor, then range,
              then clear — so the one feature that answers "who can hear this whole range" was
              reachable only by pressing a button twice on a hunch. Stuart asked for a line; this is
              it, written from the handler rather than from the screen (see setVfo's listener).
          ★ Two lines, because one was already at the edge of readable and this doubles it. -->
-    <span class="dialHint">click the dial or ‹ › to move the VFO · press VFO to drop an anchor, again to search the range between, again to clear</span>
-    <span class="dialHint dialHint2">click a band name to add it — several at once is fine · drag the box below to travel · ⌘-scroll to zoom</span>
+    <div class="dialSteps">To filter servers:
+      <ol>
+        <li>Set a frequency range — click a band on the band plan (several can be selected), or use the tuning arrows to drop the two markers on the dial. Use the zoom buttons to zoom in and out, and drag the yellow box on the overview to move the zoomed range.</li>
+        <li>Optional: use the dropdown to choose a country, several countries, or a whole region for the receivers.</li>
+        <li>Optional: use the mode buttons to see which decoders and demodulators a server offers.</li>
+      </ol></div>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -684,6 +692,18 @@ function state(s) {
  *   list. Making the thing that counts them the thing that takes you to them costs nothing.
  * ★ Keyboard-reachable too (role/tabindex are on the span), because a jump link that only a
  *   pointer can use is half a control. */
+/** ★ ONE SENTENCE FOR "HOW MANY" AND "HOW MANY SHOWN" — the two figures used to sit in different
+ *  places. The shown part is the link to the list, which is what a phone user needs most: the
+ *  dial stays on top, the list is one tap away (Stuart, 2026-09-16: "I do not want to move the
+ *  server list to the top and our extremely well designed search function buried below"). */
+function setCountLine(online, shown, active) {
+  const c = document.getElementById('count'); if (!c) return;
+  if (!online) { c.textContent = ''; return; }
+  const sv = (k) => `${k} server${k === 1 ? '' : 's'}`;
+  c.innerHTML = active
+    ? `${sv(online)} online · <u class="jump">showing ${shown} that meet the current search</u>`
+    : `${sv(online)} online · no search criteria — <u class="jump">showing all ${sv(online)}</u>`;
+}
 function jumpToList() {
   document.getElementById('list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -1696,8 +1716,7 @@ function renderDial() {
                   : 'Drop an anchor here, then tune to the other end';
   // ★ Two facts, each named — "500 Hz – 146 MHz of 500 Hz – 2 GHz" read as a puzzle (review, 2026-09-16).
   document.getElementById('dialExtent').textContent =
-    `Network covers ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`
-    + `  ·  Viewing ${prettyHz(view[0])} – ${prettyHz(view[1])}`;
+    `${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}, currently viewing ${prettyHz(view[0])} – ${prettyHz(view[1])}`;
   document.getElementById('zAll').disabled = !zoomed;
   document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
   document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
@@ -2221,7 +2240,7 @@ function applyFilters() {
   const active = bandsOn.size > 0 || needleA > 0 || modesOn.size > 0;
 
   const sum = document.getElementById('filterSummary');
-  if (!active) sum.textContent = `Showing all ${ALL.length} servers — tune the dial, pick a band or a mode to filter.`;
+  if (!active) sum.textContent = '';
   else {
     // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU. Older
     //    servers say nothing about what they can tune, and silently dropping them would make the
@@ -2234,7 +2253,7 @@ function applyFilters() {
       : vfoLive ? ` · can hear ${prettyHz(needleV)}` : '';
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
     const modeTxt = modesOn.size ? ` · with ${[...modesOn].map((m) => MODE_NAMES[m]).join(' + ')}` : '';
-    sum.textContent = `Showing ${shown.length} of ${ALL.length} servers${bandTxt}${rangeTxt}${modeTxt}`
+    sum.textContent = `Search criteria${bandTxt}${rangeTxt}${modeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
       + (mute ? ` ${mute} ${mute === 1 ? 'has' : 'have'} not published a tuning range and cannot`
                 + ` be matched by frequency.` : '');
@@ -2294,9 +2313,7 @@ let mapFitted = false;   // ★ fit to the receivers once, on the first render �
 function render(servers, filtered) {
   // ★ The header counts the ESTATE, not the filtered view — how many servers exist does not
   //   change because somebody typed a frequency. The filtered figure is in the summary line.
-  const n = ALL.length || servers.length;
-  document.getElementById('count').textContent =
-    n ? `${n} server${n === 1 ? '' : 's'} online` : '';
+  setCountLine(ALL.length || servers.length, servers.length, active);
 
   markers.clearLayers();
   const list = document.getElementById('list');
