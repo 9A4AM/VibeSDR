@@ -240,6 +240,30 @@ public:
             if (!started_) { started_ = true; stop_ = false;
                              worker_ = std::thread([this] { workerLoop(); }); }
             samplesIn_ += nSamples;
+            /* ★★★ LOCKED BUT DECODING NO FIBs IS A FALSE LOCK — RE-ACQUIRE. 10D, 2026-09-16 00:37
+             *     (entry trace): "locked" from second 2, every MSC frame erased, FIB rate 0.000
+             *     for 42 s, then 0.47 → 0.99 in one step and audio 43 s after entry. A step from
+             *     nothing to everything is not a signal fading in; it is the synchroniser having
+             *     settled on the wrong timing or integer carrier offset and sitting there until
+             *     something disturbed it. The FIC is the best-protected thing on the air (1/3
+             *     rate): locked with no FIBs for 4 s means the lock is wrong. armRetune is the
+             *     existing full re-acquisition (drop, reset, re-sync). Stuart's "35 seconds to
+             *     lock" was this, not the gain. */
+            {
+                const DabStats& s = rx_.stats();
+                const bool noFib = s.locked && s.fibsTotal > 0 && s.fibRate < 0.05;
+                const auto nowW = std::chrono::steady_clock::now();
+                if (!noFib) noFibSince_ = {};
+                else if (noFibSince_.time_since_epoch().count() == 0) noFibSince_ = nowW;
+                else if (std::chrono::duration_cast<std::chrono::milliseconds>(nowW - noFibSince_).count() >= 4000) {
+                    ++fibWatchdog_;
+                    std::fprintf(stderr, "[DAB] locked but no FIBs decoded for 4 s (%d of %d) — re-acquiring (%u)\n",
+                                 s.fibsOk, s.fibsTotal, fibWatchdog_);
+                    noFibSince_ = {};
+                    const double rate = rfRate_ > 0 ? rfRate_ : 2048000.0;
+                    settleDrop_ = size_t(0.25 * rate);
+                }
+            }
             if (settleDrop_ > 0) {
                 const size_t drop = nSamples < settleDrop_ ? nSamples : settleDrop_;
                 settleDrop_ -= drop;
@@ -554,6 +578,8 @@ public:
     }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer;
                      float merDb; };   // ★ merDb: the gain loop hill-climbs on it — see vsSdrplayDabGainTick
+    std::chrono::steady_clock::time_point noFibSince_{};
+    uint32_t fibWatchdog_ = 0;   // ★ false locks broken by the no-FIB watchdog
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);
         const DabStats& s = rx_.stats();

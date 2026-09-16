@@ -24383,7 +24383,12 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     //
     // ★ Three seconds of patience, then the honest message. Long enough to cover a hand-over,
     //   short enough that a radio genuinely held by OpenWebRX still says so promptly.
-    const int kTries = 12;
+    /* ★ An RSP takes longer: after ReleaseDevice the API's list can be empty for several seconds
+     *   ("listener arrived but the radio is not ours to take back — no SDRplay device at that
+     *   index", 2026-09-16 00:38, three seconds after the release; the same take-back succeeded
+     *   two minutes later). Ten seconds, and from the fourth try on by SERIAL, since the index
+     *   is whatever the service's list happens to be at that moment. */
+    const int kTries = rsp ? 40 : 12;
     const int kWaitMs = 250;
     bool ok = false;
     for (int attempt = 0; attempt < kTries && !ok; attempt++) {
@@ -24397,6 +24402,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         ok = impl->sdrp->open(impl->sdrpIndex, impl->sampleRate,
                               impl->rtlCenter.load() + impl->hwOffsetHz(),
                               impl->lastGainTenthDb, err);
+        if (!ok && attempt >= 3) { std::string e2; if (impl->sdrp->reopen(e2)) ok = true; else err = e2; }
     } else if (ahf) {
         ok = impl->ahf->open(impl->ahfIndex, impl->sampleRate, impl->rtlCenter.load(),
                              impl->lastGainTenthDb, err);
