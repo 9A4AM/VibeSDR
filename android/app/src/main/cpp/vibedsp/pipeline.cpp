@@ -562,7 +562,9 @@ void RxPipeline::rebuildAudio() {
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
-            stereo_ = true; lastStereo_ = false;
+            // ★ VIBE_WFM_MONO=1 takes the plain mono path (discriminator, low-pass, de-emphasis — no
+            //   pilot PLL, no L-R, no noise meter): the cost figure for a Pi Zero W class box (2026-09-16).
+            stereo_ = !std::getenv("VIBE_WFM_MONO"); lastStereo_ = false;
 
             // RDS: coherent 57 kHz demod -> parallel-phase data-link decoders.
             RdsDecoder::Callbacks rcb; rcb.ctx = this;

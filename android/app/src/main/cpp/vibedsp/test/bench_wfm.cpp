@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     cb.audio = onAud; cb.spectrum = onSpec;
     pipe.start(fs, 1024, 20.0, 48000, cb);
     pipe.setTune(fc, nfm ? RxPipeline::Mode::NFM : RxPipeline::Mode::WFM,
-                 nfm ? 12500.0 : 200000.0);
+                 nfm ? 12500.0 : (std::getenv("VIBE_BENCH_BW") ? std::atof(std::getenv("VIBE_BENCH_BW")) : 200000.0));   // ★ VIBE_BENCH_BW: the WFM width under test
 
     // Warm up (first feed() rebuilds the audio chain and faults the buffers in).
     for (int o = 0; o < Ni; o += 65536) pipe.feed(iq.data() + o, std::min(65536, Ni - o));
