@@ -57,7 +57,7 @@
          font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   /* ★★ THE MASTHEAD IS THE SPLASH'S, centred and tracked wide with the same amber glow. It is the
      first thing that says which product this is, and it was saying "generic dark website". */
-  header { padding: 26px 20px 18px; border-bottom: 1px solid var(--line); text-align: center; }
+  header { padding: max(26px, env(safe-area-inset-top)) 20px 18px; border-bottom: 1px solid var(--line); text-align: center; }
   /* ★★★ text-indent MATCHES letter-spacing ON EVERY CENTRED LINE. Tracking adds a trailing space
      after the LAST letter too, so a centred line sits half a space to the left without it — the
      web client learnt this the same way. */
@@ -464,6 +464,8 @@
   /* ★ The span belongs to the PAIR, so it only exists once both ends are chosen. */
   .dSpan   { fill: rgba(255,59,48,.15); }
   .dVfoBox.b { fill: #ff3b30; }
+  .dVfoBox.idle, .dNeedle.idle { opacity: .45; }   /* ★ not yet a filter — see the summary line */
+  .mk.multi { display:flex; align-items:center; justify-content:center; width:18px; height:18px; font:700 10px/1 ui-monospace,monospace; color:#0b0b0b; }
   .dVfoBox.a { fill: var(--accent); }
   .dVfoTx  { fill: #0b0b0b; font-size: 10px; text-anchor: middle; font-weight: 600;
              pointer-events: none; }
@@ -505,7 +507,7 @@
 
 <div class="legend">
   <span><i class="sh-free"></i>Free slot</span>
-  <span><i class="sh-busy"></i>No slots</span>
+  <span><i class="sh-busy"></i>Full</span>
 <!-- ★ Back in the legend now that a share can declare itself — see untilText(). It was removed
        while nothing could produce the state, which is the only reason a key entry should exist. -->
   <span><i class="sh-temp"></i>Temporary share</span>
@@ -767,6 +769,14 @@ const modesOf = (r) => (Array.isArray(r && r.modes) ? r.modes : []).map((m) => S
 /** Everything a radio can be filtered by: its modes and decoders, plus IQ48 when its raw IQ is
  *  public (Stuart, 2026-09-16: "add IQ48 option across the modes and decoders"). */
 const capsOf = (r) => modesOf(r).concat(r && r.rawIq === 'public' ? ['iq48'] : []);
+/** "RTLSDRBlog Blog V4": the USB descriptor's manufacturer ("RTLSDRBlog") and product ("Blog V4")
+ *  joined with the word they share doubled. Drop a product word the manufacturer already ends
+ *  with; every other name passes through untouched (review, 2026-09-16). */
+function cleanRadioName(n) {
+  const m = String(n).match(/^(\S+)\s+(\S+)\s+(.*)$/);
+  if (m && m[1].toLowerCase().endsWith(m[2].toLowerCase())) return `${m[1]} ${m[3]}`;
+  return String(n);
+}
 function iqBadge(r) {
   if (!r || r.rawIq !== 'public') return '';
   return `<span class="capIq" title="Raw IQ out at 48 kS/s through the tunnel — pair VibeIQ or rtl_tcp software with this receiver">IQ48</span>`;
@@ -865,9 +875,9 @@ function radioLine(r, s) {
   const max = Number(r.maxListeners) || (s && s.maxListeners) || 0;
   // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact.
   const sharedDial = max > 1 && !r.locked;
-  const kind = max <= 1 ? 'one listener at a time'
-             : r.locked ? 'individual VFOs · locked RF centre'
-                        : 'shared VFO · unlocked RF centre';
+  const kind = max <= 1 ? '<span title="One person listens at a time; the next waits for a free slot">one listener at a time</span>'
+             : r.locked ? '<span title="Everyone tunes their own frequency inside a window the owner has fixed">individual VFOs · locked RF centre</span>'
+                        : '<span title="Everyone hears the same dial — whoever tunes it moves it for all">shared VFO · unlocked RF centre</span>';
 
   const bits = [esc(range), esc(kind)];
   if (restricted && !(lo > 0) && !named.length) bits.push('restricted range');
@@ -909,7 +919,7 @@ function radioLine(r, s) {
   // ★ Badges on the top line, right-aligned so they line up card to card; the occupancy on a row
   //   of its own at the bottom (Stuart, 2026-09-15).
   const card = `<div class="rcard">
-      <div class="rcTop"><span class="rcName">${esc(r.name || r.driver || 'Radio')}</span>
+      <div class="rcTop"><span class="rcName">${esc(cleanRadioName(r.name || r.driver || 'Radio'))}</span>
         <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
       <div class="rcSub">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
@@ -1684,9 +1694,10 @@ function renderDial() {
     ? 'Drop the range and go back to one VFO'
     : needleA > 0 ? 'Close the range between the anchor and the VFO'
                   : 'Drop an anchor here, then tune to the other end';
+  // ★ Two facts, each named — "500 Hz – 146 MHz of 500 Hz – 2 GHz" read as a puzzle (review, 2026-09-16).
   document.getElementById('dialExtent').textContent =
-    `${prettyHz(view[0])} – ${prettyHz(view[1])}`
-    + `  of  ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`;
+    `Network covers ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`
+    + `  ·  Viewing ${prettyHz(view[0])} – ${prettyHz(view[1])}`;
   document.getElementById('zAll').disabled = !zoomed;
   document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
   document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
@@ -1849,7 +1860,8 @@ function drawRow(segsIn, y0, W, opt) {
     if (!(hz > 0)) continue;
     const nx = hzToXIn(axis, hz);
     if (nx === null) continue;
-    p.push(`<line class="dNeedle ${cls}" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
+    const idle = (cls === 'b' && !vfoLive && !(needleA > 0)) ? ' idle' : '';   // ★ untouched: a landing spot, not a filter
+    p.push(`<line class="dNeedle ${cls}${idle}" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
     p.push(`<polygon class="dNeedleHd ${cls}" points="${(nx - 5).toFixed(1)},${BAND_Y - 1} ${(nx + 5).toFixed(1)},${BAND_Y - 1} ${nx.toFixed(1)},${BAND_Y + 8}"/>`);
     // ★★★ AND ITS FREQUENCY, ON THE POINTER ITSELF. Without it the dial says where you are only
     //     if you can read it off the nearest numeral — and the whole point of a fixed pointer is
@@ -1857,7 +1869,7 @@ function drawRow(segsIn, y0, W, opt) {
     if (!over) {
       const w = labelPx(prettyHz(hz)) + 8;
       const lx = Math.max(1, Math.min(W - w - 1, nx - w / 2));
-      p.push(`<rect class="dVfoBox ${cls}" x="${lx.toFixed(1)}" y="${BOT - 15}" width="${w.toFixed(1)}" height="14" rx="2"/>`);
+      p.push(`<rect class="dVfoBox ${cls}${vfoLive || needleA > 0 ? '' : ' idle'}" x="${lx.toFixed(1)}" y="${BOT - 15}" width="${w.toFixed(1)}" height="14" rx="2"/>`);
       p.push(`<text class="dVfoTx" x="${(lx + w / 2).toFixed(1)}" y="${BOT - 4.5}">${esc(prettyHz(hz))}</text>`);
     }
     p.push(`<title>${cls === 'a' ? 'Anchor' : 'VFO'} · ${esc(prettyHz(hz))}</title>`);
@@ -2209,7 +2221,7 @@ function applyFilters() {
   const active = bandsOn.size > 0 || needleA > 0 || modesOn.size > 0;
 
   const sum = document.getElementById('filterSummary');
-  if (!active) sum.textContent = '';
+  if (!active) sum.textContent = `Showing all ${ALL.length} servers — tune the dial, pick a band or a mode to filter.`;
   else {
     // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU. Older
     //    servers say nothing about what they can tune, and silently dropping them would make the
@@ -2277,6 +2289,7 @@ function drawCountryHighlight() {
  *    map, as this did, leaves every previous pin behind — a filter would have made the map grow
  *    rather than narrow. */
 const markers = L.layerGroup().addTo(map);
+let mapFitted = false;   // ★ fit to the receivers once, on the first render — never yank the map back on a refresh
 
 function render(servers, filtered) {
   // ★ The header counts the ESTATE, not the filtered view — how many servers exist does not
@@ -2328,21 +2341,35 @@ function render(servers, filtered) {
   for (const d of list.querySelectorAll('details.srv'))
     if (openKeys.has(d.dataset.key)) d.open = true;
 
+  /* ★★ SERVERS ON THE SAME SQUARE SHARE ONE MARKER WITH A COUNT. Four servers showed as two dots
+   *    because three of them are Stuart's (review, 2026-09-16); a dot with "3" on it says so, and
+   *    its popup lists them all. A divIcon rather than a circleMarker so the CSS above decides the
+   *    shape — the legend, the list and the map cannot drift apart. */
+  const byPos = new Map();
   for (const s of servers) {
-    const st = state(s);
-    // ★ A divIcon rather than a circleMarker precisely so the CSS above decides the shape —
-    //   the legend, the list and the map cannot drift apart.
+    const k = `${(+s.lat).toFixed(3)},${(+s.lon).toFixed(3)}`;
+    if (!byPos.has(k)) byPos.set(k, []);
+    byPos.get(k).push(s);
+  }
+  const pts = [];
+  for (const group of byPos.values()) {
+    const s = group[0], st = state(s);
+    const free = group.some((g) => state(g).cls === 'free');
+    const cls = group.length > 1 ? (free ? 'free' : st.cls) : st.cls;
+    const n = group.length;
+    pts.push([s.lat, s.lon]);
     L.marker([s.lat, s.lon], {
-      title: `${s.name} \u2014 ${st.label}`,
+      title: group.map((g) => g.name).join(', '),
       icon: L.divIcon({
-        className: 'mkWrap', iconSize: [13, 13], iconAnchor: [7, 7], popupAnchor: [0, -7],
-        html: `<i class="mk ${st.cls}" title="${esc(st.label)}"></i>`,
+        className: 'mkWrap', iconSize: [n > 1 ? 18 : 13, n > 1 ? 18 : 13], iconAnchor: [n > 1 ? 9 : 7, n > 1 ? 9 : 7], popupAnchor: [0, -7],
+        html: `<i class="mk ${cls}${n > 1 ? ' multi' : ''}" title="${esc(st.label)}">${n > 1 ? n : ''}</i>`,
       }),
     }).addTo(markers).bindPopup(
-      `<b>${esc(s.name)}</b>${s.pin ? ' \u{1F512}' : ''}<br>${esc(s.grid)} · ${esc(st.label)}<br>` +
-      `<a href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`
+      group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${g.pin ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
+        + `<a href="${esc(listenUrl(g))}" target="_blank" rel="noopener noreferrer">Listen</a>`; }).join('<hr style="border:0;border-top:1px solid #333;margin:6px 0">')
     );
   }
+  if (pts.length && !mapFitted) { mapFitted = true; map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 }); }
 }
 
 /**
