@@ -33,8 +33,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)
 #include <arm_neon.h>
+#include "vibedsp/neon_compat.h"   // ★ 32-bit ARMv7 runs this kernel too
 #elif defined(__SSE2__)
 #include <emmintrin.h>
 #endif
@@ -186,7 +187,7 @@ private:
      *  chain that lands re and im in the two lanes of one register, so the result is a single
      *  8-byte store rather than two reductions and two scalar stores. */
     static inline void dot16(const float* r, const float* q, const float* h, float* o) {
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)
         float32x4_t ar = vmulq_f32(vld1q_f32(r),      vld1q_f32(h));
         float32x4_t ai = vmulq_f32(vld1q_f32(q),      vld1q_f32(h));
         float32x4_t h1 = vld1q_f32(h + 4), h2 = vld1q_f32(h + 8), h3 = vld1q_f32(h + 12);

@@ -46,6 +46,9 @@ public:
     /** n (0..1535) -> carrier k. */
     int carrierFor(int n) const { return toCarrier_[n]; }
 
+    /** The whole n -> k table, for the demapper's scatter loop. */
+    const int* carrierTable() const { return toCarrier_.data(); }
+
     /** carrier k -> n (0..1535). */
     int indexFor(int k) const { return fromCarrier_[carrierToIndex(k)]; }
 

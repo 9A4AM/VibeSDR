@@ -63,7 +63,7 @@
 #include <ifaddrs.h>          // ★ raw IQ out: the machine's own LAN address for the "connect to" line
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)
 #include <arm_neon.h>         // ★ raw IQ out: float → 8-bit conversion, 8 samples a go
 #elif defined(__SSE2__)
 #include <emmintrin.h>
@@ -79,8 +79,9 @@
 #include <system_error>
 #include <vector>
 
-#if defined(__aarch64__)
-  #include <arm_neon.h>             // NEON u8->f32 IQ conversion
+#if defined(__ARM_NEON)
+  #include <arm_neon.h>             // NEON u8->f32 IQ conversion (64- AND 32-bit ARM)
+  #include "vibedsp/neon_compat.h"
 #endif
 
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
@@ -231,7 +232,7 @@ static std::atomic<float> g_digGainTarget{1.0f};
 
 static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* st = nullptr) {
     const float dg = g_digGain.load(std::memory_order_relaxed);
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
     const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(dg / 128.0f);
     const uint8x16_t hiRail = vdupq_n_u8(254), loRail = vdupq_n_u8(1), one = vdupq_n_u8(1);
     uint32_t rails = 0; uint8_t mx = 0, mn = 255;
@@ -3869,7 +3870,7 @@ static std::string vsRandomCode(int n, const char* alphabet) {
  *  Stuart: "efficiency is king" — this runs for every sample of every IQ listener. */
 static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out, float gain) {
     int k = 0;
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)
     const float32x4_t g = vdupq_n_f32(gain), hi = vdupq_n_f32(1.0f), lo = vdupq_n_f32(-1.0f);
     const float32x4_t sc = vdupq_n_f32(127.0f), off = vdupq_n_f32(127.5f);
     for (; k + 8 <= n; k += 8) {

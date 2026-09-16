@@ -11,8 +11,9 @@
 #include <cstring>
 #include <vector>
 
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)
 #include <arm_neon.h>
+#include "vibedsp/neon_compat.h"   // ★ vqtbl1/vminvq/vaddv on 32-bit ARMv7 too
 #define VIBE_DAB_VITERBI_NEON 1
 #elif defined(__SSE2__)
 #include <emmintrin.h>

@@ -440,7 +440,7 @@ endforeach()
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
-target_compile_options(dab-offline PRIVATE -O2)
+target_compile_options(dab-offline PRIVATE -O3 -ffp-contract=fast)   # ★ the SERVER's flags, so a replay measures what ships (was -O2, 2026-09-16)
 vibe_sanitize(dab-offline)
 target_compile_definitions(dab-offline PRIVATE VIBE_DAB_PFFFT=1)
 target_sources(test-dab-receiver PRIVATE "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")

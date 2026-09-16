@@ -30,6 +30,13 @@
 #include <cstdint>
 #include <vector>
 
+#include <cstring>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#include "vibedsp/neon_compat.h"
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include "vibe_dab_modes.h"
 #include "vibe_dab_sync.h"
 
@@ -173,6 +180,196 @@ inline SoftBits dqpskSoftScaled(C32 product, float invAvgMag) {
     const float amp = std::sqrt(mag) * std::sqrt(invAvgMag);   // A / mean A, roughly
     const float k = kScale * amp / mag;
     return { clamp8(product.real() * k), clamp8(product.imag() * k) };
+}
+
+/** ★★★ THE WHOLE SYMBOL, FOUR CARRIERS AT A TIME — the receiver's single largest cost.
+ *
+ *  Profiled on a Pi 3 (ARMv7 NEON build, 2026-09-16, gprof with inlining off): the per-carrier
+ *  loop in DabReceiver — dqpskProduct, a double sqrt for the mean magnitude, dqpskSoftScaled's
+ *  two sqrts and a divide, then the MER's sqrt and divide — was 42 % of the entire decode, more
+ *  than the Viterbi, the FFT and the MP2 decoder put together. 1536 carriers × 76 symbols × 10.4
+ *  frames a second is 1.2 million carriers a second, and each one paid ~6 transcendental calls.
+ *
+ *  ★★ SAME MATHS, DIFFERENT SHAPE. Everything dqpskSoftScaled computed is here, algebraically
+ *     folded so the vector unit does it with estimates and no library calls:
+ *       mag  = |p|                                   (sqrt of the power)
+ *       k    = kScale · sqrt(|p|/avg) / |p|          (dqpskSoftScaled's amp/mag)
+ *            = kScale · sqrt(invAvg) · rsqrt(mag)    — ONE reciprocal square root per carrier
+ *       MER  = (|re|/mag − 1/√2)² + (|im|/mag − 1/√2)²   — the same reciprocal, reused
+ *     The products are formed in CARRIER order, which is contiguous memory: the frequency
+ *     de-interleave is a permutation, so the mean magnitude is the same whichever order it is
+ *     summed in, and only the final byte scatter into QPSK-symbol order needs the table.
+ *
+ *  ★ The estimates: vrsqrte + two Newton steps is ~1 ulp, and the soft bits are rounded to int8
+ *    anyway, so an occasional ±1 on a value near ±127 is the only visible difference. Verified
+ *    by replaying the 12B and 10C captures: FIB rate, erased frames and MP2 bad-frame counts
+ *    unchanged. The scalar path below is the reference and what a Pi Zero W (ARMv6, no NEON)
+ *    runs; it keeps the same folded arithmetic so it too calls sqrt once per carrier, not four.
+ *  ★ VIBE_DAB_SOFT_SCALE and VIBE_DAB_SOFT_MODE=linear remain honoured, read once. */
+struct DemapSoftParams {
+    float kScale = 200.0f;
+    bool  linear = false;
+    static const DemapSoftParams& get() {
+        static const DemapSoftParams p = [] {
+            DemapSoftParams q;
+            if (const char* e = std::getenv("VIBE_DAB_SOFT_SCALE")) q.kScale = float(atof(e));
+            if (const char* m = std::getenv("VIBE_DAB_SOFT_MODE")) q.linear = std::string(m) == "linear";
+            return q;
+        }();
+        return p;
+    }
+};
+
+/** Pass 1: products in carrier order and their magnitudes; returns the magnitude sum. */
+inline double dqpskProductsAndMags(const C32* cur, const C32* prev, int K, C32* prod, float* mag) {
+    double sum = 0.0;
+    int c = 0;
+#if defined(__ARM_NEON)
+    {
+        float32x4_t acc = vdupq_n_f32(0.0f);
+        for (; c + 4 <= K; c += 4) {
+            const float32x4x2_t a = vld2q_f32(reinterpret_cast<const float*>(cur + c));    // re, im
+            const float32x4x2_t b = vld2q_f32(reinterpret_cast<const float*>(prev + c));
+            float32x4x2_t p;
+            p.val[0] = vmlaq_f32(vmulq_f32(a.val[0], b.val[0]), a.val[1], b.val[1]);       // ar*br + ai*bi
+            p.val[1] = vmlsq_f32(vmulq_f32(a.val[1], b.val[0]), a.val[0], b.val[1]);       // ai*br - ar*bi
+            vst2q_f32(reinterpret_cast<float*>(prod + c), p);
+            const float32x4_t pw = vmlaq_f32(vmulq_f32(p.val[0], p.val[0]), p.val[1], p.val[1]);
+            // sqrt(pw) = pw * rsqrt(pw); a zero power must give zero, not NaN
+            float32x4_t r = vrsqrteq_f32(pw);
+            r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(pw, r), r));
+            r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(pw, r), r));
+            const uint32x4_t nz = vcgtq_f32(pw, vdupq_n_f32(1e-30f));
+            const float32x4_t m = vbslq_f32(nz, vmulq_f32(pw, r), vdupq_n_f32(0.0f));
+            vst1q_f32(mag + c, m);
+            acc = vaddq_f32(acc, m);
+        }
+        sum = double(vaddvq_f32(acc));
+    }
+#elif defined(__SSE2__)
+    {
+        __m128 acc = _mm_setzero_ps();
+        for (; c + 4 <= K; c += 4) {
+            const __m128 a0 = _mm_loadu_ps(reinterpret_cast<const float*>(cur + c));
+            const __m128 a1 = _mm_loadu_ps(reinterpret_cast<const float*>(cur + c) + 4);
+            const __m128 b0 = _mm_loadu_ps(reinterpret_cast<const float*>(prev + c));
+            const __m128 b1 = _mm_loadu_ps(reinterpret_cast<const float*>(prev + c) + 4);
+            const __m128 ar = _mm_shuffle_ps(a0, a1, _MM_SHUFFLE(2, 0, 2, 0)), ai = _mm_shuffle_ps(a0, a1, _MM_SHUFFLE(3, 1, 3, 1));
+            const __m128 br = _mm_shuffle_ps(b0, b1, _MM_SHUFFLE(2, 0, 2, 0)), bi = _mm_shuffle_ps(b0, b1, _MM_SHUFFLE(3, 1, 3, 1));
+            const __m128 pr = _mm_add_ps(_mm_mul_ps(ar, br), _mm_mul_ps(ai, bi));
+            const __m128 pi = _mm_sub_ps(_mm_mul_ps(ai, br), _mm_mul_ps(ar, bi));
+            _mm_storeu_ps(reinterpret_cast<float*>(prod + c),     _mm_unpacklo_ps(pr, pi));
+            _mm_storeu_ps(reinterpret_cast<float*>(prod + c) + 4, _mm_unpackhi_ps(pr, pi));
+            const __m128 m = _mm_sqrt_ps(_mm_add_ps(_mm_mul_ps(pr, pr), _mm_mul_ps(pi, pi)));
+            _mm_storeu_ps(mag + c, m);
+            acc = _mm_add_ps(acc, m);
+        }
+        __m128 t = _mm_add_ps(acc, _mm_movehl_ps(acc, acc));
+        t = _mm_add_ss(t, _mm_shuffle_ps(t, t, _MM_SHUFFLE(1, 1, 1, 1)));
+        sum = double(_mm_cvtss_f32(t));
+    }
+#endif
+    for (; c < K; ++c) {
+        const C32 p = dqpskProduct(cur[c], prev[c]);
+        prod[c] = p;
+        const float m = std::sqrt(p.real() * p.real() + p.imag() * p.imag());
+        mag[c] = m;
+        sum += double(m);
+    }
+    return sum;
+}
+
+/** Pass 2: soft bits (in carrier order, ±127) and the MER error sum, from the products and the
+ *  symbol's mean magnitude. `softRe`/`softIm` are K bytes each. */
+inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, float invAvg,
+                                    int8_t* softRe, int8_t* softIm) {
+    const DemapSoftParams& sp = DemapSoftParams::get();
+    const float kLin = sp.kScale * invAvg;                         // linear mode: k = kScale/avg
+    const float kAmp = sp.kScale * std::sqrt(invAvg);              // sqrt mode:   k = kAmp · rsqrt(mag)
+    const float kR2  = 0.70710678f;
+    double err = 0.0;
+    int c = 0;
+#if defined(__ARM_NEON)
+    {
+        float32x4_t eacc = vdupq_n_f32(0.0f);
+        const float32x4_t lo = vdupq_n_f32(-127.0f), hi = vdupq_n_f32(127.0f), r2 = vdupq_n_f32(kR2);
+        const float32x4_t tiny = vdupq_n_f32(1e-12f), zero = vdupq_n_f32(0.0f);
+        for (; c + 4 <= K; c += 4) {
+            const float32x4x2_t p = vld2q_f32(reinterpret_cast<const float*>(prod + c));
+            const float32x4_t m = vld1q_f32(mag + c);
+            const uint32x4_t ok = vcgtq_f32(m, tiny);
+            // 1/mag, for the MER and (in sqrt mode) for the scale
+            float32x4_t rm = vrecpeq_f32(m);
+            rm = vmulq_f32(rm, vrecpsq_f32(m, rm));
+            rm = vmulq_f32(rm, vrecpsq_f32(m, rm));
+            float32x4_t k;
+            if (sp.linear) {
+                k = vdupq_n_f32(kLin);
+            } else {
+                float32x4_t rs = vrsqrteq_f32(m);
+                rs = vmulq_f32(rs, vrsqrtsq_f32(vmulq_f32(m, rs), rs));
+                rs = vmulq_f32(rs, vrsqrtsq_f32(vmulq_f32(m, rs), rs));
+                k = vmulq_n_f32(rs, kAmp);
+            }
+            k = vbslq_f32(ok, k, zero);
+            const float32x4_t sr = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(p.val[0], k)));
+            const float32x4_t si = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(p.val[1], k)));
+            // float → int8, truncating toward zero exactly as int8_t(float) does
+            const int16x4_t ir = vmovn_s32(vcvtq_s32_f32(sr)), ii = vmovn_s32(vcvtq_s32_f32(si));
+            const int8x8_t br = vmovn_s16(vcombine_s16(ir, ir)), bi = vmovn_s16(vcombine_s16(ii, ii));
+            vst1_lane_s32(reinterpret_cast<int32_t*>(softRe + c), vreinterpret_s32_s8(br), 0);
+            vst1_lane_s32(reinterpret_cast<int32_t*>(softIm + c), vreinterpret_s32_s8(bi), 0);
+            // MER against the ideal point at this carrier's own radius
+            const float32x4_t ar = vsubq_f32(vmulq_f32(vabsq_f32(p.val[0]), rm), r2);
+            const float32x4_t ai = vsubq_f32(vmulq_f32(vabsq_f32(p.val[1]), rm), r2);
+            const float32x4_t e = vmlaq_f32(vmulq_f32(ar, ar), ai, ai);
+            eacc = vaddq_f32(eacc, vbslq_f32(ok, e, zero));
+        }
+        err = double(vaddvq_f32(eacc));
+    }
+#elif defined(__SSE2__)
+    {
+        __m128 eacc = _mm_setzero_ps();
+        const __m128 lo = _mm_set1_ps(-127.0f), hi = _mm_set1_ps(127.0f), r2 = _mm_set1_ps(kR2);
+        const __m128 tiny = _mm_set1_ps(1e-12f), absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+        for (; c + 4 <= K; c += 4) {
+            const __m128 p0 = _mm_loadu_ps(reinterpret_cast<const float*>(prod + c));
+            const __m128 p1 = _mm_loadu_ps(reinterpret_cast<const float*>(prod + c) + 4);
+            const __m128 pr = _mm_shuffle_ps(p0, p1, _MM_SHUFFLE(2, 0, 2, 0)), pi = _mm_shuffle_ps(p0, p1, _MM_SHUFFLE(3, 1, 3, 1));
+            const __m128 m = _mm_loadu_ps(mag + c);
+            const __m128 ok = _mm_cmpgt_ps(m, tiny);
+            const __m128 msafe = _mm_max_ps(m, tiny);
+            const __m128 rm = _mm_div_ps(_mm_set1_ps(1.0f), msafe);
+            __m128 k = sp.linear ? _mm_set1_ps(kLin) : _mm_div_ps(_mm_set1_ps(kAmp), _mm_sqrt_ps(msafe));
+            k = _mm_and_ps(ok, k);
+            const __m128 sr = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(pr, k)));
+            const __m128 si = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(pi, k)));
+            const __m128i ir = _mm_cvttps_epi32(sr), ii = _mm_cvttps_epi32(si);
+            const __m128i b = _mm_packs_epi16(_mm_packs_epi32(ir, ii), _mm_setzero_si128());   // re0..3, im0..3
+            const int64_t both = _mm_cvtsi128_si64(b);
+            std::memcpy(softRe + c, &both, 4);
+            std::memcpy(softIm + c, reinterpret_cast<const char*>(&both) + 4, 4);
+            const __m128 ar = _mm_sub_ps(_mm_mul_ps(_mm_and_ps(pr, absMask), rm), r2);
+            const __m128 ai = _mm_sub_ps(_mm_mul_ps(_mm_and_ps(pi, absMask), rm), r2);
+            eacc = _mm_add_ps(eacc, _mm_and_ps(ok, _mm_add_ps(_mm_mul_ps(ar, ar), _mm_mul_ps(ai, ai))));
+        }
+        __m128 t = _mm_add_ps(eacc, _mm_movehl_ps(eacc, eacc));
+        t = _mm_add_ss(t, _mm_shuffle_ps(t, t, _MM_SHUFFLE(1, 1, 1, 1)));
+        err = double(_mm_cvtss_f32(t));
+    }
+#endif
+    for (; c < K; ++c) {
+        const float re = prod[c].real(), im = prod[c].imag(), m = mag[c];
+        if (!(m > 1e-12f)) { softRe[c] = 0; softIm[c] = 0; continue; }
+        const float rm = 1.0f / m;
+        const float k = sp.linear ? kLin : kAmp / std::sqrt(m);
+        const float vr = re * k, vi = im * k;
+        softRe[c] = int8_t(vr > 127.0f ? 127.0f : vr < -127.0f ? -127.0f : vr);
+        softIm[c] = int8_t(vi > 127.0f ? 127.0f : vi < -127.0f ? -127.0f : vi);
+        const float ar = std::fabs(re) * rm - kR2, ai = std::fabs(im) * rm - kR2;
+        err += double(ar * ar + ai * ai);
+    }
+    return err;
 }
 
 inline SoftBits dqpskSoft(C32 cur, C32 prev) {

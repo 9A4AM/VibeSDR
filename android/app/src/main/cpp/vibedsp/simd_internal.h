@@ -14,8 +14,11 @@
 //    measure what the vector kernels are worth, and to prove the scalar path still computes the
 //    same answers. It is also the path an x86 build would take, so this is how that port is costed
 //    without owning an x86 box (2026-08-20).
-#if defined(__aarch64__) && !defined(VIBE_FORCE_SCALAR)
+// ★★★ __ARM_NEON, NOT __aarch64__: 32-bit ARMv7 (armeabi-v7a, the old phones) has NEON too and
+//     was silently running the scalar fallback everywhere — see neon_compat.h (2026-09-16).
+#if defined(__ARM_NEON) && !defined(VIBE_FORCE_SCALAR)
   #include <arm_neon.h>
+  #include "neon_compat.h"
   #define VIBE_NEON 1
 #endif
 

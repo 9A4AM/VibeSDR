@@ -338,32 +338,31 @@ public:
              *  into the soft bits and the Viterbi can discount faded carriers. See
              *  dqpskSoftScaled — normalising each carrier to full scale, as this used to, is the
              *  same as telling the decoder every carrier is equally trustworthy. */
+            /* ★★★ VECTORISED (2026-09-16): products, magnitudes, soft bits and the MER are formed
+             *  four carriers at a time in CARRIER order — see dqpskProductsAndMags and
+             *  dqpskSoftFromProducts in vibe_dab_ofdm.h for the folded arithmetic. The frequency
+             *  de-interleave is applied last, as a byte scatter, which is all it ever needed to be.
+             *  ★ cur/prev hold the carriers in DAB order (-768..-1, +1..+768) at indices 0..1535,
+             *    which is exactly the `src` index the old loop computed from carrierFor(). */
             std::vector<int8_t> di(size_t(K) * 2);
             prod_.resize(size_t(K));
-            double magSum = 0.0;
-            for (int nIdx = 0; nIdx < K; ++nIdx) {
-                const int kk  = fi_.carrierFor(nIdx);        // carrier that carried symbol nIdx
-                const int src = kk < 0 ? kk + 768 : kk + 767;
-                const C32 p = dqpskProduct(cur[size_t(src)], prev[size_t(src)]);
-                prod_[size_t(nIdx)] = p;
-                magSum += std::sqrt(double(p.real()) * p.real() + double(p.imag()) * p.imag());
-            }
+            mag_.resize(size_t(K));
+            softRe_.resize(size_t(K));
+            softIm_.resize(size_t(K));
+            const double magSum = dqpskProductsAndMags(cur.data(), prev.data(), K, prod_.data(), mag_.data());
             const double avg = magSum / double(K);
             const float invAvg = avg > 1e-12 ? float(1.0 / avg) : 0.0f;
-            double errSum = 0.0;
-            for (int nIdx = 0; nIdx < K; ++nIdx) {
-                const SoftBits b = dqpskSoftScaled(prod_[size_t(nIdx)], invAvg);
-                di[size_t(nIdx)]              = b.b0;        // real  -> p[n]
-                di[size_t(K) + size_t(nIdx)]  = b.b1;        // imag  -> p[n+K]
-                /* ★ MER, of the PHASE: each product against the ideal DQPSK point at its own
-                 *  magnitude. Nothing here equalises, so carrier amplitudes vary across the band
-                 *  with the channel; measuring against a single radius counted that honest
-                 *  variation as error and read 4 dB on a signal with 0.08 % raw BER. */
-                const float re = prod_[size_t(nIdx)].real(), im = prod_[size_t(nIdx)].imag();
-                const float mag = std::sqrt(re * re + im * im);
-                if (mag > 0.0f) {
-                    const float ir0 = (re >= 0 ? 0.70710678f : -0.70710678f) * mag, ii0 = (im >= 0 ? 0.70710678f : -0.70710678f) * mag;
-                    errSum += (double(re - ir0) * (re - ir0) + double(im - ii0) * (im - ii0)) / (double(mag) * mag);
+            const double errSum = dqpskSoftFromProducts(prod_.data(), mag_.data(), K, invAvg,
+                                                        softRe_.data(), softIm_.data());
+            {
+                const int* toCarrier = fi_.carrierTable();
+                int8_t* dre = di.data();
+                int8_t* dim = di.data() + K;
+                for (int nIdx = 0; nIdx < K; ++nIdx) {
+                    const int kk  = toCarrier[nIdx];
+                    const int src = kk < 0 ? kk + 768 : kk + 767;
+                    dre[nIdx] = softRe_[size_t(src)];              // real  -> p[n]
+                    dim[nIdx] = softIm_[size_t(src)];              // imag  -> p[n+K]
                 }
             }
             merErr_ += errSum; merN_ += K;
@@ -764,7 +763,9 @@ private:
 #if defined(VIBE_DAB_PROFILE)
     VibeDabStageClock stageClock_;
 #endif   // reference adjacent-carrier products, built once
-    std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
+    std::vector<C32>    prod_;      // per-symbol differential products, CARRIER order — see the CSI note
+    std::vector<float>  mag_;       // their magnitudes (pass 1 of the demapper)
+    std::vector<int8_t> softRe_, softIm_;   // soft bits in carrier order, before the de-interleave scatter
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};
     EepProfile prof_{};
