@@ -114,7 +114,8 @@ int main(int argc, char** argv) {
             if (track) rx.syncConsumed(one); else rx.syncConsumed(need / 2);   // ★ as the live worker does now — see FrameSync
             acc.erase(acc.begin(), acc.begin() + long(one * 2));
 
-        if (!selected) {
+        static const long long selectAfter = std::getenv("VIBE_DAB_SELECT_AFTER") ? atoll(std::getenv("VIBE_DAB_SELECT_AFTER")) : 0;   // ★ frames to wait before selecting (FIC assembly test)
+        if (!selected && blocks >= selectAfter) {
             const Ensemble& e = rx.ensemble();
             if (!e.services.empty()) {
                 for (const auto& kv : e.services) {
@@ -232,18 +233,23 @@ int main(int argc, char** argv) {
         }
         }   // while (acc >= one frame)
     }
+    if (std::getenv("VIBE_DAB_SELECT_AFTER")) {
+        printf("sub-channel table at the END of the capture:\n");
+        for (const auto& kv2 : rx.ensemble().subChannels) { const auto& sc = kv2.second;
+            printf("  subch %2d: startCu %4d sizeCu %4d %s protLevel %d option %d\n", sc.id, sc.startCu, sc.sizeCu, sc.eep ? "EEP" : "UEP", sc.protLevel, sc.option); }
+    }
     const DabStats& s = rx.stats();
     printf("\npushes %lld  frames %d  locked %s  FIB %d/%d = %.4f  offset %.0f Hz (%.2f ppm) carrierShift %d\n",
            blocks, s.framesSeen, s.locked ? "yes" : "no", s.fibsOk, s.fibsTotal, s.fibRate,
            s.freqOffsetHz, s.freqOffsetPpm, s.intOffsetCarriers);
     printf("erased frames: %d of %d\n", s.erasedFrames, s.framesSeen);
     {
-        static const double th[] = { 0.0, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08 };
-        printf("BER buckets (frames with raw BER above t: count, MPEG-CRC fails, ScF-CRC groups failed / checked):\n");
+        static const double th[] = { 0.0, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2 };
+        printf("BER buckets (frames with BER above t × the code's cliff: count, MPEG-CRC fails, ScF-CRC groups failed / checked):\n");
         for (double t : th) {
             int n = 0, bad = 0; uint32_t chk = 0, okc = 0;
             for (const auto& r : berRows) if (r.ber > t) { ++n; if (!r.ok) ++bad; chk += r.scfChk; okc += r.scfOk; }
-            printf("  > %.1f%%: %5d frames  crcBad %4d  scf %u/%u (%.1f%% failed)\n", t * 100.0, n, bad, chk - okc, chk,
+            printf("  > %.2f: %5d frames  crcBad %4d  scf %u/%u (%.1f%% failed)\n", t, n, bad, chk - okc, chk,
                    chk ? 100.0 * double(chk - okc) / double(chk) : 0.0);
         }
         if (csv) fclose(csv);

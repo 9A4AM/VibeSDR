@@ -2105,7 +2105,7 @@ private:
     uint32_t                mp2BerGated_  = 0;    ///< frames replaced by the raw-BER quality gate
     int                     berRun_       = 0;    ///< consecutive gated frames (drives the fade)
     std::vector<float>      lastGoodPcm_;         ///< the frame repeated while gating
-    static constexpr double kMp2BerGate   = 0.03; ///< ★ provisional until the 9A/10D captures set it
+    static constexpr double kMp2BerGate   = 0.0;  ///< ★ OFF by default — see the note at the gate; VIBE_DAB_MP2_BER (cliff units, try 2.0) enables it
     double                  rmsRef_ = 0.0;
     Resample24to2048        rs_;
     std::vector<float>      rsOut_;

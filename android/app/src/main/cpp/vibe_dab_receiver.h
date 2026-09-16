@@ -692,7 +692,7 @@ private:
      *  playing service and the scan slots. `err`/`tot` receive the raw bit-error tally. */
     std::vector<uint8_t> decodeLogicalFrame(const std::vector<int8_t>& di, size_t coded,
                                             const EepProfile& prof, const UepProfile& uprof, int dataBits,
-                                            size_t* err, size_t* tot) {
+                                            size_t* err, size_t* tot, double* worstRegion = nullptr) {
         std::vector<int8_t> mother(size_t(dataBits + 6) * 4, 0);
         if (uprof.valid) uepDepuncture(di.data(), coded, uprof, mother.data(), mother.size());
         else             eepDepuncture(di.data(), coded, prof,  mother.data(), mother.size());
@@ -700,11 +700,39 @@ private:
         if (err && tot) {
             const std::vector<uint8_t> enc = convEncode(bits.data(), bits.size());
             const size_t n = enc.size() < mother.size() ? enc.size() : mother.size();
-            for (size_t i = 0; i < n; ++i) {
-                if (mother[i] == 0) continue;
-                ++*tot;
-                if ((mother[i] < 0) != (enc[i] != 0)) ++*err;
+            /* ★★★ PER PROTECTION REGION, NOT ONE NUMBER (2026-09-16). A UEP frame keeps the
+             *  header and scale factors in its strongest region and the SAMPLE DATA in its
+             *  weakest, so the whole-frame error rate says almost nothing about the samples —
+             *  Heart 4 Counties on 10D read 7-8 % raw across the frame and decoded clean where
+             *  a rate-1/2 EEP service at the same figure was destroyed. Each region's rate is
+             *  8/(PI+8) (PI+8 of every 32 mother bits survive the puncturing), and its raw BER
+             *  is judged against the cliff FOR THAT RATE: 6.5 % at rate 1/2 (where 9A's damage
+             *  began), scaling as (0.5/rate)². The worst region's fraction of its cliff is the
+             *  frame's quality figure: 1.0 means "the samples are probably corrupt now". */
+            struct Region { size_t bits; int pi; };
+            Region regs[4]; int nr = 0;
+            if (uprof.valid) { for (int g = 0; g < 4; ++g) if (uprof.L[g] > 0) regs[nr++] = { size_t(uprof.L[g]) * 128, uprof.PI[g] }; }
+            else { if (prof.L1 > 0) regs[nr++] = { size_t(prof.L1) * 128, prof.PI1 }; if (prof.L2 > 0) regs[nr++] = { size_t(prof.L2) * 128, prof.PI2 }; }
+            size_t at = 0; double worst = 0.0;
+            for (int r = 0; r < nr; ++r) {
+                size_t re = 0, rt = 0;
+                const size_t end = std::min(n, at + regs[r].bits);
+                for (size_t i = at; i < end; ++i) {
+                    if (mother[i] == 0) continue;
+                    ++rt;
+                    if ((mother[i] < 0) != (enc[i] != 0)) ++re;
+                }
+                *tot += rt; *err += re;
+                if (rt) {
+                    const double rate  = 8.0 / double(regs[r].pi + 8);
+                    const double cliff = std::min(0.30, 0.065 * (0.5 / rate) * (0.5 / rate));
+                    worst = std::max(worst, (double(re) / double(rt)) / cliff);
+                    static int dbg = std::getenv("VIBE_DAB_REGDBG") ? 40 : 0;
+                    if (dbg > 0) { --dbg; std::fprintf(stderr, "[reg] r%d L=%zu PI=%d rate=%.2f cliff=%.3f ber=%.4f q=%.2f\n", r, regs[r].bits / 128, regs[r].pi, rate, cliff, double(re) / double(rt), (double(re) / double(rt)) / cliff); }
+                }
+                at = end;
             }
+            if (worstRegion) *worstRegion = worst;
         }
         EnergyDispersal ed; ed.apply(bits.data(), bits.size());
         std::vector<uint8_t> bytes(bits.size() / 8);
@@ -732,8 +760,8 @@ private:
         /* ★★ 15 CIFs of latency before the first complete logical frame — that is the interleaving
          *  depth, not an inefficiency. Emitting audio early means emitting frames with holes. */
         if (!deint_->ready()) return;
-        size_t err = 0, tot = 0;
-        std::vector<uint8_t> bytes = decodeLogicalFrame(di, coded, prof_, uprof_, dataBits_, &err, &tot);
+        size_t err = 0, tot = 0; double worst = 0.0;
+        std::vector<uint8_t> bytes = decodeLogicalFrame(di, coded, prof_, uprof_, dataBits_, &err, &tot, &worst);
         double ber = 0.0;
         if (tot) {
             /* ★ Raw bit error rate BEFORE the Viterbi, by re-encoding the decision — the margin
@@ -746,7 +774,8 @@ private:
          *  display figure; the MP2 quality gate in DabService needs THIS frame's rate, because a
          *  frame whose raw BER is high is one the Viterbi has probably not fully corrected — and
          *  the MPEG CRC does not cover the sample data, so nothing downstream would notice. */
-        audioBer_.push_back(ber);
+        /* ★ The quality figure — see decodeLogicalFrame's per-region tally. */
+        audioBer_.push_back(worst);      // the weakest region's BER as a fraction of its cliff
         if (audio_.size() > 64) { audio_.erase(audio_.begin()); audioBer_.erase(audioBer_.begin()); }     // bounded
     }
 
