@@ -83,6 +83,7 @@ struct DabStats {
     int    fibsOk        = 0;      ///< of 12 this frame
     int    fibsTotal     = 0;
     double fibRate       = 0.0;    ///< running pass rate, 0..1
+    int    prsReanchors  = 0;      ///< times the PRS reference was re-anchored after a level step
     int    framesSeen    = 0;
     int    intOffsetCarriers = 0;   ///< whole carriers of offset, from the phase reference
     /** ★ Frames handed to the decoders as ERASURES because the phase reference said the window
@@ -412,10 +413,29 @@ public:
          *    frame at a third of the running reference is not a fade — a fade moves the null
          *    depth too — it is a window in the wrong place. */
         VDAB_T_LAP(5);
+        /* ★★★ A REFERENCE THAT FALLS SLOWLY STARVES A LEVEL CHANGE. The 0.99 decay is right for
+         *     a burst — one bad frame against a steady reference — and wrong for a STEP: a hop
+         *     from a strong block to a weak one, or a 20 dB LNA move, leaves every frame under a
+         *     quarter of the old reference, so every frame is erased, the FIC with it, and the
+         *     receiver reports "locked" with no FIBs until the reference has decayed by 0.99 a
+         *     frame — 35-42 s, measured on 10D (entry trace 2026-09-16 00:37: prsRatio 0.36 → 0.99
+         *     over 50 s, audio at 43 s). Stuart's "35 seconds to lock". Five consecutive
+         *     untrusted frames are not five bursts; the reference is stale, so it is re-anchored
+         *     to what the air now gives and the frame is trusted. reset() clears it too. */
         if (prsRef_ <= 0.0f) prsRef_ = stats_.prsCorrelation;
         else if (stats_.prsCorrelation > prsRef_)
              prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
         else prsRef_ = prsRef_ * 0.99f + stats_.prsCorrelation * 0.01f;   // fall slowly
+        {
+            const float ef = dabEraseFrac().load(std::memory_order_relaxed);
+            const bool under = ef > 0.0f && prsRef_ > 0.0f && stats_.prsCorrelation < ef * prsRef_;
+            untrustedRun_ = under ? untrustedRun_ + 1 : 0;
+            if (untrustedRun_ >= 5) {
+                prsRef_ = stats_.prsCorrelation;
+                untrustedRun_ = 0;
+                ++stats_.prsReanchors;
+            }
+        }
         /* ★★★ SETTABLE WHILE IT RUNS, BECAUSE A RESTART DESTROYS THE COMPARISON. Changing this
          *  by rebuilding means a new process, a new AGC climb from the tuner's minimum (~50 s) and
          *  a fresh acquisition — and on a multiplex that varies minute to minute that confound is
@@ -503,6 +523,7 @@ public:
 
     static constexpr float kIrConfirm = 4.5f;   ///< see the lock decision in push()
     float prsRef_ = 0.0f;      ///< running reference for the phase-reference correlation
+    int   untrustedRun_ = 0;   ///< consecutive frames under the erasure fraction — see the re-anchor
     long lastAt_ = -1;
 
     /** ★ The FIC soft bits of the last frame — for diagnostics against a live signal, where the
@@ -623,7 +644,7 @@ public:
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
-    void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); }
+    void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; }   // ★ the PRS reference belongs to the old block
     /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
      *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
     void setCentreHz(double hz) { if (hz > 1e6) centreHz_ = hz; }
