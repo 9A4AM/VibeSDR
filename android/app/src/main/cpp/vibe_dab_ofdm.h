@@ -84,11 +84,65 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
     /* ★ Float, not double: this walks every sample of every frame (2 M a second), and the
      *  renormalisation every 1024 samples already bounds the drift a float oscillator has —
      *  the double version bought precision the renorm then threw away. The step itself is
-     *  computed in double and rounded once. */
+     *  computed in double and rounded once.
+     *  ★★ FOUR SAMPLES AT A TIME (2026-09-16): four oscillators a quarter-step apart advance by
+     *     the 4-sample twiddle, so the recurrence is no longer a serial chain — the same idea as
+     *     NCO::mix in vibedsp/ddc.cpp. Renormalised every 1024 samples (256 vector steps), as
+     *     the scalar path is. 0.9 s of a Pi 3's 26 s DAB decode before this. */
     const double w = -2.0 * M_PI * cyclesPerSample;
     const float cs = float(std::cos(w)), sn = float(std::sin(w));
     float cr = 1.0f, ci = 0.0f;
-    for (size_t i = 0; i < n; ++i) {
+    size_t i = 0;
+#if defined(__ARM_NEON) || defined(__SSE2__)
+    {
+        const float c4 = float(std::cos(4.0 * w)), s4 = float(std::sin(4.0 * w));
+        float pr[4], pi[4];                              // phases 0, w, 2w, 3w
+        pr[0] = 1.0f; pi[0] = 0.0f;
+        for (int q = 1; q < 4; ++q) { pr[q] = pr[q-1] * cs - pi[q-1] * sn; pi[q] = pr[q-1] * sn + pi[q-1] * cs; }
+#if defined(__ARM_NEON)
+        float32x4_t vr = vld1q_f32(pr), vi = vld1q_f32(pi);
+        for (; i + 4 <= n; i += 4) {
+            const float32x4x2_t v = vld2q_f32(reinterpret_cast<const float*>(x + i));
+            float32x4x2_t o;
+            o.val[0] = vmlsq_f32(vmulq_f32(v.val[0], vr), v.val[1], vi);
+            o.val[1] = vmlaq_f32(vmulq_f32(v.val[0], vi), v.val[1], vr);
+            vst2q_f32(reinterpret_cast<float*>(x + i), o);
+            const float32x4_t nr = vmlsq_n_f32(vmulq_n_f32(vr, c4), vi, s4);
+            const float32x4_t ni = vmlaq_n_f32(vmulq_n_f32(vr, s4), vi, c4);
+            vr = nr; vi = ni;
+            if (((i + 4) & 1023u) == 0) {                // renormalise all four lanes
+                const float32x4_t m2 = vmlaq_f32(vmulq_f32(vr, vr), vi, vi);
+                float32x4_t r = vrsqrteq_f32(m2);
+                r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(m2, r), r));
+                r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(m2, r), r));
+                vr = vmulq_f32(vr, r); vi = vmulq_f32(vi, r);
+            }
+        }
+        cr = vgetq_lane_f32(vr, 0); ci = vgetq_lane_f32(vi, 0);
+#else
+        __m128 vr = _mm_loadu_ps(pr), vi = _mm_loadu_ps(pi);
+        const __m128 c4v = _mm_set1_ps(c4), s4v = _mm_set1_ps(s4);
+        for (; i + 4 <= n; i += 4) {
+            const __m128 a = _mm_loadu_ps(reinterpret_cast<const float*>(x + i));
+            const __m128 b = _mm_loadu_ps(reinterpret_cast<const float*>(x + i) + 4);
+            const __m128 xr = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)), xi = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
+            const __m128 orr = _mm_sub_ps(_mm_mul_ps(xr, vr), _mm_mul_ps(xi, vi));
+            const __m128 oi  = _mm_add_ps(_mm_mul_ps(xr, vi), _mm_mul_ps(xi, vr));
+            _mm_storeu_ps(reinterpret_cast<float*>(x + i),     _mm_unpacklo_ps(orr, oi));
+            _mm_storeu_ps(reinterpret_cast<float*>(x + i) + 4, _mm_unpackhi_ps(orr, oi));
+            const __m128 nr = _mm_sub_ps(_mm_mul_ps(vr, c4v), _mm_mul_ps(vi, s4v));
+            const __m128 ni = _mm_add_ps(_mm_mul_ps(vr, s4v), _mm_mul_ps(vi, c4v));
+            vr = nr; vi = ni;
+            if (((i + 4) & 1023u) == 0) {
+                const __m128 m = _mm_sqrt_ps(_mm_add_ps(_mm_mul_ps(vr, vr), _mm_mul_ps(vi, vi)));
+                vr = _mm_div_ps(vr, m); vi = _mm_div_ps(vi, m);
+            }
+        }
+        cr = _mm_cvtss_f32(vr); ci = _mm_cvtss_f32(vi);
+#endif
+    }
+#endif
+    for (; i < n; ++i) {
         const float xr = x[i].re, xi = x[i].im;
         x[i].re = xr * cr - xi * ci;
         x[i].im = xr * ci + xi * cr;

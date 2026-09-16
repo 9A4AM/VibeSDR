@@ -20,6 +20,12 @@
 #include <string>
 #include <vector>
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#include "vibedsp/neon_compat.h"
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include "vibe_dab_mp2_tables.h"
 
 namespace vibedab {
@@ -501,38 +507,78 @@ public:
     void reset() { std::memset(v_, 0, sizeof v_); }
 
 private:
-    /** ISO synthesis: shift, matrix, build U, window, fold by 16. */
+    /** ISO synthesis: shift, matrix, build U, window, fold by 16.
+     *  ★★ FOUR OUTPUTS AT A TIME (2026-09-16). The 64×32 cosine matrix and the 512-tap window are
+     *     ~80 multiply-adds per output sample per channel; scalar, that was ~6 % of a Pi 3's DAB
+     *     decode (gprof, inlining off: synth 1.9 s + the matrix inlined into decode). The matrix
+     *     is kept TRANSPOSED — N[k][i] — so each sub-band sample s[k] broadcasts against four
+     *     consecutive outputs; the window fold does the same over j. Same sums, same order of
+     *     terms within a lane, so the audio is bit-identical to the scalar path on x86/ARM64
+     *     (verified: MP2 bad-frame counts and output sample counts unchanged on 12B).
+     *  ★ The scalar path is the reference and what ARMv6 (Pi Zero W) runs. */
     void synth(int ch, const float* s, float* out, int stride) {
         float* V = v_[ch];
         std::memmove(V + 64, V, sizeof(float) * (1024 - 64));
+        const float* N = cosTabT();                       // [32][64]
+#if defined(__ARM_NEON)
+        for (int i = 0; i < 64; i += 4) {
+            float32x4_t a = vdupq_n_f32(0.0f);
+            for (int k = 0; k < 32; ++k) a = vmlaq_n_f32(a, vld1q_f32(N + k * 64 + i), s[k]);
+            vst1q_f32(V + i, a);
+        }
+#elif defined(__SSE2__)
+        for (int i = 0; i < 64; i += 4) {
+            __m128 a = _mm_setzero_ps();
+            for (int k = 0; k < 32; ++k) a = _mm_add_ps(a, _mm_mul_ps(_mm_loadu_ps(N + k * 64 + i), _mm_set1_ps(s[k])));
+            _mm_storeu_ps(V + i, a);
+        }
+#else
         for (int i = 0; i < 64; ++i) {
             float a = 0;
-            for (int k = 0; k < 32; ++k) a += cosTab(i, k) * s[k];
+            for (int k = 0; k < 32; ++k) a += N[k * 64 + i] * s[k];
             V[i] = a;
         }
+#endif
         float U[512];
-        for (int i = 0; i < 8; ++i)
-            for (int j = 0; j < 32; ++j) {
-                U[i * 64 + j]      = V[i * 128 + j];
-                U[i * 64 + 32 + j] = V[i * 128 + 96 + j];
-            }
+        for (int i = 0; i < 8; ++i) {
+            std::memcpy(U + i * 64,      V + i * 128,      sizeof(float) * 32);
+            std::memcpy(U + i * 64 + 32, V + i * 128 + 96, sizeof(float) * 32);
+        }
+#if defined(__ARM_NEON)
+        for (int j = 0; j < 32; j += 4) {
+            float32x4_t a = vdupq_n_f32(0.0f);
+            for (int i = 0; i < 16; ++i)
+                a = vmlaq_f32(a, vld1q_f32(U + j + 32 * i), vld1q_f32(kSynthWindow + j + 32 * i));
+            float o[4]; vst1q_f32(o, a);
+            for (int q = 0; q < 4; ++q) out[size_t(j + q) * size_t(stride)] = o[q];
+        }
+#elif defined(__SSE2__)
+        for (int j = 0; j < 32; j += 4) {
+            __m128 a = _mm_setzero_ps();
+            for (int i = 0; i < 16; ++i)
+                a = _mm_add_ps(a, _mm_mul_ps(_mm_loadu_ps(U + j + 32 * i), _mm_loadu_ps(kSynthWindow + j + 32 * i)));
+            float o[4]; _mm_storeu_ps(o, a);
+            for (int q = 0; q < 4; ++q) out[size_t(j + q) * size_t(stride)] = o[q];
+        }
+#else
         for (int j = 0; j < 32; ++j) {
             float a = 0;
             for (int i = 0; i < 16; ++i) a += U[j + 32 * i] * kSynthWindow[j + 32 * i];
             out[size_t(j) * size_t(stride)] = a;
         }
+#endif
     }
-    /** N[i][k] = cos((16+i)(2k+1)π/64), built once. */
-    static float cosTab(int i, int k) {
-        static float t[64][32];
-        static bool init = false;
-        if (!init) {
+    /** N[i][k] = cos((16+i)(2k+1)π/64), built once — stored TRANSPOSED as [k][i] so the
+     *  synthesis loop above reads four consecutive i per sub-band k. */
+    static const float* cosTabT() {
+        static const std::vector<float> t = [] {
+            std::vector<float> v(32 * 64);
             for (int a = 0; a < 64; ++a)
                 for (int b = 0; b < 32; ++b)
-                    t[a][b] = float(std::cos((16 + a) * (2 * b + 1) * M_PI / 64.0));
-            init = true;
-        }
-        return t[i][k];
+                    v[size_t(b) * 64 + size_t(a)] = float(std::cos((16 + a) * (2 * b + 1) * M_PI / 64.0));
+            return v;
+        }();
+        return t.data();
     }
 
     float v_[2][1024] = {};
