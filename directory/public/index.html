@@ -500,6 +500,19 @@
           font-family: inherit; letter-spacing: .04em; }
   #freq:focus { outline: none; border-color: var(--accent); }
   .fNote { color: var(--dim); font-size: 12px; }
+  /* ★ The station finder: one input in the panel's own style, results as a list under it. */
+  .stnFind { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; position: relative; text-transform: none; letter-spacing: 0; }
+  .stnFind label { color: var(--dim); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; }
+  .stnFind input { flex: 1 1 220px; max-width: 420px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 13px; }
+  .stnFind input:focus { outline: none; border-color: var(--accent); }
+  .stnRes { position: absolute; left: 0; top: 100%; z-index: 1500; margin-top: 4px; max-height: 300px; overflow-y: auto; width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .stnRes button { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--text); padding: 6px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .stnRes button:hover, .stnRes button:focus { background: rgba(255,184,51,.12); outline: none; }
+  .stnRes .k { color: var(--phosphor); } .stnRes .t { color: var(--dim); } .stnRes .now { color: var(--free); font-weight: 600; }
+  .stnRank { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .stnRank h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .04em; color: var(--phosphor); font-weight: 600; }
+  .stnRank ol { margin: 4px 0 6px; padding-left: 22px; } .stnRank li { margin: 2px 0; font-size: 13px; }
+  .stnRank .km { color: var(--dim); } .stnRank .cav { color: var(--dim); font-size: 11.5px; line-height: 1.5; }
   .fClear { font-size: 11px; background: none; border: 1px solid var(--line);
             color: var(--dim); border-radius: 6px; padding: 4px 10px; cursor: pointer;
             font-family: inherit; letter-spacing: .1em; text-transform: uppercase; }
@@ -551,7 +564,17 @@
         <li><b>Frequency</b> — click a band on the band plan (several can be selected), or use the arrows to place the two markers on the dial; one marker asks who can hear that frequency, both mark a range. Zoom with the buttons; on the Full Network Range dial, drag the yellow box to move the Zoomed View.</li>
         <li><b>Location</b> — choose a country, several countries, or a whole region.</li>
         <li><b>Modes &amp; decoders</b> — the buttons below the dial keep only servers that offer them.</li>
-      </ul></div>
+        <li><b>A station</b> — type its name below; pick one and the receivers most likely to hear it are ranked.</li>
+      </ul>
+      <!-- ★★ THE STATION FINDER (Stuart, 2026-09-16): the EiBi shortwave schedule, searched by name,
+           and the receivers ranked by distance from the transmitter. The caveat is not decoration —
+           it is the whole honesty of the ranking: the directory knows a receiver's position and its
+           published range, and nothing at all about its aerial. -->
+      <div class="stnFind">
+        <label for="stnQ">Find a station</label>
+        <input id="stnQ" type="search" placeholder="BBC, Radio Romania, DDK, Northwood…" autocomplete="off" spellcheck="false">
+        <div id="stnRes" class="stnRes" hidden></div>
+      </div></div>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -1034,7 +1057,8 @@ function serverBlock(s) {
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
-      ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
+      <!-- ★ No 'tunnel' tag: how a server reaches the internet is the operator's business, and
+           the word only asked a listener a question they cannot answer (Stuart, 2026-09-16). -->
       ${shareLeft(s) > 0 ? `<span class="tag temp" title="This listing ends when the share does — the receiver stays running, it just stops being advertised here">Temporary share \u00b7 ${esc(untilText(shareLeft(s)))} left</span>` : ''}
       <!-- ★★ THE COUNT BELONGS TO THE RADIO, NOT THE SERVER. A machine can hold several receivers
            with different occupancy, so "2/10 listening" beside the server NAME is only ever true
@@ -1730,7 +1754,7 @@ function renderDial() {
   if (hint && DEMO_ON) hint.textContent = 'SIMULATED RECEIVERS — remove ?demo from the URL for the real directory';
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   // ★ A key that can only be a no-op is worse than no key.
-  document.getElementById('clearSel').disabled = !(redSet || yelSet || bandsOn.size || modesOn.size);
+  document.getElementById('clearSel').disabled = !(redSet || yelSet || bandsOn.size || modesOn.size || stationPick);
   for (const [id, on, hz] of [['setR', redSet, needleV], ['setY', yelSet, needleA]]) {
     const k = document.getElementById(id); if (!k) continue;
     k.classList.toggle('on', on);
@@ -2177,6 +2201,7 @@ function wireDial() {
   document.getElementById('clearSel').addEventListener('click', () => {
     // ★ The query, not the view: where you are looking is not something you asked for.
     redSet = false; yelSet = false; needleA = 0; needleV = 0; syncMk(); bandsOn.clear(); modesOn.clear();   // ★ both markers back to the centre, faded
+    stationPick = null; document.getElementById('stnQ').value = '';
     renderModeBar(); renderDial(); applyFilters();
   });
 
@@ -2303,11 +2328,99 @@ window.addEventListener('resize', () => {
   dialResizeT = setTimeout(() => { if (ALL.length) renderDial(); }, 150);
 });
 
+/* ══ THE STATION FINDER ═══════════════════════════════════════════════════════════════════════
+ * ★ /api/eibi is the season's EiBi schedule, reduced by the Worker (see directory/src/index.js);
+ *   eibi-meta.json carries transmitter sites and country centroids (scripts/build-eibi-meta.mjs).
+ *   Both are fetched once, the first time somebody types. A pick sets the RED marker to the
+ *   station's frequency — so the existing frequency filter does the "who can tune it" half — and
+ *   the render ranks what is left by distance from the transmitter.
+ * ★★ THE CAVEAT IS THE PRODUCT: the ranking uses a receiver's location and its published range,
+ *    and nothing about its aerial, which the directory has no way to know (Stuart, 2026-09-16). */
+let EIBI = null, EIBI_META = null, eibiPending = null, stationPick = null;
+function loadEibi() {
+  if (EIBI && EIBI_META) return Promise.resolve();
+  if (!eibiPending) {
+    eibiPending = Promise.all([
+      fetch('/api/eibi').then((r) => r.json()).then((j) => (EIBI = j.rows || [])),
+      fetch('/eibi-meta.json').then((r) => r.json()).then((j) => (EIBI_META = j)),
+    ]).catch(() => { EIBI = EIBI || []; EIBI_META = EIBI_META || { sites: {}, countries: {} }; });
+  }
+  return eibiPending;
+}
+/** Where a row transmits from: "G-w" is country G site w; a bare code is a site in the home country. */
+function eibiSite(row) {
+  const home = row[3], raw = row[7] || '';
+  let cty = home, code = raw;
+  if (raw.includes('-')) { const i = raw.indexOf('-'); cty = raw.slice(0, i); code = raw.slice(i + 1); }
+  const sites = (EIBI_META && EIBI_META.sites && EIBI_META.sites[cty]) || {};
+  const hit = sites[code] || sites[''] || null;
+  const c = EIBI_META && EIBI_META.countries && EIBI_META.countries[cty];
+  const ctyName = c && c.name ? c.name : cty;
+  if (hit) return { lat: hit[0], lon: hit[1], name: hit[2], cty: ctyName, exact: true };
+  if (c && c.c) return { lat: c.c[0], lon: c.c[1], name: ctyName, cty: ctyName, exact: false };
+  return null;
+}
+function eibiOnAirNow(row) {
+  const m = /^(\d{2})(\d{2})-(\d{2})(\d{2})$/.exec(row[1] || '');
+  if (!m) return false;
+  const d = new Date(), now = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
+  return a <= b ? (now >= a && now < b) : (now >= a || now < b);
+}
+function kmBetween(la1, lo1, la2, lo2) {
+  const R = 6371, r = Math.PI / 180;
+  const dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function stnSearch(q) {
+  const res = document.getElementById('stnRes');
+  q = q.trim().toLowerCase();
+  if (q.length < 2 || !EIBI) { res.hidden = true; res.innerHTML = ''; return; }
+  const seen = new Set(); const out = [];
+  for (const row of EIBI) {
+    if (!row[4].toLowerCase().includes(q)) continue;
+    const key = `${row[4]}|${row[0]}|${row[7]}`;
+    if (seen.has(key)) continue;
+    seen.add(key); out.push(row);
+    if (out.length >= 40) break;
+  }
+  out.sort((a, b) => a[4].localeCompare(b[4]) || a[0] - b[0]);
+  if (!out.length) { res.innerHTML = '<button type="button" disabled>Nothing in the schedule by that name.</button>'; res.hidden = false; return; }
+  res.innerHTML = out.slice(0, 20).map((row, i) => {
+    const site = eibiSite(row);
+    const now = eibiOnAirNow(row);
+    return `<button type="button" data-i="${i}">${esc(row[4])} <span class="k">· ${row[0]} kHz</span>`
+      + ` <span class="t">· ${esc(row[1] || '')} UTC${row[2] ? ' ' + esc(row[2]) : ''}`
+      + `${site ? ' · ' + esc(site.name) + (site.cty !== site.name ? ', ' + esc(site.cty) : '') : ''}</span>`
+      + `${now ? ' <span class="now">on air now</span>' : ''}</button>`;
+  }).join('');
+  res.hidden = false;
+  res.querySelectorAll('button[data-i]').forEach((b) => b.addEventListener('click', () => stnPick(out[+b.dataset.i])));
+}
+function stnPick(row) {
+  const site = eibiSite(row);
+  stationPick = { name: row[4], khz: row[0], time: row[1], site, now: eibiOnAirNow(row) };
+  document.getElementById('stnQ').value = `${row[4]} · ${row[0]} kHz`;
+  const res = document.getElementById('stnRes'); res.hidden = true; res.innerHTML = '';
+  // ★ The red marker IS the frequency filter; one marker, so the yellow one steps aside.
+  needleV = row[0] * 1000; redSet = true; yelSet = false; syncMk();
+  renderDial(); applyFilters();
+  document.getElementById('list').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+document.getElementById('stnQ').addEventListener('input', (e) => {
+  const v = e.target.value;
+  if (stationPick && v !== `${stationPick.name} · ${stationPick.khz} kHz`) { stationPick = null; applyFilters(); }
+  loadEibi().then(() => stnSearch(document.getElementById('stnQ').value));
+});
+document.getElementById('stnQ').addEventListener('focus', () => loadEibi());
+document.addEventListener('click', (e) => { if (!e.target.closest('.stnFind')) { const r = document.getElementById('stnRes'); r.hidden = true; } });
+
 function applyFilters() {
   const shown = ALL.filter(matches);
   // ★ Any filter on its own is a search — a country alone ("all servers in Brazil"), a mode alone,
   //   or a marker. The top line and the criteria line follow (Stuart, 2026-09-16).
-  const active = bandsOn.size > 0 || redSet || yelSet || modesOn.size > 0 || countriesOn.size > 0;
+  const active = bandsOn.size > 0 || redSet || yelSet || modesOn.size > 0 || countriesOn.size > 0 || !!stationPick;
 
   const sum = document.getElementById('filterSummary');
   if (!active) sum.textContent = '';
@@ -2324,7 +2437,8 @@ function applyFilters() {
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
     const modeTxt = modesOn.size ? ` · with ${[...modesOn].map((m) => MODE_NAMES[m]).join(' + ')}` : '';
     const ctyTxt = countriesOn.size ? ` · in ${[...countriesOn].map((c) => countryName(c)).join(', ')}` : '';
-    sum.textContent = `Search criteria${ctyTxt}${bandTxt}${rangeTxt}${modeTxt}`
+    const stnTxt = stationPick ? ` · ${stationPick.name} on ${stationPick.khz} kHz` : '';
+    sum.textContent = `Search criteria${stnTxt}${ctyTxt}${bandTxt}${stationPick ? '' : rangeTxt}${modeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
       + (mute ? ` ${mute} ${mute === 1 ? 'has' : 'have'} not published a tuning range and cannot`
                 + ` be matched by frequency.` : '');
@@ -2417,7 +2531,27 @@ function render(servers, filtered) {
   const groups = [...byCountry.entries()]
     .sort((a, b) => countryName(a[0]).localeCompare(countryName(b[0])));
 
-  list.innerHTML = groups.map(([cc, rows], i) => `
+  /* ★★ THE RANKING. Every server still shown covers the frequency (the red marker did that);
+   *    here they are ordered by distance from the transmitter, nearest first, with the caveat
+   *    that makes the list honest. Servers with no position or no published range are named
+   *    below the list rather than silently dropped. */
+  let rankHtml = '';
+  if (stationPick) {
+    const site = stationPick.site;
+    const placed = servers.filter((s) => Number.isFinite(+s.lat) && Number.isFinite(+s.lon));
+    const ranked = site
+      ? placed.map((s) => ({ s, km: kmBetween(site.lat, site.lon, +s.lat, +s.lon) })).sort((a, b) => a.km - b.km)
+      : placed.map((s) => ({ s, km: null }));
+    const from = site ? `${esc(site.name)}${site.cty !== site.name ? ', ' + esc(site.cty) : ''}${site.exact ? '' : ' (country centre — the site is not in the list)'}` : 'an unknown site';
+    rankHtml = `<div class="stnRank">
+      <h3>Receivers most likely to hear ${esc(stationPick.name)} on ${stationPick.khz} kHz</h3>
+      <div class="cav">Transmits from ${from}${stationPick.time ? ` · ${esc(stationPick.time)} UTC` : ''}${stationPick.now ? ' · <b>on air now</b>' : ''}.</div>
+      ${ranked.length ? `<ol>${ranked.slice(0, 8).map(({ s, km }) => `<li>${esc(s.name)}${km !== null ? ` <span class="km">· ${Math.round(km).toLocaleString()} km from the transmitter</span>` : ''}</li>`).join('')}</ol>`
+                      : '<div class="cav">No listed receiver covers this frequency right now.</div>'}
+      <div class="cav">This ranking is based on each receiver's location and its hardware's reported frequency range only. It does not take the antenna into account, which the directory has no way of measuring — a receiver further away with the right aerial may well hear it better.</div>
+    </div>`;
+  }
+  list.innerHTML = rankHtml + groups.map(([cc, rows], i) => `
     <details class="country" data-key="cc:${esc(cc)}" ${
       openKeys.size ? (openKeys.has(`cc:${cc}`) ? 'open' : '')
                     : (groups.length <= 2 || i === 0 ? 'open' : '')}>
