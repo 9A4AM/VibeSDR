@@ -282,6 +282,21 @@
   /* ★ The second line sits under the first rather than running on — the row is centred, and a
        single long string re-centres the whole header every time the text changes. */
   .dialHint2 { display: block; }
+  /* ★★ PHONES (Stuart's iPhone, 2026-09-16): the badge rows ran off the right edge — .caps and
+     .rcRight never wrapped — and the server name folded into three lines to make room; the
+     second dial hint talked about ⌘-scroll to a thumb. Placed after the base rules so they win. */
+  @media (max-width: 700px) {
+    .dialHint, .dialHint2 { display: none; }
+    .srv > summary { flex-wrap: wrap; row-gap: 6px; }
+    .srv > summary > span:nth-of-type(1) { flex: 1 1 auto; min-width: 0; }
+    .caps { flex: 1 1 100%; margin-left: 0; padding-left: 26px; justify-content: flex-start;
+            flex-wrap: wrap; row-gap: 6px; order: 10; }
+    .srv > summary .caps ~ .meta { margin-left: auto; }
+    .rcTop { flex-wrap: wrap; row-gap: 8px; }
+    .rcRight { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; row-gap: 6px; }
+    .rcName { font-size: 16px; }
+    .keyPanel button { min-width: 42px; height: 34px; }
+  }
   .dialCtl { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
              text-transform: none; letter-spacing: .04em; }
   .dialCtl label { color: var(--dim); font-size: 11px; letter-spacing: .1em;
@@ -1639,7 +1654,7 @@ function renderDial() {
   if (orow) {
     const xa = hzToXIn(orow.axis, view[0]), xb = hzToXIn(orow.axis, view[1]);
     if (xa !== null && xb !== null) {
-      const w = Math.max(6, xb - xa);
+      const w = Math.max(W < 700 ? 18 : 6, xb - xa);   // ★ a thumb needs something to hold on a phone
       // ★ The handle is the whole box: grabbing a 6px edge on a 1.7 GHz dial is a dexterity test.
       parts.push(`<g class="dPort"><rect class="dPortBox" x="${xa.toFixed(1)}" y="${oy + 1}" `
         + `width="${w.toFixed(1)}" height="${OVER_H - 2}" rx="2"/>`
@@ -1772,6 +1787,7 @@ function drawRow(segsIn, y0, W, opt) {
         //    "526.5 kHz" are not the same size.
         const wNeed = labelPx(prettyHz(hz));
         if (x === null || placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 8)) continue;
+        if (x - wNeed / 2 < 2 || x + wNeed / 2 > W - 2) continue;   // ★ a numeral half off the edge ("2 G" on a phone) is worse than none
         placedX.push({ x, w: wNeed });
         p.push(`<line class="dTickMaj free" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
         p.push(`<text class="dNum free edge ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(hz))}</text>`);
@@ -1795,7 +1811,7 @@ function drawRow(segsIn, y0, W, opt) {
       // ★ Give way to a free-edge figure already there — two numerals in one place is worse than
       //   the one it was meant to add, and the free one is the one worth having.
       const wNeed = labelPx(prettyHz(f));
-      if (!placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 8)) {
+      if (x - wNeed / 2 >= 2 && x + wNeed / 2 <= W - 2 && !placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 8)) {
         p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
         placedX.push({ x, w: wNeed });
       }
