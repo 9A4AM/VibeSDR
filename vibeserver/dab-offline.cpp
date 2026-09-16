@@ -55,6 +55,12 @@ int main(int argc, char** argv) {
     uint32_t sid = argc > 3 ? uint32_t(atoi(argv[3])) : 0;
     bool selected = false;
     int mp2In = 0, mp2Bad = 0, mp2Out = 0;
+    double mp2Ber = 0.0;
+    struct BerRow { double ber; bool ok; uint32_t scfChk, scfOk; };
+    std::vector<BerRow> berRows;
+    uint32_t scfChkPrev = 0, scfOkPrev[4] = {0, 0, 0, 0};
+    FILE* csv = std::getenv("VIBE_DAB_FRAMECSV") ? std::fopen(std::getenv("VIBE_DAB_FRAMECSV"), "w") : nullptr;
+    if (csv) fprintf(csv, "frame,ber,decoded,scfChecked,scfOk,peak,rms\n");
     long long blocks = 0;
     std::vector<uint8_t> pend;
     std::vector<int> cifOfMp2; int cifSeq = 0;
@@ -139,7 +145,12 @@ int main(int argc, char** argv) {
             //   cleared on service selection, so reading it after every push re-counts every
             //   frame still in it — 19056 "MP2 frames" out of 311 DAB frames (1244 CIFs). The
             //   live path calls takeAudioFrames(); a harness that does not is measuring itself.
-            for (const auto& f0 : rx.takeAudioFrames()) {
+            const auto frameBers = rx.takeAudioBers();
+            const auto frameList = rx.takeAudioFrames();
+            for (size_t fi = 0; fi < frameList.size(); ++fi) {
+                const auto& f0 = frameList[fi];
+                const double thisBer = fi < frameBers.size() ? frameBers[fi] : 0.0;
+                mp2Ber = pend.empty() ? thisBer : std::max(mp2Ber, thisBer);   // an LSF pair keeps its worse half
                 if (rx.selectedType() != 0) {                 // DAB+ : super frames
                     sfHold.push_back(f0);
                     if (sfHold.size() > 5) sfHold.pop_front();
@@ -203,6 +214,20 @@ int main(int argc, char** argv) {
                     const double rms = out.empty() ? 0 : std::sqrt(sq / double(out.size()));
                     framePk.push_back(pk); frameRms.push_back(rms);
                 }
+                /* ★ THE QUALITY-GATE EVIDENCE (2026-09-16): every frame's raw pre-Viterbi BER
+                 *  beside what the ScF-CRC — the one check that DOES catch corruption — said of
+                 *  it. VIBE_DAB_FRAMECSV writes the rows; the summary buckets them so the gate's
+                 *  threshold is read off a marginal capture, not guessed. */
+                {
+                    const auto& t = mp2.scfCrc();
+                    int best = 0; for (int v = 1; v < 4; ++v) if (t.ok[v] > t.ok[best]) best = v;
+                    const uint32_t chk = t.checked - scfChkPrev, okc = t.ok[best] - scfOkPrev[best];
+                    scfChkPrev = t.checked; for (int v = 0; v < 4; ++v) scfOkPrev[v] = t.ok[v];
+                    const bool decoded = !out.empty();
+                    berRows.push_back({mp2Ber, decoded, chk, okc});
+                    if (csv) fprintf(csv, "%d,%.5f,%d,%u,%u,%.3f,%.3f\n", mp2In - 1, mp2Ber, decoded ? 1 : 0, chk, okc,
+                                     decoded ? framePk.back() : 0.0, decoded ? frameRms.back() : 0.0);
+                }
             }
         }
         }   // while (acc >= one frame)
@@ -212,6 +237,17 @@ int main(int argc, char** argv) {
            blocks, s.framesSeen, s.locked ? "yes" : "no", s.fibsOk, s.fibsTotal, s.fibRate,
            s.freqOffsetHz, s.freqOffsetPpm, s.intOffsetCarriers);
     printf("erased frames: %d of %d\n", s.erasedFrames, s.framesSeen);
+    {
+        static const double th[] = { 0.0, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08 };
+        printf("BER buckets (frames with raw BER above t: count, MPEG-CRC fails, ScF-CRC groups failed / checked):\n");
+        for (double t : th) {
+            int n = 0, bad = 0; uint32_t chk = 0, okc = 0;
+            for (const auto& r : berRows) if (r.ber > t) { ++n; if (!r.ok) ++bad; chk += r.scfChk; okc += r.scfOk; }
+            printf("  > %.1f%%: %5d frames  crcBad %4d  scf %u/%u (%.1f%% failed)\n", t * 100.0, n, bad, chk - okc, chk,
+                   chk ? 100.0 * double(chk - okc) / double(chk) : 0.0);
+        }
+        if (csv) fclose(csv);
+    }
     printf("MP2: in %d  bad %d (%.1f%%)  out %d\n",
            mp2In, mp2Bad, mp2In ? 100.0 * mp2Bad / mp2In : 0.0, mp2Out);
     if (sfTried) {

@@ -581,7 +581,7 @@ public:
         sel_ = sel; selType_ = pick->scType; selSid_ = sid;
         prof_ = prof; uprof_ = uprof; dataBits_ = dataBits; bitrate_ = bitrate;
         deint_ = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
-        audio_.clear();
+        audio_.clear(); audioBer_.clear();
         return true;
     }
 
@@ -634,6 +634,13 @@ public:
     std::vector<std::vector<uint8_t>> takeAudioFrames() {
         std::vector<std::vector<uint8_t>> out;
         out.swap(audio_);
+        return out;
+    }
+    /** The raw pre-Viterbi BER of each frame takeAudioFrames() hands over, same order and count.
+     *  ★ Take it FIRST, before takeAudioFrames(), or after — but in the same pass. */
+    std::vector<double> takeAudioBers() {
+        std::vector<double> out;
+        out.swap(audioBer_);
         return out;
     }
     int  selectedType() const { return selType_; }      ///< 0 = MP2, 63 = DAB+
@@ -727,14 +734,20 @@ private:
         if (!deint_->ready()) return;
         size_t err = 0, tot = 0;
         std::vector<uint8_t> bytes = decodeLogicalFrame(di, coded, prof_, uprof_, dataBits_, &err, &tot);
+        double ber = 0.0;
         if (tot) {
             /* ★ Raw bit error rate BEFORE the Viterbi, by re-encoding the decision — the margin
              *  figure: 0.1 % is comfortable, 5 % is the edge of the cliff. */
-            const double ber = double(err) / double(tot);
+            ber = double(err) / double(tot);
             stats_.mscBer = stats_.mscBer == 0.0 ? ber : stats_.mscBer * 0.9 + ber * 0.1;
         }
         audio_.push_back(std::move(bytes));
-        if (audio_.size() > 64) audio_.erase(audio_.begin());     // bounded
+        /* ★★ THE FRAME'S OWN ERROR RATE TRAVELS WITH IT (2026-09-16). The running mscBer is a
+         *  display figure; the MP2 quality gate in DabService needs THIS frame's rate, because a
+         *  frame whose raw BER is high is one the Viterbi has probably not fully corrected — and
+         *  the MPEG CRC does not cover the sample data, so nothing downstream would notice. */
+        audioBer_.push_back(ber);
+        if (audio_.size() > 64) { audio_.erase(audio_.begin()); audioBer_.erase(audioBer_.begin()); }     // bounded
     }
 
     uint32_t rate_;
@@ -777,6 +790,7 @@ private:
     std::unique_ptr<TimeDeinterleaver> deint_;
     std::vector<ScanSlot> scan_;
     std::vector<std::vector<uint8_t>> audio_;
+    std::vector<double> audioBer_;    ///< per-frame raw BER, parallel to audio_
     std::array<C32, 1536> prs_{};
 };
 

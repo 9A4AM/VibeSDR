@@ -117,7 +117,7 @@ public:
      *  2026-09-08: "been stuck on the same figure … for multiple tunes"). A counter that
      *  describes the last station is worse than none: it reads as a fault on this one. */
     void resetAudioCounters() {
-        mp2In_ = mp2Bad_ = mp2Out_ = mp2WithCrc_ = 0; mp2Concealed_ = 0;
+        mp2In_ = mp2Bad_ = mp2Out_ = mp2WithCrc_ = 0; mp2Concealed_ = 0; mp2BerGated_ = 0; berRun_ = 0; lastGoodPcm_.clear();
         scfChecked_ = 0; scfOk_[0] = scfOk_[1] = scfOk_[2] = scfOk_[3] = 0;
         lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
         sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
@@ -618,8 +618,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         const int nb = snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"mp2BerGated\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         const int nb2 = snprintf(b, sizeof b,
@@ -1340,8 +1340,13 @@ private:
     /** Turn whatever logical frames arrived into PCM. */
     void drainAudio() {
         // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
+        const auto bers   = rx_.takeAudioBers();
         const auto frames = rx_.takeAudioFrames();
-        for (const auto& fRaw : frames) {
+        double frameBer = 0.0;                        // this MP2 frame's worst logical-frame BER
+        for (size_t fi = 0; fi < frames.size(); ++fi) {
+            const auto& fRaw = frames[fi];
+            const double thisBer = fi < bers.size() ? bers[fi] : 0.0;
+            frameBer = lsfPend_.empty() ? thisBer : std::max(frameBer, thisBer);   // an LSF pair keeps its worse half
             /* ★★★ A 24 kHz (LSF) LAYER II FRAME SPANS TWO DAB LOGICAL FRAMES, AND WE WERE
              *  THROWING EVERY ONE OF THEM AWAY. Layer II is 1152 samples per frame however it is
              *  clocked: at 48 kHz that is 24 ms, exactly one DAB logical frame — but at 24 kHz it
@@ -1446,6 +1451,33 @@ private:
                     std::fill(out.begin(), out.end(), 0.0f);       // a stall, not a squeal
                 } else if (rms > 0.0) {
                     rmsRef_ = rmsRef_ > 0.0 ? rmsRef_ * 0.98 + rms * 0.02 : rms;
+                }
+            }
+            /* ★★★ THE QUALITY GATE — THE "BUBBLING MUD" (2026-09-16). MPEG's CRC covers the
+             *  header, allocation and scfsi; the ScF-CRC covers the scale factors; NOTHING covers
+             *  the sample data, which is most of the frame. On a marginal mux (9A, 10D at MER
+             *  8-9 dB) the Viterbi leaves residual errors there, every check passes, and the
+             *  frame decodes into the burbling Stuart has described since the first MP2 report.
+             *  The receiver knows which frames those are: its raw pre-Viterbi bit error rate,
+             *  from re-encoding the decision, is the margin the decoder had. Above the threshold
+             *  the frame is not trusted: the previous good frame is repeated, fading, and after
+             *  three in a row it is silence — a hiccup, which is what the reference receivers do,
+             *  instead of 24 ms of mud. ★ Threshold from measurement (VIBE_DAB_MP2_BER overrides);
+             *  the count is published so the underlying error rate stays visible. */
+            {
+                static const double berGate = std::getenv("VIBE_DAB_MP2_BER") ? atof(std::getenv("VIBE_DAB_MP2_BER")) : kMp2BerGate;
+                if (berGate > 0.0 && frameBer > berGate) {
+                    ++mp2BerGated_;
+                    ++berRun_;
+                    if (berRun_ <= 3 && lastGoodPcm_.size() == out.size()) {
+                        const float g = berRun_ == 1 ? 0.7f : berRun_ == 2 ? 0.4f : 0.15f;
+                        for (size_t k = 0; k < out.size(); ++k) out[k] = lastGoodPcm_[k] * g;
+                    } else {
+                        std::fill(out.begin(), out.end(), 0.0f);
+                    }
+                } else {
+                    berRun_ = 0;
+                    lastGoodPcm_ = out;
                 }
             }
             if (mp2_.lastHadCrc()) ++mp2WithCrc_;
@@ -2070,6 +2102,10 @@ private:
     unsigned                lsfOrphans_ = 0;
     /** Frames silenced because they decoded into something no valid audio frame can be. */
     uint32_t                mp2Concealed_ = 0;
+    uint32_t                mp2BerGated_  = 0;    ///< frames replaced by the raw-BER quality gate
+    int                     berRun_       = 0;    ///< consecutive gated frames (drives the fade)
+    std::vector<float>      lastGoodPcm_;         ///< the frame repeated while gating
+    static constexpr double kMp2BerGate   = 0.03; ///< ★ provisional until the 9A/10D captures set it
     double                  rmsRef_ = 0.0;
     Resample24to2048        rs_;
     std::vector<float>      rsOut_;
