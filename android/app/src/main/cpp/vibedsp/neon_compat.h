@@ -41,6 +41,17 @@ static inline uint32_t vaddvq_u32(uint32x4_t v) {
     s = vpadd_u32(s, s);
     return vget_lane_u32(s, 0);
 }
+static inline int32_t vaddvq_s32(int32x4_t v) {
+    int32x2_t s = vadd_s32(vget_low_s32(v), vget_high_s32(v));
+    s = vpadd_s32(s, s);
+    return vget_lane_s32(s, 0);
+}
+static inline int16_t vmaxvq_s16(int16x8_t v) {
+    int16x4_t s = vmax_s16(vget_low_s16(v), vget_high_s16(v));
+    s = vpmax_s16(s, s);
+    s = vpmax_s16(s, s);
+    return vget_lane_s16(s, 0);
+}
 static inline uint32_t vmaxvq_u32(uint32x4_t v) {
     uint32x2_t s = vmax_u32(vget_low_u32(v), vget_high_u32(v));
     s = vpmax_u32(s, s);

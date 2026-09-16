@@ -163,14 +163,20 @@ int FirDecimator::process(const cf32* in, int n, cf32* out) {
 
 // ── AM demod ─────────────────────────────────────────────────────────────--
 void AmDemod::process(const cf32* in, float* out, int n) {
+    // ★ The square roots four at a time into `out`, then the (serial) DC blocker in place —
+    //   the sqrt was the cost, the one-pole is two multiplies (2026-09-16).
+    magnitudes(in, out, n);
     for (int i = 0; i < n; ++i) {
-        const float mag = std::sqrt(in[i].real() * in[i].real() +
-                                    in[i].imag() * in[i].imag());
+        const float mag = out[i];
         // One-pole DC blocker removes the carrier term, leaving the modulation.
         dc_ = kPole * dc_ + (1.0f - kPole) * mag;
         out[i] = (mag - dc_) * kGain;
     }
 }
+
+// ★ Public wrapper so header-only classes (the noise blanker) can reach the vector kernel
+//   without including simd_internal.h.
+void complexMagnitudes(const cf32* z, float* out, int n) { magnitudes(z, out, n); }
 
 // ── FM demod (quadrature discriminator) ──────────────────────────────────--
 void FmDemod::process(const cf32* in, float* out, int n) {
@@ -283,25 +289,32 @@ void SsbDemod::process(const cf32* in, float* out, int n) {
     // Mix by signed fc via a recursive rotator (c,s = cur_ advanced by rot_ each
     // sample — no per-sample trig): a = z * e^{-j*phase} = z * (cos - j sin). The
     // sideband sign lives in rot_ (down by +fc for USB, up by fc for LSB).
-    for (int i = 0; i < n; ++i) {
-        const float c = cur_.real(), s = cur_.imag();
-        cbuf_[i] = c; sbuf_[i] = s;
-        const float zr = in[i].real(), zi = in[i].imag();
-        aI_[i] = zr * c + zi * s;
-        aQ_[i] = zi * c - zr * s;
-        cur_ *= rot_;
-        if (++sinceNorm_ >= 1024) {           // renormalise to fight magnitude drift
-            sinceNorm_ = 0;
-            const float m = 1.0f / std::sqrt(cur_.real()*cur_.real() + cur_.imag()*cur_.imag());
-            cur_ *= m;
-        }
+    // ★ Four lanes of oscillator (rotateBlockIlv), renormalised once per block instead of every
+    //   1024 samples — the same recurrence, no longer a serial chain (2026-09-16).
+    {
+        float cr = cur_.real(), ci = cur_.imag();
+        rotateBlockIlv(in, n, cr, ci, rot_.real(), rot_.imag(),
+                       aI_.data(), aQ_.data(), cbuf_.data(), sbuf_.data());
+        cur_ = cf32(cr, ci);
     }
     fI_.resize(n); fQ_.resize(n);
     lpfI_->process(aI_.data(), n, fI_.data());
     lpfQ_->process(aQ_.data(), n, fQ_.data());
     // Mix back and take real: out = Re{aLPF * e^{+j*phase}} = fI*c - fQ*s. The
     // sideband sign already lives in phase, so the formula is the same for both.
-    for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] - fQ_[i] * sbuf_[i];
+    {
+        int i = 0;
+#if VIBE_NEON
+        for (; i + 4 <= n; i += 4)
+            vst1q_f32(out + i, vmlsq_f32(vmulq_f32(vld1q_f32(fI_.data() + i), vld1q_f32(cbuf_.data() + i)),
+                                         vld1q_f32(fQ_.data() + i), vld1q_f32(sbuf_.data() + i)));
+#elif VIBE_SSE
+        for (; i + 4 <= n; i += 4)
+            _mm_storeu_ps(out + i, _mm_sub_ps(_mm_mul_ps(_mm_loadu_ps(fI_.data() + i), _mm_loadu_ps(cbuf_.data() + i)),
+                                              _mm_mul_ps(_mm_loadu_ps(fQ_.data() + i), _mm_loadu_ps(sbuf_.data() + i))));
+#endif
+        for (; i < n; ++i) out[i] = fI_[i] * cbuf_[i] - fQ_[i] * sbuf_[i];
+    }
 }
 
 // ── Real FIR (low-pass / optional decimate) ──────────────────────────────--

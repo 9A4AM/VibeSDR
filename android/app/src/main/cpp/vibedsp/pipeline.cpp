@@ -636,11 +636,20 @@ void RxPipeline::feed(const cf32* iq, int n) {
         cf32* ring = reinterpret_cast<cf32*>(specRing_.data());
         cf32* sb   = reinterpret_cast<cf32*>(specBuf_.data());
         const long long stride = std::max(1, specStride_.load(std::memory_order_relaxed));
-        for (int i = 0; i < n; ++i) {
-            ring[specRingW_] = iq[i];
-            if (++specRingW_ >= fftSize_) specRingW_ = 0;
-            ++specRingFill_;
-            if (++sinceEmit_ < stride) continue;
+        /* ★ BLOCK COPIES, NOT A PER-SAMPLE LOOP (2026-09-16). This walked every IQ sample of
+         *  every mode with four counters and two branches each — 3 % of a Pi 3's WFM budget for
+         *  what is a memcpy. Each chunk is bounded by the ring wrap and by the next emit point,
+         *  so the emit happens at exactly the same sample as before. */
+        for (int i = 0; i < n; ) {
+            const int room   = fftSize_ - specRingW_;
+            const long long toEmit = stride - sinceEmit_;
+            const int chunk = (int)std::min<long long>({(long long)(n - i), (long long)room, toEmit});
+            std::memcpy(ring + specRingW_, iq + i, (size_t)chunk * sizeof(cf32));
+            i += chunk;
+            specRingW_ += chunk; if (specRingW_ >= fftSize_) specRingW_ = 0;
+            specRingFill_ += chunk;
+            sinceEmit_ += chunk;
+            if (sinceEmit_ < stride) continue;
             sinceEmit_ = 0;
             if (specRingFill_ < fftSize_) continue;      // warm-up: not a full window yet
             // Unwrap oldest-first so the window is time-ordered; specRingW_ is the oldest

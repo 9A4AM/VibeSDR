@@ -1,5 +1,6 @@
 // VibeSDR V4 — NLMS automatic notch filter (adaptive line enhancer, notch mode).
 #include "auto_notch.h"
+#include "../vibedsp/simd_internal.h"   // dotReal + the vector NLMS update
 #include <algorithm>
 
 namespace vibe {
@@ -24,18 +25,30 @@ void AutoNotch::process(float* x, int count) {
         // FIR predicts the periodic part from samples delayed by D..D+L-1;
         // pwr is the energy of those same taps for the NLMS normalisation.
         int base = p + D;                // index of x[n-D]; base+i = x[n-D-i]
-        float fir = 0.0f, pwr = 0.0f;
-        for (int i = 0; i < L; i++) {
-            float s = buf[base + i];
-            fir += w[i] * s;
-            pwr += s * s;
-        }
+        /* ★ 160 taps, twice, per audio sample = 15 M multiply-adds a second — the heaviest
+         *  audio-rate loop in the engine, and it was scalar (2026-09-16). The prediction and
+         *  the tap energy are two dot products; the update is an axpy. L is a multiple of 8. */
+        const float* s = &buf[(size_t)base];
+        const float fir = vibedsp::dotReal(w.data(), s, L);
+        const float pwr = vibedsp::dotReal(s, s, L);
         float err = in - fir;            // tones removed → notch output
         x[n] = err;
 
         // Leaky NLMS coefficient update.
         float g = mu * err / (eps + pwr);
-        for (int i = 0; i < L; i++) w[i] = leak * w[i] + g * buf[base + i];
+        {
+            int i = 0;
+#if VIBE_NEON
+            const float32x4_t lk = vdupq_n_f32(leak), gv = vdupq_n_f32(g);
+            for (; i + 4 <= L; i += 4)
+                vst1q_f32(&w[(size_t)i], vmlaq_f32(vmulq_f32(lk, vld1q_f32(&w[(size_t)i])), gv, vld1q_f32(s + i)));
+#elif VIBE_SSE
+            const __m128 lk = _mm_set1_ps(leak), gv = _mm_set1_ps(g);
+            for (; i + 4 <= L; i += 4)
+                _mm_storeu_ps(&w[(size_t)i], _mm_add_ps(_mm_mul_ps(lk, _mm_loadu_ps(&w[(size_t)i])), _mm_mul_ps(gv, _mm_loadu_ps(s + i))));
+#endif
+            for (; i < L; i++) w[i] = leak * w[i] + g * s[i];
+        }
     }
 }
 

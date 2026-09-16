@@ -1,6 +1,7 @@
 // VibeSDR V5 — RDS data-link layer (block sync + group parsing).
 // Clean-room implementation of EN 50067 / IEC 62106. Original VibeSDR code.
 #include "vibedsp.h"
+#include "simd_internal.h"   // rotateBlock — the guard-band rotation, four lanes, no per-sample trig
 #include <cstring>
 #include <string>
 #include <cmath>
@@ -522,15 +523,15 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // downconvert from the MPX would have cost the mixer twice over for the same answer.
     if (guardOn_ && lpfGI_) {
         xGI_.resize(n); xGQ_.resize(n);
-        double ph = guardPhase_;
-        for (int i = 0; i < n; ++i) {
-            const float c = (float)std::cos(ph), sn = (float)std::sin(ph);
-            xGI_[i] =  xI_[i] * c + xQ_[i] * sn;      // rotate by -ph: selects 57 kHz + offset
-            xGQ_[i] = -xI_[i] * sn + xQ_[i] * c;
-            ph += guardStep_;
-            if (ph > 2.0 * M_PI) ph -= 2.0 * M_PI;    // bounded, or the float cos/sin degrades
-        }
-        guardPhase_ = ph;
+        /* ★ This was a libm cos AND sin PER SAMPLE at the MPX rate (2026-09-16 Pi 3 profile) —
+         *  the one place in the engine still paying for trig per sample. A recursive rotator is
+         *  what every other mixer here uses; guardPhase_ now carries the oscillator as (cos, sin)
+         *  and rotateBlock renormalises it every block, so drift cannot accumulate. Same signs:
+         *  xGI = xI·c + xQ·s, xGQ = xQ·c − xI·s. */
+        float cr = guardCos_, ci = guardSin_;
+        rotateBlock(xI_.data(), xQ_.data(), n, cr, ci, (float)std::cos(guardStep_), (float)std::sin(guardStep_),
+                    xGI_.data(), xGQ_.data(), nullptr, nullptr);
+        guardCos_ = cr; guardSin_ = ci;
         sGI_.resize(lpfGI_->maxOut(n));
         sGQ_.resize(lpfGQ_->maxOut(n));
         const int ng = std::min(lpfGI_->process(xGI_.data(), n, sGI_.data()),

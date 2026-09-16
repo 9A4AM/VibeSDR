@@ -85,6 +85,7 @@
 #endif
 
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
+#include "vibedsp/simd_internal.h"  // convI16ToF32 — the 16-bit radios' IQ conversion, vectorised
 #include "net_shim.h"
 #include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
@@ -291,6 +292,56 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* 
     }
     if (st) { st->rails += rails; st->total += (uint32_t)nF;
               if (mx > st->maxV) st->maxV = mx; if (mn < st->minV) st->minV = mn; }
+#elif defined(__SSE2__)
+    /* ★ x86 had NO vector path here — every RTL-SDR sample on the Lenovo and any desktop server
+     *  went through the scalar loop below (2026-09-16). Same shape as the NEON kernel: convert
+     *  sixteen bytes, accumulate the ADC stats lane-wise, reduce once per call. */
+    const __m128 bias = _mm_set1_ps(127.4f), inv = _mm_set1_ps(dg / 128.0f);
+    const __m128i zero = _mm_setzero_si128();
+    uint32_t rails = 0; uint8_t mx = 0, mn = 255;
+    __m128i vmax = _mm_setzero_si128(), vmin = _mm_set1_epi8((char)255), railBlk = _mm_setzero_si128();
+    // ★ unsigned compare via the max trick: b >= 254  <=>  max(b,254) == b ; b <= 1 <=> min(b,1) == b
+    const __m128i hiRail = _mm_set1_epi8((char)254), loRail = _mm_set1_epi8(1), one = _mm_set1_epi8(1);
+    uint32_t railAcc = 0; int blk = 0;
+    int i = 0;
+    for (; i + 16 <= nF; i += 16) {
+        const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(in + i));
+        if (st) {
+            const __m128i hit = _mm_or_si128(_mm_cmpeq_epi8(_mm_max_epu8(b, hiRail), b),
+                                             _mm_cmpeq_epi8(_mm_min_epu8(b, loRail), b));
+            railBlk = _mm_add_epi8(railBlk, _mm_and_si128(hit, one));
+            vmax = _mm_max_epu8(vmax, b);
+            vmin = _mm_min_epu8(vmin, b);
+            if (++blk == 128) {
+                const __m128i w = _mm_sad_epu8(railBlk, zero);      // two 64-bit sums of the bytes
+                railAcc += (uint32_t)_mm_cvtsi128_si32(w) + (uint32_t)_mm_cvtsi128_si32(_mm_srli_si128(w, 8));
+                railBlk = zero; blk = 0;
+            }
+        }
+        const __m128i lo = _mm_unpacklo_epi8(b, zero), hi = _mm_unpackhi_epi8(b, zero);
+        const __m128 f0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(lo, zero));
+        const __m128 f1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(lo, zero));
+        const __m128 f2 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(hi, zero));
+        const __m128 f3 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(hi, zero));
+        _mm_storeu_ps(out + i,      _mm_mul_ps(_mm_sub_ps(f0, bias), inv));
+        _mm_storeu_ps(out + i + 4,  _mm_mul_ps(_mm_sub_ps(f1, bias), inv));
+        _mm_storeu_ps(out + i + 8,  _mm_mul_ps(_mm_sub_ps(f2, bias), inv));
+        _mm_storeu_ps(out + i + 12, _mm_mul_ps(_mm_sub_ps(f3, bias), inv));
+    }
+    if (st) {
+        const __m128i w = _mm_sad_epu8(railBlk, zero);
+        railAcc += (uint32_t)_mm_cvtsi128_si32(w) + (uint32_t)_mm_cvtsi128_si32(_mm_srli_si128(w, 8));
+        rails += railAcc;
+        alignas(16) uint8_t t[16];
+        _mm_store_si128(reinterpret_cast<__m128i*>(t), vmax); for (int q = 0; q < 16; ++q) if (t[q] > mx) mx = t[q];
+        _mm_store_si128(reinterpret_cast<__m128i*>(t), vmin); for (int q = 0; q < 16; ++q) if (t[q] < mn) mn = t[q];
+    }
+    for (; i < nF; ++i) {
+        if (st) { const uint8_t v = in[i];
+                  if (v >= 254 || v <= 1) ++rails;
+                  if (v > mx) mx = v; if (v < mn) mn = v; }
+        out[i] = ((float)in[i] - 127.4f) * (dg / 128.0f);
+    }
 #else
     uint32_t rails = 0; uint8_t mx = 0, mn = 255;
     for (int i = 0; i < nF; ++i) {
@@ -16826,8 +16877,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
         constexpr float kInv = 1.0f / 32768.0f;
-        for (int i = 0; i < sampCount; i++)
-            v[i] = cf32(buf[2*i] * kInv, buf[2*i + 1] * kInv);
+        // ★ Eight int16 a go (NEON / SSE2) — this ran scalar for every RSP, Airspy and SpyServer
+        //   sample while the u8 path had a vector kernel (2026-09-16).
+        vibedsp::convI16ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2, kInv);
         {
             std::unique_lock<std::mutex> lk(iqMtx);
             if (iqMaxSamples > 0) {

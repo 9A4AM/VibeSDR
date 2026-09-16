@@ -13,6 +13,12 @@
 #include <thread>
 #include <cstdio>
 #include <cmath>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#include "vibedsp/neon_compat.h"
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 namespace vibe {
 
@@ -1187,7 +1193,72 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
     const int dcIi = (int)dcI, dcQi = (int)dcQ;
     long long sumI = 0, sumQ = 0;
     int peak = 0; unsigned rails = 0;
-    for (unsigned i = 0; i < numSamples; ++i) {
+    unsigned i = 0;
+    /* ★ Eight samples a go (NEON / SSE2), reduced once per callback — this ran per sample on
+     *  every RSP sample, scalar, on the capture thread (2026-09-16). Same arithmetic: the sums
+     *  are exact integers, the peak is max|x − dc|, a rail is |raw| ≥ 32000. */
+#if defined(__ARM_NEON)
+    {
+        int32x4_t sI = vdupq_n_s32(0), sQ = vdupq_n_s32(0);
+        int16x8_t pk = vdupq_n_s16(0);
+        uint16x8_t railV = vdupq_n_u16(0);
+        const int16x8_t dI = vdupq_n_s16((int16_t)dcIi), dQ = vdupq_n_s16((int16_t)dcQi);
+        const uint16x8_t lim = vdupq_n_u16(32000);
+        unsigned blk = 0;
+        for (; i + 8 <= numSamples; i += 8) {
+            const int16x8_t a = vld1q_s16(xi + i), b = vld1q_s16(xq + i);
+            int16x8x2_t il; il.val[0] = a; il.val[1] = b;
+            vst2q_s16(ilv.data() + i * 2, il);
+            sI = vpadalq_s16(sI, a); sQ = vpadalq_s16(sQ, b);
+            // ★ saturating: -32768 - dc would otherwise wrap; the peak only needs the magnitude
+            pk = vmaxq_s16(pk, vmaxq_s16(vqabsq_s16(vqsubq_s16(a, dI)), vqabsq_s16(vqsubq_s16(b, dQ))));
+            const uint16x8_t hit = vorrq_u16(vcgeq_u16(vreinterpretq_u16_s16(vqabsq_s16(a)), lim),
+                                             vcgeq_u16(vreinterpretq_u16_s16(vqabsq_s16(b)), lim));
+            railV = vsubq_u16(railV, hit);                 // hit lanes are 0xFFFF = -1
+            if (++blk == 8192) {                            // widen before a lane could wrap
+                rails += (unsigned)vaddvq_u32(vpaddlq_u16(railV)); railV = vdupq_n_u16(0);
+                sumI += (long long)vaddvq_s32(sI); sumQ += (long long)vaddvq_s32(sQ);
+                sI = vdupq_n_s32(0); sQ = vdupq_n_s32(0); blk = 0;
+            }
+        }
+        rails += (unsigned)vaddvq_u32(vpaddlq_u16(railV));
+        sumI += (long long)vaddvq_s32(sI); sumQ += (long long)vaddvq_s32(sQ);
+        peak = (int)vmaxvq_s16(pk);
+    }
+#elif defined(__SSE2__)
+    {
+        __m128i sI = _mm_setzero_si128(), sQ = _mm_setzero_si128(), pk = _mm_setzero_si128(), railV = _mm_setzero_si128();
+        const __m128i dI = _mm_set1_epi16((short)dcIi), dQ = _mm_set1_epi16((short)dcQi);
+        const __m128i limM1 = _mm_set1_epi16(31999), zero = _mm_setzero_si128();
+        auto abs16 = [&](__m128i v) { const __m128i m = _mm_cmpgt_epi16(zero, v); return _mm_subs_epi16(_mm_xor_si128(v, m), m); };   // saturating |v|
+        unsigned blk = 0;
+        for (; i + 8 <= numSamples; i += 8) {
+            const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(xi + i));
+            const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(xq + i));
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(ilv.data() + i * 2),     _mm_unpacklo_epi16(a, b));
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(ilv.data() + i * 2 + 8), _mm_unpackhi_epi16(a, b));
+            sI = _mm_add_epi32(sI, _mm_madd_epi16(a, _mm_set1_epi16(1)));
+            sQ = _mm_add_epi32(sQ, _mm_madd_epi16(b, _mm_set1_epi16(1)));
+            pk = _mm_max_epi16(pk, _mm_max_epi16(abs16(_mm_subs_epi16(a, dI)), abs16(_mm_subs_epi16(b, dQ))));
+            const __m128i hit = _mm_or_si128(_mm_cmpgt_epi16(abs16(a), limM1), _mm_cmpgt_epi16(abs16(b), limM1));
+            railV = _mm_sub_epi16(railV, hit);
+            if (++blk == 8192) {
+                const __m128i w = _mm_madd_epi16(railV, _mm_set1_epi16(1));
+                alignas(16) int32_t t[4]; _mm_store_si128(reinterpret_cast<__m128i*>(t), w); rails += (unsigned)(t[0] + t[1] + t[2] + t[3]);
+                _mm_store_si128(reinterpret_cast<__m128i*>(t), sI); sumI += (long long)t[0] + t[1] + t[2] + t[3];
+                _mm_store_si128(reinterpret_cast<__m128i*>(t), sQ); sumQ += (long long)t[0] + t[1] + t[2] + t[3];
+                sI = zero; sQ = zero; railV = zero; blk = 0;
+            }
+        }
+        alignas(16) int32_t t[4];
+        _mm_store_si128(reinterpret_cast<__m128i*>(t), _mm_madd_epi16(railV, _mm_set1_epi16(1))); rails += (unsigned)(t[0] + t[1] + t[2] + t[3]);
+        _mm_store_si128(reinterpret_cast<__m128i*>(t), sI); sumI += (long long)t[0] + t[1] + t[2] + t[3];
+        _mm_store_si128(reinterpret_cast<__m128i*>(t), sQ); sumQ += (long long)t[0] + t[1] + t[2] + t[3];
+        alignas(16) int16_t p16[8]; _mm_store_si128(reinterpret_cast<__m128i*>(p16), pk);
+        for (int q = 0; q < 8; ++q) if (p16[q] > peak) peak = p16[q];
+    }
+#endif
+    for (; i < numSamples; ++i) {
         const int a = xi[i], b = xq[i];
         sumI += a; sumQ += b;
         const int ac = a - dcIi, bc = b - dcQi;          // ★ DC-removed, for LEVEL

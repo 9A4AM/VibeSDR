@@ -92,61 +92,268 @@ static inline __m128 sseMla(__m128 a, __m128 b, __m128 c) {
 
 // ── Dot products ────────────────────────────────────────────────────────────
 // Real: sum(a[j]*b[j]). Complex: sum(t[j]*z[j]), z interleaved re/im (len 2K).
+// ★★★ TWO ACCUMULATORS, NOT ONE (2026-09-16). A fused multiply-add has a 4-cycle latency on the
+//     in-order Cortex-A53 (Pi 3, Zero 2 W, every cheap phone) and a single accumulator makes each
+//     one wait for the last: the FIR was the top symbol in the Pi 3 WFM profile (dotCplx 14 %,
+//     dotReal 6 %) while using a quarter of the multiplier. Two independent chains halve the
+//     stall; the out-of-order cores (Mac, Lenovo) were already hiding it and lose nothing.
+//  ★ The scalar path does the same with four partial sums, which is what lets the ARMv6 VFP
+//    (Pi Zero W — no NEON at all) pipeline its multiply-accumulates instead of serialising them.
+//  ★ The order of float additions changes, so results differ from before in the last bit or two;
+//    every kernel test still passes and the audio is unaffected.
 static inline float dotReal(const float* a, const float* b, int K) {
 #if VIBE_NEON
-    float32x4_t acc = vdupq_n_f32(0.0f);
+    float32x4_t acc0 = vdupq_n_f32(0.0f), acc1 = vdupq_n_f32(0.0f);
     int j = 0;
-    for (; j + 4 <= K; j += 4)
-        acc = vmlaq_f32(acc, vld1q_f32(a + j), vld1q_f32(b + j));
-    float s = vaddvq_f32(acc);
+    for (; j + 8 <= K; j += 8) {
+        acc0 = vmlaq_f32(acc0, vld1q_f32(a + j),     vld1q_f32(b + j));
+        acc1 = vmlaq_f32(acc1, vld1q_f32(a + j + 4), vld1q_f32(b + j + 4));
+    }
+    if (j + 4 <= K) { acc0 = vmlaq_f32(acc0, vld1q_f32(a + j), vld1q_f32(b + j)); j += 4; }
+    float s = vaddvq_f32(vaddq_f32(acc0, acc1));
     for (; j < K; ++j) s += a[j] * b[j];
     return s;
 #elif VIBE_SSE
-    __m128 acc = _mm_setzero_ps();
+    __m128 acc0 = _mm_setzero_ps(), acc1 = _mm_setzero_ps();
     int j = 0;
-    for (; j + 4 <= K; j += 4)
-        acc = sseMla(acc, _mm_loadu_ps(a + j), _mm_loadu_ps(b + j));
-    float s = sseAddv(acc);
+    for (; j + 8 <= K; j += 8) {
+        acc0 = sseMla(acc0, _mm_loadu_ps(a + j),     _mm_loadu_ps(b + j));
+        acc1 = sseMla(acc1, _mm_loadu_ps(a + j + 4), _mm_loadu_ps(b + j + 4));
+    }
+    if (j + 4 <= K) { acc0 = sseMla(acc0, _mm_loadu_ps(a + j), _mm_loadu_ps(b + j)); j += 4; }
+    float s = sseAddv(_mm_add_ps(acc0, acc1));
     for (; j < K; ++j) s += a[j] * b[j];
     return s;
 #else
-    float s = 0.0f;
-    for (int j = 0; j < K; ++j) s += a[j] * b[j];
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+    int j = 0;
+    for (; j + 4 <= K; j += 4) {
+        s0 += a[j] * b[j];         s1 += a[j + 1] * b[j + 1];
+        s2 += a[j + 2] * b[j + 2]; s3 += a[j + 3] * b[j + 3];
+    }
+    float s = (s0 + s1) + (s2 + s3);
+    for (; j < K; ++j) s += a[j] * b[j];
     return s;
 #endif
 }
 
 static inline cf32 dotCplx(const float* t, const float* z, int K) {
 #if VIBE_NEON
-    float32x4_t ar = vdupq_n_f32(0.0f), ai = vdupq_n_f32(0.0f);
+    float32x4_t ar0 = vdupq_n_f32(0.0f), ai0 = vdupq_n_f32(0.0f);
+    float32x4_t ar1 = vdupq_n_f32(0.0f), ai1 = vdupq_n_f32(0.0f);
     int j = 0;
-    for (; j + 4 <= K; j += 4) {
-        const float32x4_t tv = vld1q_f32(t + j);
-        const float32x4x2_t zv = vld2q_f32(z + 2 * j);   // de-interleave re/im
-        ar = vmlaq_f32(ar, tv, zv.val[0]);
-        ai = vmlaq_f32(ai, tv, zv.val[1]);
+    for (; j + 8 <= K; j += 8) {
+        const float32x4_t t0 = vld1q_f32(t + j), t1 = vld1q_f32(t + j + 4);
+        const float32x4x2_t z0 = vld2q_f32(z + 2 * j), z1 = vld2q_f32(z + 2 * j + 8);
+        ar0 = vmlaq_f32(ar0, t0, z0.val[0]);
+        ai0 = vmlaq_f32(ai0, t0, z0.val[1]);
+        ar1 = vmlaq_f32(ar1, t1, z1.val[0]);
+        ai1 = vmlaq_f32(ai1, t1, z1.val[1]);
     }
-    float re = vaddvq_f32(ar), im = vaddvq_f32(ai);
+    if (j + 4 <= K) {
+        const float32x4_t tv = vld1q_f32(t + j);
+        const float32x4x2_t zv = vld2q_f32(z + 2 * j);
+        ar0 = vmlaq_f32(ar0, tv, zv.val[0]);
+        ai0 = vmlaq_f32(ai0, tv, zv.val[1]);
+        j += 4;
+    }
+    float re = vaddvq_f32(vaddq_f32(ar0, ar1)), im = vaddvq_f32(vaddq_f32(ai0, ai1));
     for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
     return cf32(re, im);
 #elif VIBE_SSE
-    __m128 ar = _mm_setzero_ps(), ai = _mm_setzero_ps();
+    __m128 ar0 = _mm_setzero_ps(), ai0 = _mm_setzero_ps(), ar1 = _mm_setzero_ps(), ai1 = _mm_setzero_ps();
     int j = 0;
-    for (; j + 4 <= K; j += 4) {
-        const __m128 tv = _mm_loadu_ps(t + j);
+    for (; j + 8 <= K; j += 8) {
         __m128 zr, zi;
         sseLoad2(z + 2 * j, zr, zi);
-        ar = sseMla(ar, tv, zr);
-        ai = sseMla(ai, tv, zi);
+        const __m128 t0 = _mm_loadu_ps(t + j);
+        ar0 = sseMla(ar0, t0, zr); ai0 = sseMla(ai0, t0, zi);
+        sseLoad2(z + 2 * j + 8, zr, zi);
+        const __m128 t1 = _mm_loadu_ps(t + j + 4);
+        ar1 = sseMla(ar1, t1, zr); ai1 = sseMla(ai1, t1, zi);
     }
-    float re = sseAddv(ar), im = sseAddv(ai);
+    if (j + 4 <= K) {
+        __m128 zr, zi;
+        sseLoad2(z + 2 * j, zr, zi);
+        const __m128 tv = _mm_loadu_ps(t + j);
+        ar0 = sseMla(ar0, tv, zr); ai0 = sseMla(ai0, tv, zi);
+        j += 4;
+    }
+    float re = sseAddv(_mm_add_ps(ar0, ar1)), im = sseAddv(_mm_add_ps(ai0, ai1));
     for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
     return cf32(re, im);
 #else
-    float re = 0.0f, im = 0.0f;
-    for (int j = 0; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
+    float r0 = 0.0f, i0 = 0.0f, r1 = 0.0f, i1 = 0.0f;
+    int j = 0;
+    for (; j + 2 <= K; j += 2) {
+        r0 += t[j] * z[2 * j];         i0 += t[j] * z[2 * j + 1];
+        r1 += t[j + 1] * z[2 * j + 2]; i1 += t[j + 1] * z[2 * j + 3];
+    }
+    float re = r0 + r1, im = i0 + i1;
+    for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
     return cf32(re, im);
 #endif
+}
+
+// ── Complex magnitude, four at a time ───────────────────────────────────────
+// |z| for n interleaved samples. AM detection and the noise blanker each did a scalar sqrt per
+// IQ sample; the recurrences that follow them stay scalar, the square roots do not have to.
+static inline void magnitudes(const cf32* z, float* out, int n) {
+    const float* f = reinterpret_cast<const float*>(z);
+    int i = 0;
+#if VIBE_NEON
+    for (; i + 4 <= n; i += 4) {
+        const float32x4x2_t v = vld2q_f32(f + 2 * i);
+        const float32x4_t p = vmlaq_f32(vmulq_f32(v.val[0], v.val[0]), v.val[1], v.val[1]);
+        float32x4_t r = vrsqrteq_f32(p);
+        r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(p, r), r));
+        r = vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(p, r), r));
+        const uint32x4_t nz = vcgtq_f32(p, vdupq_n_f32(1e-30f));
+        vst1q_f32(out + i, vbslq_f32(nz, vmulq_f32(p, r), vdupq_n_f32(0.0f)));
+    }
+#elif VIBE_SSE
+    for (; i + 4 <= n; i += 4) {
+        __m128 re, im;
+        sseLoad2(f + 2 * i, re, im);
+        _mm_storeu_ps(out + i, _mm_sqrt_ps(_mm_add_ps(_mm_mul_ps(re, re), _mm_mul_ps(im, im))));
+    }
+#endif
+    for (; i < n; ++i) out[i] = std::sqrt(f[2 * i] * f[2 * i] + f[2 * i + 1] * f[2 * i + 1]);
+}
+
+// ── int16 interleaved IQ → float, scaled ────────────────────────────────────
+// 16-bit radios (RSP, Airspy, SpyServer) — the u8 conversion had a NEON path, this had none.
+static inline void convI16ToF32(const int16_t* in, float* out, int nF, float scale) {
+    int i = 0;
+#if VIBE_NEON
+    const float32x4_t sc = vdupq_n_f32(scale);
+    for (; i + 8 <= nF; i += 8) {
+        const int16x8_t v = vld1q_s16(in + i);
+        vst1q_f32(out + i,     vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(v))), sc));
+        vst1q_f32(out + i + 4, vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(v))), sc));
+    }
+#elif VIBE_SSE
+    const __m128 sc = _mm_set1_ps(scale);
+    for (; i + 8 <= nF; i += 8) {
+        const __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(in + i));
+        // sign-extend 16 → 32 with the SSE2 shift trick (no pmovsx before SSE4.1)
+        const __m128i lo = _mm_srai_epi32(_mm_unpacklo_epi16(v, v), 16);
+        const __m128i hi = _mm_srai_epi32(_mm_unpackhi_epi16(v, v), 16);
+        _mm_storeu_ps(out + i,     _mm_mul_ps(_mm_cvtepi32_ps(lo), sc));
+        _mm_storeu_ps(out + i + 4, _mm_mul_ps(_mm_cvtepi32_ps(hi), sc));
+    }
+#endif
+    for (; i < nF; ++i) out[i] = (float)in[i] * scale;
+}
+
+// ── Recursive complex rotator, four lanes, no per-sample trig ───────────────
+// out[i] = in[i] * conj(e^{j·phase_i}) with phase advancing by `step` radians per sample —
+// the SSB Weaver mix and the RDS guard-band rotation both did a scalar recurrence (or, in the
+// RDS case, a libm cos/sin PER SAMPLE). The four lanes hold consecutive phases and advance by the
+// four-sample twiddle; `cr/ci` carry the oscillator between calls and are renormalised here every
+// call (n is a block, so drift cannot accumulate). If `cosOut/sinOut` are given, the per-sample
+// c/s are written for a later re-mix. Sign convention: aI = zr*c + zi*s, aQ = zi*c - zr*s.
+static inline void rotateBlock(const float* zr_in, const float* zi_in, int n,
+                               float& cr, float& ci, float stepCos, float stepSin,
+                               float* aI, float* aQ, float* cosOut, float* sinOut) {
+    int i = 0;
+#if VIBE_NEON || VIBE_SSE
+    float pr[4], pi[4];
+    pr[0] = cr; pi[0] = ci;
+    for (int q = 1; q < 4; ++q) { pr[q] = pr[q-1] * stepCos - pi[q-1] * stepSin; pi[q] = pr[q-1] * stepSin + pi[q-1] * stepCos; }
+    // cos 4w = 2cos²2w − 1, sin 4w = 2 sin 2w cos 2w  (★ the triple-angle form was here once —
+    // it put the SSB tone 1 Hz out and let the wrong sideband through; the tests caught it)
+    const float c2 = stepCos * stepCos - stepSin * stepSin, s2 = 2.0f * stepSin * stepCos;
+    const float c4 = c2 * c2 - s2 * s2, s4 = 2.0f * s2 * c2;
+#if VIBE_NEON
+    float32x4_t vr = vld1q_f32(pr), vi = vld1q_f32(pi);
+    for (; i + 4 <= n; i += 4) {
+        const float32x4_t zr = vld1q_f32(zr_in + i), zi = vld1q_f32(zi_in + i);
+        vst1q_f32(aI + i, vmlaq_f32(vmulq_f32(zr, vr), zi, vi));
+        vst1q_f32(aQ + i, vmlsq_f32(vmulq_f32(zi, vr), zr, vi));
+        if (cosOut) { vst1q_f32(cosOut + i, vr); vst1q_f32(sinOut + i, vi); }
+        const float32x4_t nr = vmlsq_n_f32(vmulq_n_f32(vr, c4), vi, s4);
+        const float32x4_t ni = vmlaq_n_f32(vmulq_n_f32(vr, s4), vi, c4);
+        vr = nr; vi = ni;
+    }
+    cr = vgetq_lane_f32(vr, 0); ci = vgetq_lane_f32(vi, 0);
+#else
+    __m128 vr = _mm_loadu_ps(pr), vi = _mm_loadu_ps(pi);
+    const __m128 c4v = _mm_set1_ps(c4), s4v = _mm_set1_ps(s4);
+    for (; i + 4 <= n; i += 4) {
+        const __m128 zr = _mm_loadu_ps(zr_in + i), zi = _mm_loadu_ps(zi_in + i);
+        _mm_storeu_ps(aI + i, _mm_add_ps(_mm_mul_ps(zr, vr), _mm_mul_ps(zi, vi)));
+        _mm_storeu_ps(aQ + i, _mm_sub_ps(_mm_mul_ps(zi, vr), _mm_mul_ps(zr, vi)));
+        if (cosOut) { _mm_storeu_ps(cosOut + i, vr); _mm_storeu_ps(sinOut + i, vi); }
+        const __m128 nr = _mm_sub_ps(_mm_mul_ps(vr, c4v), _mm_mul_ps(vi, s4v));
+        const __m128 ni = _mm_add_ps(_mm_mul_ps(vr, s4v), _mm_mul_ps(vi, c4v));
+        vr = nr; vi = ni;
+    }
+    cr = _mm_cvtss_f32(vr); ci = _mm_cvtss_f32(vi);
+#endif
+#endif
+    for (; i < n; ++i) {
+        const float c = cr, sn = ci;
+        aI[i] = zr_in[i] * c + zi_in[i] * sn;
+        aQ[i] = zi_in[i] * c - zr_in[i] * sn;
+        if (cosOut) { cosOut[i] = c; sinOut[i] = sn; }
+        const float nr = c * stepCos - sn * stepSin, ni = c * stepSin + sn * stepCos;
+        cr = nr; ci = ni;
+    }
+    const float m = std::sqrt(cr * cr + ci * ci);
+    if (m > 0.0f) { cr /= m; ci /= m; }
+}
+/** The same rotator over interleaved complex input (the SSB Weaver mix takes the DDC output). */
+static inline void rotateBlockIlv(const cf32* z, int n, float& cr, float& ci, float stepCos, float stepSin,
+                                  float* aI, float* aQ, float* cosOut, float* sinOut) {
+    const float* f = reinterpret_cast<const float*>(z);
+    int i = 0;
+#if VIBE_NEON || VIBE_SSE
+    float pr[4], pi[4];
+    pr[0] = cr; pi[0] = ci;
+    for (int q = 1; q < 4; ++q) { pr[q] = pr[q-1] * stepCos - pi[q-1] * stepSin; pi[q] = pr[q-1] * stepSin + pi[q-1] * stepCos; }
+    // cos 4w = 2cos²2w − 1, sin 4w = 2 sin 2w cos 2w  (★ the triple-angle form was here once —
+    // it put the SSB tone 1 Hz out and let the wrong sideband through; the tests caught it)
+    const float c2 = stepCos * stepCos - stepSin * stepSin, s2 = 2.0f * stepSin * stepCos;
+    const float c4 = c2 * c2 - s2 * s2, s4 = 2.0f * s2 * c2;
+#if VIBE_NEON
+    float32x4_t vr = vld1q_f32(pr), vi = vld1q_f32(pi);
+    for (; i + 4 <= n; i += 4) {
+        const float32x4x2_t v = vld2q_f32(f + 2 * i);
+        vst1q_f32(aI + i, vmlaq_f32(vmulq_f32(v.val[0], vr), v.val[1], vi));
+        vst1q_f32(aQ + i, vmlsq_f32(vmulq_f32(v.val[1], vr), v.val[0], vi));
+        if (cosOut) { vst1q_f32(cosOut + i, vr); vst1q_f32(sinOut + i, vi); }
+        const float32x4_t nr = vmlsq_n_f32(vmulq_n_f32(vr, c4), vi, s4);
+        const float32x4_t ni = vmlaq_n_f32(vmulq_n_f32(vr, s4), vi, c4);
+        vr = nr; vi = ni;
+    }
+    cr = vgetq_lane_f32(vr, 0); ci = vgetq_lane_f32(vi, 0);
+#else
+    __m128 vr = _mm_loadu_ps(pr), vi = _mm_loadu_ps(pi);
+    const __m128 c4v = _mm_set1_ps(c4), s4v = _mm_set1_ps(s4);
+    for (; i + 4 <= n; i += 4) {
+        __m128 zr, zi;
+        sseLoad2(f + 2 * i, zr, zi);
+        _mm_storeu_ps(aI + i, _mm_add_ps(_mm_mul_ps(zr, vr), _mm_mul_ps(zi, vi)));
+        _mm_storeu_ps(aQ + i, _mm_sub_ps(_mm_mul_ps(zi, vr), _mm_mul_ps(zr, vi)));
+        if (cosOut) { _mm_storeu_ps(cosOut + i, vr); _mm_storeu_ps(sinOut + i, vi); }
+        const __m128 nr = _mm_sub_ps(_mm_mul_ps(vr, c4v), _mm_mul_ps(vi, s4v));
+        const __m128 ni = _mm_add_ps(_mm_mul_ps(vr, s4v), _mm_mul_ps(vi, c4v));
+        vr = nr; vi = ni;
+    }
+    cr = _mm_cvtss_f32(vr); ci = _mm_cvtss_f32(vi);
+#endif
+#endif
+    for (; i < n; ++i) {
+        const float c = cr, sn = ci;
+        aI[i] = f[2 * i] * c + f[2 * i + 1] * sn;
+        aQ[i] = f[2 * i + 1] * c - f[2 * i] * sn;
+        if (cosOut) { cosOut[i] = c; sinOut[i] = sn; }
+        const float nr = c * stepCos - sn * stepSin, ni = c * stepSin + sn * stepCos;
+        cr = nr; ci = ni;
+    }
+    const float m = std::sqrt(cr * cr + ci * ci);
+    if (m > 0.0f) { cr /= m; ci /= m; }
 }
 
 // ── Complex × real (windowing): out[i] = in[i] * w[i] ───────────────────────
@@ -190,6 +397,58 @@ static constexpr float kDbPerLog2 = 3.0102999566398120f;   // 10*log10(2)
 static inline float powerToDb(float p) {
     if (p < 1e-20f) p = 1e-20f;
     return kDbPerLog2 * fastLog2(p);
+}
+// ★ The same bit-trick, four bins at a time — the spectrum's dB conversion ran per bin per frame
+//   per mode, scalar, with a divide in it (2026-09-16). Lane-for-lane identical to powerToDb.
+#if VIBE_NEON
+static inline float32x4_t powerToDbq(float32x4_t p) {
+    p = vmaxq_f32(p, vdupq_n_f32(1e-20f));
+    const uint32x4_t bits = vreinterpretq_u32_f32(p);
+    const float32x4_t mx = vreinterpretq_f32_u32(vorrq_u32(vandq_u32(bits, vdupq_n_u32(0x007FFFFFu)), vdupq_n_u32(0x3f000000u)));
+    const float32x4_t y = vmulq_n_f32(vcvtq_f32_u32(bits), 1.1920928955078125e-7f);
+    const float32x4_t den = vaddq_f32(vdupq_n_f32(0.3520887068f), mx);
+    float32x4_t r = vrecpeq_f32(den);
+    r = vmulq_f32(r, vrecpsq_f32(den, r));
+    r = vmulq_f32(r, vrecpsq_f32(den, r));
+    float32x4_t l = vsubq_f32(y, vdupq_n_f32(124.22551499f));
+    l = vmlsq_n_f32(l, mx, 1.498030302f);
+    l = vmlsq_n_f32(l, r, 1.72587999f);
+    return vmulq_n_f32(l, kDbPerLog2);
+}
+#elif VIBE_SSE
+static inline __m128 powerToDbq(__m128 p) {
+    p = _mm_max_ps(p, _mm_set1_ps(1e-20f));
+    const __m128i bits = _mm_castps_si128(p);
+    const __m128 mx = _mm_castsi128_ps(_mm_or_si128(_mm_and_si128(bits, _mm_set1_epi32(0x007FFFFF)), _mm_set1_epi32(0x3f000000)));
+    // unsigned int → float: the bit pattern of a positive float never has the sign bit set,
+    // so the signed conversion is exact here
+    const __m128 y = _mm_mul_ps(_mm_cvtepi32_ps(bits), _mm_set1_ps(1.1920928955078125e-7f));
+    const __m128 den = _mm_add_ps(_mm_set1_ps(0.3520887068f), mx);
+    __m128 l = _mm_sub_ps(y, _mm_set1_ps(124.22551499f));
+    l = _mm_sub_ps(l, _mm_mul_ps(mx, _mm_set1_ps(1.498030302f)));
+    l = _mm_sub_ps(l, _mm_div_ps(_mm_set1_ps(1.72587999f), den));
+    return _mm_mul_ps(l, _mm_set1_ps(kDbPerLog2));
+}
+#endif
+/** |z|²·scale → dB for n interleaved bins. */
+static inline void powerToDbBlock(const float* z, float* outDb, int n, float scale) {
+    int j = 0;
+#if VIBE_NEON
+    const float32x4_t sc = vdupq_n_f32(scale);
+    for (; j + 4 <= n; j += 4) {
+        const float32x4x2_t v = vld2q_f32(z + 2 * j);
+        const float32x4_t p = vmulq_f32(vmlaq_f32(vmulq_f32(v.val[0], v.val[0]), v.val[1], v.val[1]), sc);
+        vst1q_f32(outDb + j, powerToDbq(p));
+    }
+#elif VIBE_SSE
+    const __m128 sc = _mm_set1_ps(scale);
+    for (; j + 4 <= n; j += 4) {
+        __m128 re, im;
+        sseLoad2(z + 2 * j, re, im);
+        _mm_storeu_ps(outDb + j, powerToDbq(_mm_mul_ps(_mm_add_ps(_mm_mul_ps(re, re), _mm_mul_ps(im, im)), sc)));
+    }
+#endif
+    for (; j < n; ++j) outDb[j] = powerToDb((z[2*j]*z[2*j] + z[2*j+1]*z[2*j+1]) * scale);
 }
 
 // ── Accurate fast atan2 — ~1e-6 max error (inaudible for FM) ─────────────────

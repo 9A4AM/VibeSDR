@@ -112,14 +112,10 @@ void ComplexFFT::powerDbShifted(const cf32* in, const float* win, float* outDb, 
     // millions of bins/sec across every mode.
     const int h = n_ / 2;
     const float* z = reinterpret_cast<const float*>(out_.data());
-    for (int j = 0; j < h; ++j) {
-        const int r = j + h;
-        outDb[j] = powerToDb((z[2*r]*z[2*r] + z[2*r+1]*z[2*r+1]) * scale);
-    }
-    for (int j = h; j < n_; ++j) {
-        const int r = j - h;
-        outDb[j] = powerToDb((z[2*r]*z[2*r] + z[2*r+1]*z[2*r+1]) * scale);
-    }
+    // ★ Two contiguous halves, each four bins at a time (powerToDbBlock) — the shift is just
+    //   where each half lands.
+    powerToDbBlock(z + 2 * h, outDb,     h,      scale);   // upper bins → left
+    powerToDbBlock(z,         outDb + h, n_ - h, scale);   // lower bins → right
 }
 
 RealFFT::RealFFT(int size) : n_(size) {
@@ -141,12 +137,7 @@ void RealFFT::forward(const float* in, cf32* out) {
 
 void RealFFT::powerDb(const float* in, float* outDb, float scale) {
     forward(in, scratch_.data());
-    const int b = bins();
-    for (int i = 0; i < b; ++i) {
-        const float re = scratch_[i].real();
-        const float im = scratch_[i].imag();
-        outDb[i] = powerToDb((re * re + im * im) * scale);   // fast log2-based dB
-    }
+    powerToDbBlock(reinterpret_cast<const float*>(scratch_.data()), outDb, bins(), scale);   // fast log2-based dB, 4 bins a go
 }
 
 // 4-term Nuttall window (matches SDR++ IQFrontEnd NUTTALL).

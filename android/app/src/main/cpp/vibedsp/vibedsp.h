@@ -25,9 +25,12 @@
 
 namespace vibedsp {
 
+
 // Sample types. Match the layout the shim already uses (interleaved float I/Q,
 // stereo float L/R) so the swap into local_sdr_shim.cpp is mechanical.
 using cf32 = std::complex<float>;
+/** |z| for n samples, vectorised where the build allows (ddc.cpp). */
+void complexMagnitudes(const cf32* z, float* out, int n);
 struct stereo { float l, r; };
 
 // ── RealFFT ────────────────────────────────────────────────────────────────
@@ -630,11 +633,16 @@ public:
         reset();
     }
     void reset() { avg_ = 0.0f; run_ = 0; blanked_ = 0; seen_ = 0; last_ = cf32{0.0f, 0.0f}; }
+    std::vector<float> mag_;   // scratch for the vectorised magnitudes
     /** @param k how far above the running mean counts as an impulse. */
     void process(cf32* z, int n, float k) {
         if (n <= 0 || a_ <= 0.0f) return;
+        // ★ Magnitudes four at a time first (the sqrt was this loop's cost); the hold/average
+        //   decision below is inherently serial and stays so (2026-09-16).
+        mag_.resize((size_t)n);
+        complexMagnitudes(z, mag_.data(), n);
         for (int i = 0; i < n; ++i) {
-            const float m = std::sqrt(z[i].real() * z[i].real() + z[i].imag() * z[i].imag());
+            const float m = mag_[i];
             if (avg_ <= 0.0f) avg_ = m;                       // first sample: seed, do not blank
             const bool hit = (m > k * avg_) && (run_ < kMaxRun);
             if (hit) {
@@ -1727,7 +1735,8 @@ private:
     float rdsPow_ = 0.0f;              // smoothed mean-square of the RDS baseband
     float guardPow_ = 0.0f;            // ...and of the guard band beside it
     float sigPowSlow_ = 0.0f;          // (rds - guard), smoothed over SECONDS
-    double guardPhase_ = 0.0;          // guard NCO phase, carried across blocks
+    double guardPhase_ = 0.0;          // guard NCO phase, carried across blocks (unused since the rotator)
+    float  guardCos_ = 1.0f, guardSin_ = 0.0f;   // the guard oscillator, carried across blocks
     double guardStep_ = 0.0;           // radians per sample for the guard offset
     bool  guardOn_ = false;            // costs a second filter pair — operator opt-in
     std::unique_ptr<RealFir> lpfGI_, lpfGQ_;
