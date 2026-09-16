@@ -46,6 +46,16 @@ fall back to PCM at 24 kHz if it is more than ~10 %.
 
 ## Build order
 
+0. **The integer CIC front end** (`VIBE_LITE` only). RTL dongles are not usable at 250 kS/s (the
+   225-300 k range leaves the tuner IF wide open, aliases and drops samples), so Lite pays for a
+   1.024 MS/s input. Today every input sample costs a u8→float conversion, an NCO multiply and the
+   first FIR stage, all at 1 M/s on a core with no vector unit — that is the 16 % (Pi 3, ARMv6)
+   against 8 % at 250 k. A third-order CIC decimating by 4, in integers, straight on the dongle's
+   bytes (about ten adds per sample, no float at the input rate), then the NCO and the existing
+   chain at 256 kS/s. Lite can do this because it tunes the DONGLE for its one listener, so the
+   channel is near DC and the NCO moves after the decimator; VibeServer cannot, because its NCO
+   before the decimator is what lets several listeners share one dongle. Expected: NFM 1.024 MS/s
+   ≈ the 250 k figure (8 % Pi 3 → 20-25 % Zero W); mono FM becomes plausible with item 1.
 1. **The mono FM chain** (`VIBE_LITE` only). Discriminator, then decimate to ~64 kHz *immediately*,
    then the 15 kHz low-pass and de-emphasis at that rate. Today the audio low-pass runs at the
    256 kHz channel rate, which is most of the mono cost. Let the channel sit at 150 kHz rather
