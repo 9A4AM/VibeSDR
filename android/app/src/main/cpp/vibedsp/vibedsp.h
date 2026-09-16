@@ -227,6 +227,7 @@ std::vector<float> designLowpass(double cutoff, double transition, bool deepStop
 class FirDecimator {
 public:
     FirDecimator(std::vector<float> taps, int decim);
+    int taps() const { return K_; }   // ★ for the VIBE_DSP_PLAN diagnostic
     // Filters `n` inputs; writes up to n/D (+/-1) outputs; returns the count.
     // `out` must hold at least n/decim + 1 samples.
     int process(const cf32* in, int n, cf32* out);
@@ -374,6 +375,8 @@ public:
 private:
     int L_, M_, phaseLen_;
     long long inCount_ = 0, outCount_ = 0;
+    long long outBase_ = 0;   // newest input index the next output uses (carried, not divided)
+    int       outBranch_ = 0; // its polyphase branch
     // Polyphase branches stored CONTIGUOUSLY and reversed (rBranch_[b*phaseLen+m]),
     // so each output is a forward NEON dot over a contiguous window of buf_ =
     // [phaseLen history][block]. (Was a strided prototype + circular history.)

@@ -1,6 +1,8 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include "vibedsp.h"
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include "simd_internal.h"   // stereoMatrixBlend / interleave2 (NEON)
 #include <cmath>
 #include <algorithm>
@@ -287,36 +289,87 @@ void RxPipeline::rebuildAudio() {
     const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
     // The absolute transition width the old single-stage design worked out to. Keep it
     // identical so the audible filter shape does not change.
-    const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
+    double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);   // re-derived below for the chosen channel rate
 
     decs_.clear();
     std::vector<int> stages;
-    {   // Decimate HARD and EARLY. Each stage costs roughly (its output rate x taps),
-        // so the goal is to collapse the sample rate as fast as possible and do the
-        // remaining work cheaply. Prime factors are the wrong tool: a decimation of 64
-        // prime-factorises to SIX stages of 2, and a first stage of 2 barely reduces
-        // the rate — so the expensive high-rate samples get dragged through stage after
-        // stage. (Measured: that made NFM 40% dearer than doing nothing.) Greedily take
-        // the LARGEST composite factor up to 8 instead: 64 -> 8x8, 50 -> 5x5x2.
-        int d = chDecim_;
-        while (d > 1) {
-            int f = 1;
-            /* ★★★ SMALL FACTORS, LARGEST-SMALL FIRST. This took the biggest factor up to 8, so a
-             *   2.4 MS/s RTL feeding a 300 kHz WFM channel got ONE stage of 8 — and the last stage
-             *   carries the deep-stopband Blackman design with the channel's own transition, which
-             *   at the full input rate is 264 taps: a 264-tap complex FIR at 2.4 MS/s, 36 % of the
-             *   Pi's V4 child in perf (2026-09-14) with the NEON dot product already in place.
-             *   4 then 2 puts a 20-tap anti-alias stage at the input rate and the 66-tap deep
-             *   stage at 600 kHz: ~32M MACs/s against ~79M. (2 then 4 is worse — 51M — because the
-             *   deep stage then runs at 1.2 MS/s.) Factors above 4 are only used when nothing
-             *   smaller divides what is left. */
-            for (int p = 4; p >= 2; --p) if (d % p == 0) { f = p; break; }
-            if (f == 1) for (int p = 8; p >= 5; --p) if (d % p == 0) { f = p; break; }
-            if (f == 1) { stages.push_back(d); break; }   // awkward prime: one stage
-            stages.push_back(f);
-            d /= f;
+    /* ★★★ THE DECIMATION IS CHOSEN BY COST, NOT BY floor(fs / target) (2026-09-16).
+     *
+     *  Each stage costs roughly (its output rate × its taps), and the last stage — the deep
+     *  stopband channel filter, whose length is set by the transition at ITS input rate — is
+     *  most of it. floor(fs/target) is blind to that: WFM at 1.024 MS/s got chDecim 3, ONE stage
+     *  of 227 taps at the full rate (77 M MACs/s), where decimating by 4 gives [2, 2] with the
+     *  113-tap deep filter at 512 kHz (35 M); NFM at 250 kS/s got a prime 5 (688 taps at the
+     *  input rate, 34 M) where 8 gives [4, 2] (6.5 M). "Lowering the sample rate made WFM MORE
+     *  expensive" — the note above — was this.
+     *
+     *  So every decimation between fs/(1.5·target) and 1.2·fs/target is planned with the SAME
+     *  formulas the build loop uses, costed, and the cheapest taken (ties to the larger, i.e.
+     *  the lower channel rate). The channel therefore lands between target/1.2 and 1.5·target —
+     *  never below 2.5× the mode's band. Each stage's own spec is unchanged, so the channel
+     *  filter out has the same shape; the adjacent-channel and passband tests pin the rejection.
+     *
+     *  ★★ The plan for a given decimation: the LAST stage is the smallest prime factor (it must
+     *     run at the lowest rate and decimate by the least); the anti-alias stages before it are
+     *     the other factors, 2s paired into 4s (one 20-tap stage at the input rate beats two
+     *     10-tap ones — "4 then 2", measured 2026-09-14), largest first. Prime factors are
+     *     otherwise the wrong tool — 64 as six stages of 2 drags the expensive high-rate samples
+     *     through stage after stage (measured: NFM 40 % dearer than doing nothing). */
+    const auto planFor = [&](int d, std::vector<int>& st, double& cost, double& trans_out) {
+        st.clear();
+        std::vector<int> primes;
+        { int r = d; for (int q = 2; q * q <= r; ++q) while (r % q == 0) { primes.push_back(q); r /= q; } if (r > 1) primes.push_back(r); }
+        if (primes.empty()) primes.push_back(1);
+        std::sort(primes.begin(), primes.end());
+        const int lastStage = primes.front();
+        primes.erase(primes.begin());
+        int twos = 0;
+        for (int q : primes) { if (q == 2) ++twos; else st.push_back(q); }
+        for (; twos >= 2; twos -= 2) st.push_back(4);
+        if (twos) st.push_back(2);
+        std::sort(st.begin(), st.end(), [](int x, int y) { return x > y; });
+        st.push_back(lastStage);
+        // cost, with the build loop's own spec
+        const double chFsC = sampleRate_ / d;
+        trans_out = std::max(chHalf * 0.5, chFsC * 0.25 - chHalf);
+        cost = 0.0;
+        double fsC = sampleRate_;
+        for (size_t i = 0; i < st.size(); ++i) {
+            const int D = st[i];
+            const double fsOut = fsC / D;
+            const bool last = (i + 1 == st.size());
+            double cutoff, trans;
+            if (last) {
+                cutoff = std::min(0.45 / D, chHalf / fsC);
+                trans  = std::max(cutoff * 0.5, trans_out / fsC);
+                if (smoothBw_) { const double chHalfLo = ssbLike ? chainBwLo_ : chainBwLo_ * 0.5; trans = (chHalfLo * 0.5) / fsC; }
+            } else {
+                cutoff = chHalf / fsC;
+                trans  = std::max((fsOut - chHalf) / fsC - cutoff, cutoff * 0.5);
+            }
+            trans = std::max(trans, 1e-3);
+            int n = (int)std::ceil((last ? 5.5 : 3.3) / std::max(trans, 1e-4));
+            if ((n & 1) == 0) ++n;
+            if (n < 9) n = 9;
+            cost += (double)n * fsOut;
+            fsC = fsOut;
         }
-        if (stages.empty()) stages.push_back(1);   // chDecim_ == 1: a plain filter
+    };
+    {
+        const int dFloor = chDecim_;
+        const int dLo = std::max(1, (int)std::ceil(sampleRate_ / (1.5 * targetCh)));
+        const int dHi = std::max(dFloor, (int)std::floor(1.2 * sampleRate_ / targetCh));
+        double bestCost = -1.0, bestTrans = transHz;
+        std::vector<int> st;
+        for (int d = dLo; d <= dHi; ++d) {
+            double c, t;
+            planFor(d, st, c, t);
+            if (bestCost < 0.0 || c < bestCost * 0.999 || (c <= bestCost * 1.001 && d > chDecim_)) {
+                bestCost = c; chDecim_ = d; stages = st; bestTrans = t;
+            }
+        }
+        chFs_   = sampleRate_ / chDecim_;
+        transHz = bestTrans;
     }
 
     double fs = sampleRate_;
@@ -366,6 +419,14 @@ void RxPipeline::rebuildAudio() {
         fs = fsOut;
     }
 
+    /* ★ VIBE_DSP_PLAN=1 prints the chain the planner built — stage decimations and tap counts,
+     *  the channel rate — so a cost can be read off instead of guessed (2026-09-16). */
+    if (std::getenv("VIBE_DSP_PLAN")) {
+        std::fprintf(stderr, "[vibedsp] fs=%.0f mode=%d bw=%.0f target=%.0f chDecim=%d chFs=%.1f stages:",
+                     sampleRate_, (int)mode_, bwHz_, targetCh, chDecim_, chFs_);
+        for (size_t i = 0; i < stages.size(); ++i) std::fprintf(stderr, " /%d(%d taps)", stages[i], decs_[i]->taps());
+        std::fprintf(stderr, "\n");
+    }
     nco_.setFreq(offsetHz_ / sampleRate_);   // tune the channel to baseband
 
     // Construct the demod for the active mode. FM gain maps radians/sample to a

@@ -37,14 +37,14 @@ flags_for() {
 deps_for() {
   case "$1" in
     test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
-                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
-                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
-                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
-                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
-                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp \
-                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c" ;;
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;

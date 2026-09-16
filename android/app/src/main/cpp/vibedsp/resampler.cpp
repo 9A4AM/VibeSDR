@@ -68,7 +68,7 @@ RationalResampler::RationalResampler(int inRate, int outRate) {
 void RationalResampler::reset() {
     std::fill(buf_.begin(), buf_.end(), 0.0f);
     buf_.resize(phaseLen_);
-    inCount_ = 0; outCount_ = 0;
+    inCount_ = 0; outCount_ = 0; outBase_ = 0; outBranch_ = 0;
 }
 
 int RationalResampler::process(const float* in, int n, float* out) {
@@ -78,16 +78,25 @@ int RationalResampler::process(const float* in, int n, float* out) {
     std::copy(in, in + n, buf_.begin() + phaseLen_);
     const long long avail = inCount_ + n - 1;   // newest global input index
     int outn = 0;
+    /* ★ NO DIVISION PER OUTPUT (2026-09-16). This computed base = u/L and branch = u%L for every
+     *  output sample with u a 64-bit product — on 32-bit ARM that is a software __udivmoddi4
+     *  call, 11 % of a Pi 3's NFM budget at 250 kS/s. The quotient and remainder advance by the
+     *  same constant every output (M = qStep·L + rStep), so they are carried instead: same base,
+     *  same branch, exactly, for every outCount_. */
+    const long long qStep = (long long)M_ / L_;
+    const int       rStep = (int)((long long)M_ % L_);
+    long long base   = outBase_;
+    int       branch = outBranch_;
     while (true) {
-        const long long u = outCount_ * (long long)M_;
-        const long long base = u / L_;          // newest input index this output uses
         if (base > avail) break;
-        const int branch = (int)(u % L_);
         const int windowStart = (int)(base - inCount_ + 1);   // >=0 once warmed up
-        if (windowStart < 0) { ++outCount_; out[outn++] = 0.0f; continue; }  // startup guard
-        out[outn++] = dotReal(&rBranch_[(size_t)branch * phaseLen_], &buf_[windowStart], phaseLen_);
+        if (windowStart < 0) out[outn++] = 0.0f;                // startup guard
+        else out[outn++] = dotReal(&rBranch_[(size_t)branch * phaseLen_], &buf_[windowStart], phaseLen_);
         ++outCount_;
+        base += qStep; branch += rStep;
+        if (branch >= L_) { branch -= L_; ++base; }
     }
+    outBase_ = base; outBranch_ = branch;
     // Carry the last phaseLen_ samples as history.
     std::copy(buf_.end() - phaseLen_, buf_.end(), buf_.begin());
     buf_.resize(phaseLen_);
