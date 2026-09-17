@@ -96033,10 +96033,10 @@ index 58aea85..ea85f7d 100644
  
      return JavaScriptObject(self, hostObject)
 diff --git a/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh b/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
-index 28d3249..dd10664 100755
+index 28d3249..cd7fcc4 100755
 --- a/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
 +++ b/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
-@@ -217,7 +217,14 @@ build_slice() {
+@@ -217,7 +217,14 @@
      DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
      COMPILER_INDEX_STORE_ENABLE=NO \
      SWIFT_COMPILATION_MODE=wholemodule \
@@ -96051,3 +96051,30 @@ index 28d3249..dd10664 100755
  
    local product_path="${BUILD_PRODUCTS_PATH}/${build_dir_name}"
    local framework_src="${product_path}/PackageFrameworks/${PACKAGE_NAME}.framework"
+@@ -251,6 +258,26 @@
+     cp -a "${product_path}/${PACKAGE_NAME}.framework.dSYM" "$staging_dir/"
+   fi
+ 
++  # VibeSDR patch (2026-09-17): SwiftPM derives the framework's CFBundleIdentifier from the
++  # PACKAGE DIRECTORY, which here is "apple" — so the embedded framework shipped as
++  # "apple.ExpoModulesJSI". App Store Connect's Apple-silicon check reads an "apple." bundle as a
++  # system framework, looks for it in macOS, and reports ITMS-90863 "links with libraries that
++  # aren't present in macOS: @rpath/ExpoModulesJSI.framework/ExpoModulesJSI" on every delivery
++  # (VibeSDR builds 296–302). Every other Expo prebuilt carries its own name
++  # (expomodulescore.ExpoModulesCore, expofont.ExpoFont …); this gives ExpoModulesJSI the same.
++  # Done on the staged copy before it is signed and embedded, for the flat (iOS/tvOS) and the
++  # versioned (macOS/Catalyst) bundle layouts.
++  local plist_path="${staging_dir}/${PACKAGE_NAME}.framework/Info.plist"
++  if [[ ! -f "$plist_path" ]]; then
++    plist_path="${staging_dir}/${PACKAGE_NAME}.framework/Versions/A/Resources/Info.plist"
++  fi
++  if [[ -f "$plist_path" ]]; then
++    local lower_name
++    lower_name=$(echo "$PACKAGE_NAME" | tr '[:upper:]' '[:lower:]')
++    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${lower_name}.${PACKAGE_NAME}" "$plist_path" \
++      || log "warning: could not rewrite CFBundleIdentifier in ${plist_path}"
++  fi
++
+   # Modules and Headers live at the framework root on flat (iOS/tvOS) bundles
+   # and inside Versions/A on versioned (macOS/Catalyst) bundles.
+   local framework_root="${staging_dir}/${PACKAGE_NAME}.framework"
