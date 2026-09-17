@@ -199,13 +199,17 @@ final class KiwiClient: ObservableObject, SDRClient {
   // an SSB channel, so one contact overran the screen and auto-contrast flooded it with pure
   // bright pixels. Matches the 6 kHz floor UberSDRClient enforces for the same reason.
   private static let maxZoom = 12
-  private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+  /// ★★★ WE SAY WHO WE ARE. Until 2026-09-17 Jr presented a copied Safari User-Agent here so a
+  /// Kiwi would not class it as an `ext_api` client (which an owner may time-limit or refuse).
+  /// That hid the app, and it was wrong — Stuart: "respect server owners wishes and not hide who
+  /// we are. If more servers block us then so be it." Same identity as the FM-DX sockets, so an
+  /// owner can allow or refuse Jr by name.
+  private static let ua = "VibeSDR Jr/\(JrVersion.short) (+https://vibesdr.net)"
   private static let OPEN_WF = true
 
-  /// Browser-identity handshake headers. Kiwi classifies connections as `ext_api` (and time-limits/
-  /// DROPS them after a few seconds) unless they look like the web client. The phone gets this for
-  /// free — React Native's WebSocket sends Origin + browser headers automatically; a raw NWConnection
-  /// sends neither, so we add them explicitly. `Origin` = the Kiwi's own http(s) origin.
+  /// Handshake headers. A raw NWConnection sends no Origin and no User-Agent; the Kiwi's web
+  /// server wants an Origin on the upgrade, so we add the Kiwi's own http(s) origin, and we name
+  /// ourselves honestly in the User-Agent (see `ua`).
   private var browserHeaders: [(name: String, value: String)] {
     let origin = wsBase.replacingOccurrences(of: "wss://", with: "https://")
                        .replacingOccurrences(of: "ws://", with: "http://")

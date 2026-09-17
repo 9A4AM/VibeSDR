@@ -40,11 +40,17 @@ const VibeLocal = NativeModules.VibeLocalSDR as {
   setDecoderFreq?: (hz: number) => void;
 } | undefined;
 
-// Present as a real browser. KiwiSDR classifies connections that jump straight
-// to the WS with a non-browser User-Agent as "ext_api" (API) connections, which
-// many receivers time-limit or refuse — looking like Safari + identifying as
-// the stock web client avoids that restriction.
-const KIWI_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+/* ★★★ WE SAY WHO WE ARE — ON A KIWI TOO. Until 2026-09-17 this adapter presented a copied
+ *  Safari User-Agent, because a KiwiSDR classifies a non-browser connection as an "ext_api"
+ *  client and an owner may time-limit or refuse those. That was the one place the app hid
+ *  itself, and it was deceptive. Stuart, 2026-09-17: "It is deceptive and wrong … I want to
+ *  show we are a good app and respect server owners wishes and not hide who we are. If more
+ *  servers block us then so be it." So the Kiwi sockets carry the same VibeSDR/<version>
+ *  User-Agent as every other receiver we visit, an owner can allow or refuse us by name, and
+ *  whatever an owner decides about API clients applies to us as it would to any other. The
+ *  ident (`SET ident_user=`) still carries the user's own name or callsign. */
+import { USER_AGENT } from '../constants/version';
+const KIWI_UA = USER_AGENT;
 
 const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30 MHz
 // 12, not the server's 14. 30 MHz / 2^12 = 7.3 kHz min span; 2^14 = 1.8 kHz is NARROWER

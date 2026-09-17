@@ -89,8 +89,8 @@ final class AudioSocket {
   /// an event, not a guessed sleep.
   var onReady: (() -> Void)?
 
-  /// `headers` = extra WebSocket handshake request headers. KiwiSDR needs a browser User-Agent or
-  /// it classifies us as an `ext_api` client and DROPS the connection after a few seconds.
+  /// `headers` = extra WebSocket handshake request headers (Origin, and our own User-Agent —
+  /// since 2026-09-17 we no longer pose as Safari on a KiwiSDR; see KiwiClient.ua).
   func open(url: URL, headers: [(name: String, value: String)] = [], forceIPv4: Bool = false, autoReplyPing: Bool = true, avoidRelay: Bool = false) {
     gen &+= 1
     let g = gen

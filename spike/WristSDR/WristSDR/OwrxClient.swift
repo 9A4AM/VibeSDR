@@ -70,7 +70,9 @@ final class OwrxClient: ObservableObject, SDRClient {
     // ADS-B: raw-IF digimode. mod=adsb, passband nulled by sendDemod (raw 2.4 MHz IF). Offsets unused.
     "adsb": ("adsb", 0, 0),
   ]
-  private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+  /// ★ Named honestly, as on every other receiver (2026-09-17 — see KiwiClient.ua for why the
+  /// copied Safari string went).
+  private static let ua = "VibeSDR Jr/\(JrVersion.short) (+https://vibesdr.net)"
 
   // ── Published surface the UI mirrors ──
   @Published var frequency: Double = 0
