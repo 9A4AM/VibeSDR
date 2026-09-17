@@ -60,7 +60,21 @@ final class WaterfallBuffer {
   /// which stays at the full render rate on its own clock (tickTrace, unaffected). Stuart's
   /// call (2026-07-17): keep the spectrum smooth, drop the waterfall to 10. Bonus: every row
   /// you see is now something the receiver actually heard, not an invented in-between.
-  private let subRows = 1
+  /// ★★★ NOW DERIVED FROM THE FEED RATE (2026-09-17). Jr moved to a fixed 5 fps on every
+  ///     connection (BRIEF-jr-vibeserver-display §5) and with ONE sub-row per received row the
+  ///     scroll fell to 5 rows/s — a third of the 15 rows/s the wrist drew on its own wifi before,
+  ///     which is what read as "very slow, laggy, sluggish" (Stuart). The interpolation exists to
+  ///     hide a low FRAME RATE; it has to be told the rate to hide. `setExpectedRowRate` sets this
+  ///     so the synthesised scroll stays at ~kTargetRowsPerSec whatever the feed: 5 fps → 3
+  ///     sub-rows, 10 fps → 2 (was 1 at 10, hence the 10-row/s note above — that CPU choice stands
+  ///     for a 10 fps feed and is overtaken at 5), 15+ → 1. Image rebuilds per second stay where
+  ///     the wifi feed always had them, so this costs nothing new.
+  private var subRows = 1
+  private static let kTargetRowsPerSec = 15.0
+  private func subRows(forFps fps: Double) -> Int {
+    guard fps > 0 else { return 1 }
+    return max(1, min(4, Int((Self.kTargetRowsPerSec / fps).rounded())))
+  }
 
   /// 0..1 extra temporal blend from the phone's settings, on top of the
   /// interpolation. 0 = rely on interpolation alone.
@@ -142,6 +156,7 @@ final class WaterfallBuffer {
     guard fps > 0 else { return }
     interval = 1.0 / fps
     arrivals = 0
+    subRows = subRows(forFps: fps)
   }
 
   /// How many rows to bank before drawing — i.e. how much LATENCY we deliberately
@@ -371,7 +386,11 @@ final class WaterfallBuffer {
     // until the next step: "ease, hold, ease, hold" — the stutter Stuart sees. Tying tc to the actual
     // interval keeps the trace still-moving when the next row lands at ANY rate, so it glides at 5fps
     // exactly as it does at 10/20fps (where interval ≤ 0.10 and the 0.10 floor keeps it responsive).
-    let tc = max(0.10, interval)                     // seconds to close ~63% of the gap
+    // ★ Over the SUB-row cadence now, not the row interval: with sub-rows the top of the
+    //   waterfall (liveRow) steps kTargetRowsPerSec times a second at any feed rate, so the
+    //   trace chases a target that is always moving and never falls back to "ease, hold".
+    //   At 5 fps this was 0.20 s — the same slowness Stuart saw in the scroll, on the line.
+    let tc = max(0.10, interval / Double(subRows))   // seconds to close ~63% of the gap
     let a = min(1, max(0, dt / tc))
     for i in 0..<specRow.count {
       specRow[i] += (Double(liveRow[i]) - specRow[i]) * a

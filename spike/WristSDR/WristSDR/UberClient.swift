@@ -2278,7 +2278,21 @@ final class UberClient: ObservableObject {
   /// Push every row that has now waited out the delay. MUST be called on the main actor
   /// (the WaterfallBuffer is drawn from a non-isolated Canvas closure — pushing from there
   /// would trap). ContentView calls this from its 20fps driver tick.
+  private var lastDrainAt: Double = 0
   func drainSpectrum(now: Double) {
+    /* ★★★ THE WRIST CAME BACK UP — DO NOT REPLAY WHAT IT MISSED. This queue is drained by the
+     *  20 fps render clock, which stops while the screen is off; rows kept arriving (the socket
+     *  stays open through the wrist-down grace period). On wake every one of them had aged past
+     *  spectrumDelay, so all of them went to the waterfall in ONE tick, its catch-up rate kicked
+     *  in, and the last few seconds played "at hyper speed" (Stuart, 2026-09-17). A waterfall is
+     *  a record of NOW: after a gap keep only the freshest row and start from there. */
+    if lastDrainAt > 0, now - lastDrainAt > 1.0, specQueue.count > 1 {
+      Vitals.crumb("UBER spectrum queue: dropped \(specQueue.count - 1) rows aged during a \(Int(now - lastDrainAt))s pause")
+      specQueue.removeFirst(specQueue.count - 1)
+    }
+    lastDrainAt = now
+    // ★ And a ceiling regardless: more than ~2 s of rows waiting is latency, never insurance.
+    if specQueue.count > 12 { specQueue.removeFirst(specQueue.count - 12) }
     while let first = specQueue.first, now - first.t >= spectrumDelay {
       waterfall.push(row: first.row)
       specQueue.removeFirst()
