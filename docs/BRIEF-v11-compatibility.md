@@ -2,7 +2,9 @@
 
 **Project:** VibeSDR (app, Jr, VibeServer Linux/macOS/Android host)
 **Author:** Stuart Carr (Stuey3D) with Claude, 2026-09-17
-**Status:** SCOPED — not started. Replaces the planned 10.5 release number.
+**Status:** BUILT 2026-09-17 (server 5.6.18, app/Jr builds after it) except §3 renumbering and the
+recorded fixtures for the store Jr, V11 phone and V11 Jr (§8; `VIBE_COMPAT_RECORD` on a test
+server captures them). The rules live in `docs/PROTOCOL.md`.
 
 ---
 
