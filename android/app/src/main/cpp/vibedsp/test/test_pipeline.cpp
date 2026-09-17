@@ -687,8 +687,36 @@ static void testWfmWidthKeepsPilot() {
     check(cap.stereoLocked, "and the pilot lock SURVIVES it");
 }
 
+/* ★★★ REGRESSION (2026-09-17): the spectrum ring's block copy, introduced 2026-09-16, computed
+ *     its chunk from (stride − samples since the last frame). A server idling at 2 fps has counted
+ *     most of a 2 fps stride; a listener arriving lifts the rate to 10–20 fps, the stride shrinks
+ *     below that count, the chunk went NEGATIVE and memmove took it as a huge length — SIGSEGV in
+ *     vibe-dsp on the XCover every couple of hours, hidden by the auto-restore. This is the exact
+ *     sequence; before the fix the process dies here. */
+static void testFftRateJumpMidStream() {
+    std::printf("\n-- fft rate jump mid-stream (2 -> 20 fps) --\n");
+    const double fs = 1024000.0;
+    const int Ni = 1 << 18;
+    std::vector<cf32> iq(Ni);
+    for (int i = 0; i < Ni; ++i) { const double ph = 2 * M_PI * 100000.0 * i / fs; iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph)); }
+    struct Cnt { int frames = 0; } cnt;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cnt;
+    cb.spectrum = [](void* c, const float*, int) { ++static_cast<Cnt*>(c)->frames; };
+    pipe.start(fs, 1024, 2.0, 48000, cb);           // the idle floor
+    pipe.setTune(100000.0, RxPipeline::Mode::NFM, 12500.0);
+    // most of a 2 fps stride (512000 samples) counted, no frame yet
+    pipe.feed(iq.data(), 200000);
+    pipe.setFftRate(20.0);                          // a listener arrives: stride is now 51200 < 200000
+    pipe.feed(iq.data(), 65536);                    // ★ this feed used to memmove a negative length
+    pipe.feed(iq.data(), 65536);
+    check(cnt.frames >= 1, "frames still emitted after the rate jump");
+    std::printf("  frames after the jump: %d\n", cnt.frames);
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
+    testFftRateJumpMidStream();
     testResampler();
     testPipeline();
     testNFM();

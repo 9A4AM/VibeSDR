@@ -705,14 +705,23 @@ void RxPipeline::feed(const cf32* iq, int n) {
          *  so the emit happens at exactly the same sample as before. */
         for (int i = 0; i < n; ) {
             const int room   = fftSize_ - specRingW_;
-            const long long toEmit = stride - sinceEmit_;
+            /* ★★★ THE STRIDE CAN SHRINK UNDER US (2026-09-17, the XCover crashing every two hours):
+             *     a listener arriving lifts the frame rate from the 2 fps idle floor to 10, so
+             *     `stride` drops below the samples already counted since the last frame, and
+             *     stride − sinceEmit_ went NEGATIVE — memmove with a length of 0xffffffffffe2ab80,
+             *     SIGSEGV in vibe-dsp, and the auto-restore hiding it as a "blank spectrum, off the
+             *     tunnel, back in a few minutes" cycle. The per-sample loop this replaced could not
+             *     do that: it only ever compared. Clamp to at least one sample, so an overdue frame
+             *     is emitted on the very next sample. */
+            long long toEmit = stride - sinceEmit_;
+            if (toEmit < 1) toEmit = 1;
             const int chunk = (int)std::min<long long>({(long long)(n - i), (long long)room, toEmit});
             std::memcpy(ring + specRingW_, iq + i, (size_t)chunk * sizeof(cf32));
             i += chunk;
             specRingW_ += chunk; if (specRingW_ >= fftSize_) specRingW_ = 0;
             specRingFill_ += chunk;
             sinceEmit_ += chunk;
-            if (sinceEmit_ < stride) continue;
+            if (sinceEmit_ < stride) continue;   // ★ >=, not ==: the overdue case above lands here too
             sinceEmit_ = 0;
             if (specRingFill_ < fftSize_) continue;      // warm-up: not a full window yet
             // Unwrap oldest-first so the window is time-ordered; specRingW_ is the oldest
