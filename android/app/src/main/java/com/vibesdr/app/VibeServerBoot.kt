@@ -45,8 +45,16 @@ object VibeServerBoot {
      *     solar panel at the allotment that dies flat does not come back on its own). */
     private var batteryReceiver: BroadcastReceiver? = null
     fun startBatteryMonitor(ctx: Context) {
-        if (batteryReceiver != null) return
         val app = ctx.applicationContext
+        if (batteryReceiver != null) {
+            // Already listening: re-push the current sticky state into the (re)started server.
+            try { app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let { i ->
+                val lvl = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1); val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                val st = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1); val plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+                VibeLocalSDR.setBattery(if (lvl >= 0 && scale > 0) (lvl * 100) / scale else -1,
+                    st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL || plugged) } } catch (_: Throwable) {}
+            return
+        }
         val push = { i: Intent? ->
             if (i != null) {
                 val lvl = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)

@@ -347,9 +347,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
         val autoRestore = VibeServerBoot.autoRestore(cfg)
 
-        VibeServerBoot.startBatteryMonitor(reactContext)
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
                                                 reactContext.filesDir)
+        // ★ AFTER the server is up: the monitor pushes the sticky state the moment it registers, and
+        //   a push before the native library is loaded is dropped (473 showed no level, 2026-09-17).
+        VibeServerBoot.startBatteryMonitor(reactContext)
         // ★★★ PUT THE PUBLIC LISTING BACK IF IT WAS ON. The tunnel dies with the process that
         //     spawned it, so an update, a low-memory kill or a reboot leaves the directory
         //     advertising an address that answers 530 until the entry expires — seen 2026-08-22
