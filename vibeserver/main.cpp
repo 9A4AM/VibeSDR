@@ -2545,6 +2545,38 @@ int main(int argc, char** argv) {
             }
             if (frontDoorOnly) {
                 LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
+                    /* ★★★ A LEGACY CLIENT NEVER SAYS /r/<id>/ — SEND IT TO THE PRIMARY RADIO.
+                     *     The App Store app (10.3.1, tree of 2026-07-29) strips any path from an
+                     *     address on purpose and knows only host:port; the door arrived ten days
+                     *     later (91bc7adf) and answered its bare /connection and WebSocket
+                     *     upgrades with 503, which that app can only show as "Connection Error"
+                     *     (xavxx, Discord, 2026-09-17). The V11 rule (BRIEF-v11-compatibility §5):
+                     *     a legacy client gets the core experience. A bare radio endpoint at the
+                     *     door is, by construction, a client that predates the door, so it is
+                     *     handed to the primary radio exactly as /r/<primary>/ would be.
+                     *  ★ /vibeserver/auth is NOT forwarded: the setup page mints its own nonce
+                     *    here. A PIN-protected server therefore still refuses a legacy app (its
+                     *    nonce comes from the wrong process) — an open server works in full. */
+                    if (path.rfind("/connection", 0) == 0 ||
+                        path.rfind("/ws/user-spectrum", 0) == 0 ||
+                        path.rfind("/ws/audio", 0) == 0) {
+                        vsconfig::ServerConfig sc; std::string se;
+                        if (!vsconfig::loadServer(g_configPath, sc, se)) sc = g_serverConfig;
+                        int idx = vsconfig::primaryRadio(sc);
+                        if (idx < 0 || idx >= (int)sc.radios.size()
+                            || !sc.radios[(size_t)idx].enabled || !sc.radios[(size_t)idx].configured
+                            || sc.radios[(size_t)idx].serial.empty()) {
+                            idx = -1;
+                            for (size_t k = 0; k < sc.radios.size(); ++k)
+                                if (sc.radios[k].enabled && sc.radios[k].configured && !sc.radios[k].serial.empty()) { idx = (int)k; break; }
+                        }
+                        if (idx < 0) return "";
+                        static std::atomic<int> said{0};
+                        if (said.fetch_add(1) == 0)
+                            std::fprintf(stderr, "VibeServer: a client with no /r/<id>/ (a pre-August app) — routed to the primary radio %s\n",
+                                         sc.radios[(size_t)idx].serial.c_str());
+                        return dir + "/" + sc.radios[(size_t)idx].serial + ".sock";
+                    }
                     // ★★ The picture comes from a radio, and the front door has none: the
                     //    spectrogram and the MEASURED band conditions are both read off a live wide
                     //    FFT, so they go to whichever radio the owner nominated.
