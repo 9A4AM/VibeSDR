@@ -531,6 +531,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectSampling(JNIEnv*, jobject, jint mode) {
     vibe::LocalSdrShim::instance().setDirectSampling(mode);
 }
+/* ★ Server-mode parity with the Linux setup page (Stuart, 2026-09-17: the XCover lacked the
+ *   automatic direct sampling the other servers have). The shim already had both setters; only the
+ *   bridge was missing — the same "exists in native, unreachable from the phone" shape as
+ *   memory/android_bridge_missing_reactmethod. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAutoDirectSampling(JNIEnv*, jobject, jboolean on, jdouble belowHz) {
+    vibe::LocalSdrShim::instance().setAutoDirectSampling(on, belowHz);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetConverter(JNIEnv*, jobject, jdouble offsetHz, jdouble inLoHz, jdouble inHiHz) {
+    vibe::LocalSdrShim::instance().setConverter(offsetHz, inLoHz, inHiHz);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetSampleRate(JNIEnv*, jobject, jdouble rate) {
     vibe::LocalSdrShim::instance().setSampleRate(rate);

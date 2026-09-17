@@ -228,6 +228,16 @@ object VibeServerBoot {
         if (port > 0) VibeLocalSDR.setGainAutomation(
             false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
         if (port > 0) VibeLocalSDR.setTunerBwAuto(cfg.b("tunerBwAuto", false))
+        /* ★★ THE FRONT END, as the Linux setup page sets it (2026-09-17): frequency correction,
+         *    direct sampling (manual or automatic below a frequency) and a converter in front of the
+         *    radio. -1 / 0 / absent leave the radio as it is, which is what an old config means. */
+        if (port > 0) {
+            if (cfg.has("ppm")) VibeLocalSDR.setPpm(cfg.i("ppm", 0))
+            val ds = cfg.i("directSampling", -1)
+            if (ds >= 0) VibeLocalSDR.setDirectSampling(ds)
+            VibeLocalSDR.setAutoDirectSampling(cfg.b("autoDirectSampling", false), cfg.n("directSamplingBelowHz", 24e6))
+            VibeLocalSDR.setConverter(cfg.n("converterOffsetHz", 0.0), cfg.n("converterInputLoHz", 0.0), cfg.n("converterInputHiHz", 0.0))
+        }
         // ★ The public listing is put back by the CALLERS, which hold a Context — see
         //   VibeTunnel.restoreIfWanted. This object only has a File.
         return port

@@ -82,6 +82,10 @@ object VibeLocalSDR {
     fun setBiasTee(on: Boolean) { if (loaded) nativeSetBiasTee(on) }
     fun setAgc(on: Boolean) { if (loaded) nativeSetAgc(on) }
     fun setDirectSampling(mode: Int) { if (loaded) nativeSetDirectSampling(mode) }
+    /** ★ Automatic direct sampling below a frequency (RTL), and an up/down-converter in front of the
+     *  radio — the two front-end settings the Linux setup page had and the phone's server did not. */
+    fun setAutoDirectSampling(on: Boolean, belowHz: Double) { if (loaded) nativeSetAutoDirectSampling(on, belowHz) }
+    fun setConverter(offsetHz: Double, inLoHz: Double, inHiHz: Double) { if (loaded) nativeSetConverter(offsetHz, inLoHz, inHiHz) }
     fun setSampleRate(rate: Double) { if (loaded) nativeSetSampleRate(rate) }
     fun setDeemphasis(tau: Double) { if (loaded) nativeSetDeemphasis(tau) }
     fun setSquelch(on: Boolean, db: Float) { if (loaded) nativeSetSquelch(on, db) }
@@ -361,6 +365,8 @@ object VibeLocalSDR {
     private external fun nativeSetBiasTee(on: Boolean)
     private external fun nativeSetAgc(on: Boolean)
     private external fun nativeSetDirectSampling(mode: Int)
+    private external fun nativeSetAutoDirectSampling(on: Boolean, belowHz: Double)
+    private external fun nativeSetConverter(offsetHz: Double, inLoHz: Double, inHiHz: Double)
     private external fun nativeSetSampleRate(rate: Double)
     private external fun nativeSetDeemphasis(tau: Double)
     private external fun nativeSetSquelch(on: Boolean, db: Float)

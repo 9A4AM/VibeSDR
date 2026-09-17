@@ -136,6 +136,8 @@ const K = {
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
+  ppm: 'vs_ppm', directSampling: 'vs_directsampling', autoDs: 'vs_autods', autoDsMhz: 'vs_autodsmhz',
+  convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -259,6 +261,16 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  owner set and that has to be asked for. */
   const [rtlAgc, setRtlAgc]           = useState(false);
   const [tunerBwAuto, setTunerBwAuto] = useState(false);
+  /** ★★ THE FRONT END, as the browser setup page offers it (parity pass, Stuart 2026-09-17: "the
+   *  XCover was missing … the auto direct sampling mode"). ppm and direct sampling are RTL things;
+   *  a converter can sit in front of any radio. Strings, so a half-typed number is never coerced. */
+  const [ppm, setPpm]                 = useState('');
+  const [directSampling, setDirectSampling] = useState<'off' | 'i' | 'q'>('off');
+  const [autoDs, setAutoDs]           = useState(false);
+  const [autoDsMhz, setAutoDsMhz]     = useState('24');
+  const [convOffsetMhz, setConvOffsetMhz] = useState('');
+  const [convLoMhz, setConvLoMhz]     = useState('');
+  const [convHiMhz, setConvHiMhz]     = useState('');
   /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
    *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
    *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
@@ -503,6 +515,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         void (async () => {
           const v = await AsyncStorage.getItem(K.tunerBwAuto);
           if (v != null) setTunerBwAuto(v === '1');
+          const g2 = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
+          setPpm(await g2(K.ppm));
+          { const d = await g2(K.directSampling); if (d === 'i' || d === 'q') setDirectSampling(d); }
+          setAutoDs((await g2(K.autoDs)) === '1');
+          { const m = await g2(K.autoDsMhz); if (m) setAutoDsMhz(m); }
+          setConvOffsetMhz(await g2(K.convOffsetMhz));
+          setConvLoMhz(await g2(K.convLoMhz));
+          setConvHiMhz(await g2(K.convHiMhz));
         })();
         void (async () => {
           const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
@@ -934,6 +954,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
+      [K.ppm, ppm], [K.directSampling, directSampling], [K.autoDs, autoDs ? '1' : '0'], [K.autoDsMhz, autoDsMhz],
+      [K.convOffsetMhz, convOffsetMhz], [K.convLoMhz, convLoMhz], [K.convHiMhz, convHiMhz],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
       [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
     ]);
@@ -1015,6 +1037,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         trustedProxies: proxies, oneRadioPerIp,
         rtlAgc,
         tunerBwAuto,
+        // ★ The front end (see the state block). Absent/0 = leave the radio alone, as on Linux.
+        ...(ppm.trim() !== '' && Number.isFinite(Number(ppm)) ? { ppm: Math.round(Number(ppm)) } : {}),
+        directSampling: directSampling === 'i' ? 1 : directSampling === 'q' ? 2 : 0,
+        autoDirectSampling: autoDs,
+        directSamplingBelowHz: (Number(autoDsMhz) || 24) * 1e6,
+        converterOffsetHz: (Number(convOffsetMhz) || 0) * 1e6,
+        converterInputLoHz: (Number(convLoMhz) || 0) * 1e6,
+        converterInputHiHz: (Number(convHiMhz) || 0) * 1e6,
       });
       setRunning(info);
       runningRef.current = true;
@@ -1043,7 +1073,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost,
       gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
-      oneRadioPerIp]);
+      oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -1959,6 +1989,62 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               zoom out. Only for a free-tuning receiver: on a locked-frequency one you choose
               selectivity with the sample rate instead, once, at setup.
             </Text>
+            {/* ★★ THE FRONT END — the same controls the browser setup page has (parity pass,
+                   2026-09-17). Direct sampling and ppm are RTL things; a converter can sit in front
+                   of any radio. Wording follows the setup page so the two GUIs read as one server. */}
+            {isRtl && (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 16 }]}>DIRECT SAMPLING (HF)</Text>
+              <View style={[styles.rowBetween, { marginTop: 8 }]}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Automatic Direct Sampling for HF
+                </Text>
+                <Switch value={autoDs}
+                  onValueChange={(v) => { setAutoDs(v); AsyncStorage.setItem(K.autoDs, v ? '1' : '0'); }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              {autoDs && (
+                <TextInput value={autoDsMhz} onChangeText={(t) => { setAutoDsMhz(t); AsyncStorage.setItem(K.autoDsMhz, t); }}
+                  placeholder="Switch below (MHz) — 24" placeholderTextColor={C.textDim} keyboardType="numeric"
+                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
+              )}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Below the switch-over the tuner is bypassed and the ADC samples HF directly (Q branch);
+                above it the tuner is back. An RTL-SDR Blog V4 has its own up-converter and hears HF
+                through the tuner with gain control, so it does not need this. Or pick a fixed branch:
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                {(['off', 'i', 'q'] as const).map((m) => (
+                  <TouchableOpacity key={m} onPress={() => { setDirectSampling(m); AsyncStorage.setItem(K.directSampling, m); }}
+                    style={[styles.chip, { borderColor: directSampling === m ? C.amber : C.border }]}>
+                    <Text style={{ color: directSampling === m ? C.amber : C.textDim, fontFamily: F, fontSize: 12 }}>
+                      {m === 'off' ? 'Leave alone' : m === 'i' ? 'I branch' : 'Q branch'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 16 }]}>FREQUENCY CORRECTION</Text>
+              <TextInput value={ppm} onChangeText={(t) => { setPpm(t); AsyncStorage.setItem(K.ppm, t); }}
+                placeholder="ppm — 0 for a TCXO dongle" placeholderTextColor={C.textDim} keyboardType="numbers-and-punctuation"
+                style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
+            </>)}
+            {hasHwSetup && (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 16 }]}>CONVERTER IN FRONT OF THE RADIO</Text>
+              <TextInput value={convOffsetMhz} onChangeText={(t) => { setConvOffsetMhz(t); AsyncStorage.setItem(K.convOffsetMhz, t); }}
+                placeholder="Offset (MHz) — e.g. 125 for an HF up-converter; blank = none" placeholderTextColor={C.textDim} keyboardType="numbers-and-punctuation"
+                style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TextInput value={convLoMhz} onChangeText={(t) => { setConvLoMhz(t); AsyncStorage.setItem(K.convLoMhz, t); }}
+                  placeholder="Passes from (MHz)" placeholderTextColor={C.textDim} keyboardType="numeric"
+                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8, flex: 1 }]} />
+                <TextInput value={convHiMhz} onChangeText={(t) => { setConvHiMhz(t); AsyncStorage.setItem(K.convHiMhz, t); }}
+                  placeholder="to (MHz)" placeholderTextColor={C.textDim} keyboardType="numeric"
+                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8, flex: 1 }]} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                The dial then shows the real frequency and the converter's range is what listeners can tune.
+                A converter and automatic direct sampling are two different ways to reach HF and will fight — use one.
+              </Text>
+            </>)}
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {rtlAgc
                 ? 'Listeners get the AGC already on and can leave it on, but cannot switch it off '
@@ -2593,6 +2679,7 @@ const styles = StyleSheet.create({
   value: { fontSize: 15, flexShrink: 1, textAlign: 'right', marginLeft: 8 },
   section: { fontSize: 11, letterSpacing: 1, marginTop: 16, marginBottom: 6 },
   input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
+  chip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6 },
   regen: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, marginLeft: 8 },
   hint: { fontSize: 11.5, lineHeight: 16, marginTop: 6 },
   pillRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
