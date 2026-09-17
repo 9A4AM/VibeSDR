@@ -2175,7 +2175,7 @@ final class UberClient: ObservableObject {
     // Fail open after ~2s so a server that never re-sends config can't blank us forever.
     /* ★★★ INSTANT LOCAL ZOOM (BRIEF-jr-vibeserver-display §3). While the server has not yet
      *  confirmed a ZOOM-IN, the rows still arriving carry the OLD, wider span — and at 1024 bins
-     *  over 128 pixels there is 8× of real resolution to spare. So instead of holding the paint
+     *  over WaterfallBuffer.width columns (256 → 4×) there is real resolution to spare. So instead of holding the paint
      *  and leaving the crown feeling stuck for a beat, crop the last real row around the VFO by
      *  the ratio asked for and draw it at once; the server's own rows take over the moment its
      *  config lands (specConfigSeq catches up). Nothing is stretched: the crop is clamped so at

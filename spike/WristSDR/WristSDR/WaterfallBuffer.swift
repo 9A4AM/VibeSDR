@@ -38,7 +38,16 @@ final class WaterfallBuffer {
   /// It also restores the invariant the phone link depends on: the phone sends 128-bin rows
   /// (`WATCH_BINS`), so buffer width and wire width agree again, which is exactly what they must
   /// do (see WatchLink.phoneRowWidth for what happened when they didn't).
-  static let width  = 128
+  /// ★★★ 256 AGAIN FOR JR (2026-09-17) — and this does NOT reopen the argument above, which was
+  ///     about the PHONE LINK: Buddy's rows cross WCSession and every column costs bytes on the
+  ///     wrist hop, so 128 was right there and stays right there (ios/VibeSDRWatch keeps 128).
+  ///     Jr is standalone: it receives 1024 bins from a VibeServer, UberSDR or Kiwi and reduces
+  ///     them itself, so a 256-column buffer costs nothing on the wire. What 128 cost was the
+  ///     picture: the screen is ~200 pt wide, so every column was UPSCALED 1.6× and bilinear
+  ///     smeared it — Stuart's 7 MHz screenshot, "we need to increase the sharpness". At 256 the
+  ///     image is DOWNscaled to the screen, which is sharp, and the peak-hold decimate keeps 4
+  ///     real bins per column from a 1024-bin frame. The local zoom's headroom is 4× instead of 8×.
+  static let width  = 256
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.
