@@ -329,9 +329,12 @@ final class WaterfallBuffer {
     // matters, and a growing queue is just latency. The cap was 8 — i.e. we were
     // willing to sit ~800ms behind the radio before throwing anything away, which is
     // most of the lag we're trying to remove. 4 is still ample slack for a hiccup.
-    // ★ 2 now, not 4: with sub-rows the bank is 2 rows = 6 drawn rows at 5 fps, ample — and
-    //   anything deeper is exactly the backlog that the catch-up rate then plays at 1.5×.
-    if queue.count > 2 { queue.removeFirst(queue.count - 2) }
+    // ★ 4, NOT 2. Cut to 2 with the wake-burst fix (540f3a8e) and the waterfall HITCHED: at 5 fps a
+    //   2-row bank is 0.4 s of cover, and a relay burst gap longer than that ran it dry — prefill,
+    //   stall, restart (Stuart, 2026-09-17, "now the waterfall is hitching"). The wake burst is
+    //   collapsed at the client's delay queue now, so the bank no longer needs to be shallow to
+    //   avoid replaying one; 4 rows = 0.8 s of cover, the depth that was measured good in July.
+    if queue.count > 4 { queue.removeFirst(queue.count - 4) }
   }
 
   /// Unsharp mask across the bins: subtract a blurred copy of the row from itself,
