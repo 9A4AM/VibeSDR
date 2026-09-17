@@ -445,6 +445,10 @@ std::string buildStatus(int port) {
     const std::string host = hostModel(), plat = platformName();
     if (!host.empty()) j += ",\"host\":\"" + host + "\"";
     if (!plat.empty()) j += ",\"platform\":\"" + plat + "\"";
+    // ★ The contract this server speaks (docs/PROTOCOL.md) — a client greys a server out by these.
+    if (jsonNum(ident, "proto", -1) >= 0)
+        j += ",\"proto\":" + std::to_string((int)jsonNum(ident, "proto", 0))
+           + ",\"minProto\":" + std::to_string((int)jsonNum(ident, "minProto", 0));
     // ★ The host's battery, where it has one (a laptop, a phone) — a badge beside the entry.
     if (jsonNum(ident, "batteryLevel", -1) >= 0)
         j += ",\"battery\":{\"level\":" + std::to_string((int)jsonNum(ident, "batteryLevel", 0))

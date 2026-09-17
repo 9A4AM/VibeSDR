@@ -546,6 +546,8 @@ object VibeTunnel {
             //   box they cannot fill reads it as a broken server, and goes away rather than
             //   understanding it was never for them (Stuart, 2026-08-22).
             out.put("pin", j.optBoolean("pin", false))
+            // ★ The contract this server speaks (docs/PROTOCOL.md).
+            if (j.has("proto")) { out.put("proto", j.optInt("proto", 1)); out.put("minProto", j.optInt("minProto", 0)) }
             // ★ The phone's battery, as the server publishes it — the badge beside the entry.
             if (j.has("batteryLevel")) out.put("battery", JSONObject().apply {
                 put("level", j.optInt("batteryLevel", -1)); put("charging", j.optBoolean("batteryCharging", false))
