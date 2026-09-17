@@ -1262,11 +1262,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const id = (b.dataset.dec || '').toLowerCase();
         b.hidden = blockedModes.has(id);
       }
+      /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
+       *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
+       *  Switched off mid-session: the subscription is dropped too, or the box keeps filling. */
+      const spotsOff = blockedModes.has('spots');
+      const ss = document.getElementById('spotsSection');
+      if (ss) ss.hidden = spotsOff;
+      if (spotsOff && decoders?.spotsEnabled) {
+        decoders.setSpots(false);
+        $<HTMLButtonElement>('spotsBtn').classList.remove('on');
+        if (!activeDec) hideDecBox();
+      }
       // ★ And the door to them, when there is nothing left behind it.
-      const anyDec = ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8']
+      const anyDec = ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots']
         .some(d => !blockedModes.has(d));
       const db = document.getElementById('decodersBtn');
       if (db) db.hidden = !anyDec;
+      // (The compact card's sheet is built afresh each time it opens, so it reads the new list
+      //  through soleDecoder() with nothing more to do here.)
       // If we are somehow already ON a blocked mode (an owner switched it off mid-session),
       // move to the first one that is still allowed rather than leaving a dead selection.
       if (spec?.mode && isModeBlocked(String(spec.mode))) {
@@ -5810,6 +5823,7 @@ function buildControls() {
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
+    soleDecoder,
     // ★★ The SAME dabCapable and the SAME toggle the desktop bar's button uses — not a second
     //    copy of the rule, which is how the two pickers came to disagree in the first place.
     dabCapable:    () => dabCapable,
@@ -7880,6 +7894,21 @@ function stopDecoder() {
   syncDecButtons();
   if (!decoders?.spotsEnabled) hideDecBox();
   else showDecBox('spots');
+}
+
+/** ★★★ WHEN ONE BUTTON IS ALL THE DECODERS PANEL WOULD HOLD, IT GOES ON THE MODE SHEET ITSELF.
+ *  An owner who blocks everything but Advanced RDS (an FM/DAB-only receiver, say) leaves a
+ *  "DECODERS…" door with a single thing behind it — a tap and a screenful of panel to reach one
+ *  button. Stuart, 2026-09-17: "when only one button is left simply move it to the demodulators
+ *  tab in place of the Decoders button". The spots section counts as two buttons (spots + map),
+ *  so it never collapses; only a lone client decoder does. */
+function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
+  if (!blockedModes.has('spots')) return null;
+  const left = (Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLButtonElement[])
+    .filter(b => !b.hidden);
+  if (left.length !== 1) return null;
+  const b = left[0];
+  return { label: (b.textContent || '').trim(), on: b.classList.contains('on'), press: () => b.click() };
 }
 
 function syncDecButtons() {

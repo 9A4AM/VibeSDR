@@ -187,6 +187,14 @@ interface ModeSelectorProps {
   // "what's on this signal" family. null = not OWRX.
   owrxPages?: { onMap: () => void; onFiles: () => void } | null;
   // SERVER EXTENSIONS / DECODED SPOTS (relocated from MenuSheet §4.3). null = don't show.
+  /** ★★★ WHAT THE OWNER SWITCHED OFF (the server's `blocked` list, lower-case ids). Applies to
+   *  the decoders and the spots exactly as SDRScreen already applies it to the demodulators: a
+   *  blocked decoder is not drawn, not drawn-and-refused. 'spots' covers digital spots AND the
+   *  map — the map is nothing without the spots. And when the CLIENT DECODERS section would hold
+   *  nothing but DAB, DAB moves up into the demodulator grid instead of sitting alone under its
+   *  own heading (Stuart, 2026-09-17: "when only one button is left simply move it to the
+   *  demodulators tab"). */
+  blocked?: Set<string>;
   spotsControls?: {
     label: string; spotsKind: string | null;
     onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
@@ -198,7 +206,23 @@ interface ModeSelectorProps {
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
   showServerMaps = false, onServerMap, owrxPages,
-  decoderControls, spotsControls }: ModeSelectorProps) {
+  decoderControls, spotsControls, blocked }: ModeSelectorProps) {
+  const isBlocked = (id: string) => !!blocked && blocked.has(id);
+  /* The client decoders this receiver both runs and allows — the same filter the row applies. */
+  const clientDecs = (['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
+    if (isBlocked(k)) return false;
+    const ext = decoderControls?.serverExtensions;
+    if (!ext || !ext.length) return true;
+    const slug = k === 'rtty' ? 'fsk' : k === 'time' ? 'clock' : k;
+    return ext.includes(slug);
+  });
+  const advRdsShown = !!decoderControls?.advRdsAvail && !isBlocked('rds');
+  const spotsShown = !!spotsControls && !isBlocked('spots');
+  /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
+   *  decoders section is dropped and DAB is drawn with the demodulators. */
+  const dabInGrid = !!decoderControls?.dabAvail && clientDecs.length === 0 && !advRdsShown && !spotsShown;
+  const decSectionShown = !!decoderControls && !dabInGrid
+    && (clientDecs.length > 0 || advRdsShown || !!decoderControls.dabAvail);
   const { theme: t } = useTheme();
   const { height: winH, width: winW } = useWindowDimensions();
   // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
@@ -319,6 +343,24 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </TouchableOpacity>
             )}</NavItem>
           ))}
+          {dabInGrid && decoderControls && (
+            <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => (
+            <TouchableOpacity ref={navRef as any}
+              style={[st.btn,
+                { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
+                  paddingVertical: isWhite ? 12 : 10 },
+                decoderControls.dabOn && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+              onPress={() => decoderControls.onDab?.()} activeOpacity={0.8}>
+              <Text style={[st.btnText,
+                { fontFamily: t.font, fontSize: isWhite ? 15 : 14,
+                  color: isWhite ? 'rgba(255,255,255,0.55)' : 'rgba(150,100,30,0.70)' },
+                decoderControls.dabOn && { color: t.btnActiveText }]}>
+                DAB
+              </Text>
+            </TouchableOpacity>
+            )}</NavItem>
+          )}
         </View></NavRow>
 
         {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
@@ -423,7 +465,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         {/* CLIENT DECODERS — relocated from MenuSheet (§4.3). Below the mode grid + passband:
             a decoder rides on the demod you set above. Selecting one starts DecoderClient;
             its settings drop into a callout beneath the row; tapping again tears it down. */}
-        {decoderControls && (
+        {decSectionShown && decoderControls && (
           <View style={dst.decWrap}>
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               CLIENT DECODERS
@@ -441,12 +483,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   ★ An unknown list (null, or a receiver that would not answer) offers them ALL,
                     which is exactly today's behaviour — not being able to ask must never look the
                     same as "the server hasn't got it". */}
-              {(['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
-                const ext = decoderControls.serverExtensions;
-                if (!ext || !ext.length) return true;
-                const slug = k === 'rtty' ? 'fsk' : k === 'time' ? 'clock' : k;
-                return ext.includes(slug);
-              }).map(k => {
+              {clientDecs.map(k => {
                 const active = decoderControls.decMode === k && decoderControls.decOn;
                 const selected = decoderControls.decMode === k && !decoderControls.decOn;
                 return (
@@ -477,7 +514,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>
                 )}</NavItem>
               )}
-              {decoderControls.advRdsAvail && (
+              {advRdsShown && (
                 <NavItem key="advrds" onPress={() => decoderControls.onAdvRds?.()}>{(navFocused, navRef) => (
                 <TouchableOpacity ref={navRef as any}
                   style={[st.btn, { borderColor: decoderControls.advRdsOn ? DEC_COL : t.btnBorder, paddingVertical: 10 },
@@ -528,7 +565,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         )}
 
         {/* SERVER EXTENSIONS / DECODED SPOTS — relocated from MenuSheet (§4.3). */}
-        {spotsControls && (
+        {spotsShown && spotsControls && (
           <View style={dst.decWrap}>
             <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 8 }]}>
               {spotsControls.label}

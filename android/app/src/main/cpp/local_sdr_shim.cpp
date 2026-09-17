@@ -16748,6 +16748,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
+                /* ★ The owner's switch, enforced where the decoder is started — the menus hide
+                 *  the button, but an old client or a hand-rolled tool must meet the same wall. */
+                if (vsModeBlocked("spots")) {
+                    LOGI("digital spots refused — the operator has switched them off on this receiver");
+                } else
                 startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
             } else if (type == "unsubscribe_digital_spots") {
                 stopSpots();

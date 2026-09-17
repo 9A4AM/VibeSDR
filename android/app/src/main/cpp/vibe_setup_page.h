@@ -1525,6 +1525,10 @@ const BLOCKABLE = [
   { id: "rtty",   label: "RTTY"     }, { id: "navtex", label: "NAVTEX" },
   { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
   { id: "ft8",    label: "FT8 / FT4" }, { id: "time", label: "Time signals" },
+  /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
+   *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
+   *  buttons were dead weight in its clients (Stuart, 2026-09-17). */
+  { id: "spots",  label: "Digital spots / map" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */

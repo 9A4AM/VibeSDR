@@ -9318,6 +9318,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         activeDecoder={route.params.serverType === 'owrx'
           ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
           : undefined}
+        /* ★ The same owner list, for the decoders and the spots — see ModeSelector's `blocked`. */
+        blocked={blockedModes}
         filterLow={status.bandwidthLow}
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}

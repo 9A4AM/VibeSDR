@@ -16,6 +16,7 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'rtty', label: 'RTTY' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
   { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals' },
+  { id: 'spots', label: 'Digital spots / map' },
 ];
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,

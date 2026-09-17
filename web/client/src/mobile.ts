@@ -46,6 +46,9 @@ export type MobileDeps = {
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
+  /** ★ The one decoder left when the owner has blocked all the others (and the spots) — drawn
+   *  here in place of DECODERS… so a single button does not hide behind a door. See main.ts. */
+  soleDecoder: () => { label: string; on: boolean; press: () => void } | null;
   /** ★★★ DAB, WHICH IS NOT AN SDRMode AND SO CANNOT COME THROUGH modes(). It replaces the whole
    *  chain rather than filtering a channel out of it, so it is offered here as its own entry —
    *  and ONLY where the server says the receiver can reach a multiplex.
@@ -367,10 +370,18 @@ export function initMobileControls(deps: MobileDeps) {
       grid.appendChild(dabRow);
     }
 
+    const sole = deps.soleDecoder();
     const decRow = document.createElement('button');
-    decRow.className = 'mModeOpt';
-    decRow.textContent = 'DECODERS…';
-    decRow.onclick = () => { close(); deps.openDecoders(); };
+    if (sole) {
+      // ★ One survivor: it stands where the door stood, and toggles exactly as it would inside.
+      decRow.className = 'mModeOpt' + (sole.on ? ' on' : '');
+      decRow.textContent = sole.label;
+      decRow.onclick = () => { sole.press(); close(); refresh(); };
+    } else {
+      decRow.className = 'mModeOpt';
+      decRow.textContent = 'DECODERS…';
+      decRow.onclick = () => { close(); deps.openDecoders(); };
+    }
     grid.appendChild(decRow);
 
     // ★★ AN EXPLICIT WAY OUT. Dismiss-by-clicking-away is fine when the backdrop is inert; here
