@@ -47,7 +47,11 @@ final class WaterfallBuffer {
   ///     smeared it — Stuart's 7 MHz screenshot, "we need to increase the sharpness". At 256 the
   ///     image is DOWNscaled to the screen, which is sharp, and the peak-hold decimate keeps 4
   ///     real bins per column from a 1024-bin frame. The local zoom's headroom is 4× instead of 8×.
-  static let width  = 256
+  ///     ★ 512 (2026-09-17, same evening): 256 was STILL upscaled in device pixels — a 44 mm
+  ///       watch is 368 px across, an Ultra 410 — so bilinear still softened every column. At 512
+  ///       every watch DOWNscales, and 2 real bins stand behind each column from a 1024 frame.
+  ///       Cost: the scroll memmove is 180 KB per drawn row, ~2.7 MB/s at 15 rows/s — nothing.
+  static let width  = 512
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.
@@ -475,13 +479,15 @@ final class WaterfallBuffer {
     guard let dst = target else { return false }
 
     subStep += 1
-    let t = Double(subStep) / Double(subRows)
-
-    var row = [UInt8](repeating: 0, count: Self.width)
-    for i in 0..<Self.width {
-      let v = Double(prevRow[i]) + (Double(dst[i]) - Double(prevRow[i])) * t
-      row[i] = UInt8(clamping: Int(v.rounded()))
-    }
+    /* ★★★ HOLD, DON'T BLEND. A sub-row used to be a linear mix of the last real row and the next,
+     *  so at 5 fps two of every three drawn rows were an average of two instants — a smear in
+     *  TIME that read as blur ("still looks slightly blurry and difficult to read", Stuart,
+     *  2026-09-17, after the width fix). Sample-and-hold instead: each real row is drawn for its
+     *  whole interval and the next one steps in. The scroll still glides (the sub-pixel
+     *  `progress` offset does that on the render clock); only the CONTENT stops being invented.
+     *  Every drawn row is now something the receiver actually heard — the same argument that
+     *  set subRows to 1 in July, kept, while the scroll pace is kept too. */
+    let row = subStep >= subRows ? dst : prevRow
     blit(row)
 
     if subStep >= subRows {
