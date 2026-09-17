@@ -247,6 +247,18 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <div class="hint">Leave empty and a Cloudflare tunnel is created for you &mdash; nothing
             to install, and the only option that works behind CGNAT. Fill it in if you already
             have a DDNS name or a port forward.</div></label>
+      <h3 style="margin-top:18px">Battery</h3>
+      <p class="why">For a host with a battery — a phone on a solar panel, a laptop. The level is
+        shown on the admin page and beside this server in the directory. At the floor the server
+        enters a low power state: it warns listeners (10 and 5 points before, and at the floor),
+        suspends every connection, releases the radio, and comes back once the battery is above
+        the resume level. A phone that shuts down flat does not come back on its own.</p>
+      <div class="row">
+        <label><span class="lbl">Suspend at (%)</span>
+          <input type="number" id="batteryPauseAt" min="0" max="90" step="5" placeholder="0 = never"></label>
+        <label><span class="lbl">Resume above (%)</span>
+          <input type="number" id="batteryResumeAt" min="5" max="100" step="5" placeholder="40"></label>
+      </div>
         <label><span class="lbl">Listing lasts</span>
           <select id="dirShareSec">
             <option value="0">Until I turn it off</option>
@@ -2921,6 +2933,7 @@ function fill() {
   renderDirStatus(cfg.dirStatus);
   $("dirName").value          = cfg.dirName || "";
   $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
+  if ($("batteryPauseAt")) { $("batteryPauseAt").value = cfg.batteryPauseAt || 0; $("batteryResumeAt").value = cfg.batteryResumeAt || 40; }
   $("dirShareSec").value      = String(cfg.dirShareSec || 0);
   $("landingMessage").value   = cfg.landingMessage || "";
   $("landingLinkUrl").value   = cfg.landingLinkUrl || "";
@@ -3427,6 +3440,8 @@ function collect() {
     dirList:          $("dirList").checked,
     dirName:          $("dirName").value.trim(),
     dirPublicUrl:     $("dirPublicUrl").value.trim(),
+    batteryPauseAt:   parseInt($("batteryPauseAt").value || "0", 10),
+    batteryResumeAt:  parseInt($("batteryResumeAt").value || "40", 10),
     dirShareSec:      parseInt($("dirShareSec").value, 10) || 0,
     landingMessage:   $("landingMessage").value.trim(),
     // ★ Sent as typed; the SERVER decides whether it survives (vsconfig::safeLinkUrl). The check

@@ -127,6 +127,7 @@ const K = {
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
   idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
+  batteryPauseAt: 'vs_batpause',
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
@@ -171,6 +172,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** The time limit as a GUARANTEE rather than a deadline, and the optional idle release. */
   const [limitSoft, setLimitSoft]   = useState(false);
   const [idleKick, setIdleKick]     = useState(0);
+  /** ★ Suspend the server at this battery % (0 = never); it resumes 20 points above (2026-09-17). */
+  const [batteryPauseAt, setBatteryPauseAt] = useState(0);
   /** ★ RAW IQ OUT: 0 off, 1 local network, 2 local and public; and the stream cap (0 = default). */
   const [rawIq, setRawIq]           = useState(0);
   const [rawIqMax, setRawIqMax]     = useState(0);
@@ -534,6 +537,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setLandingLbl(await g(K.landingLbl));
           setLimitSoft((await g(K.limitSoft)) === '1');
           setIdleKick(Number(await g(K.idleKick)) || 0);
+          setBatteryPauseAt(Number(await g(K.batteryPauseAt)) || 0);
           setRawIq(Number(await g(K.rawIq)) || 0);
           setRawIqMax(Number(await g(K.rawIqMax)) || 0);
           setRawIqLanMaxHz(Number(await g(K.rawIqLanMaxHz)) || 0);
@@ -946,7 +950,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
-      [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)],
+      [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
       [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
       [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
@@ -1013,6 +1017,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
         idleKickMin: live.current.idleKick,
+        batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
         forceIdleSaver: live.current.idleSaver,
         // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
         //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
@@ -2259,6 +2264,33 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
                 </>)}
+                {/* ★★★ THE BATTERY FLOOR. A phone on a solar panel at the allotment: on a grey day
+                    the battery drains under use, and a phone that shuts down flat does not come
+                    back without a hand on it. At the floor the server warns listeners (VTS at
+                    +10, +5 and at the floor), suspends every connection, releases the radio, and
+                    comes back 20 points higher (Stuart, 2026-09-17). */}
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BATTERY</Text>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                    {[0, 10, 15, 20, 25, 30].map(n => (
+                      <TouchableOpacity key={n} onPress={() => setBatteryPauseAt(n)}
+                        style={[styles.card, { borderColor: batteryPauseAt === n ? C.green : C.border,
+                                               backgroundColor: batteryPauseAt === n ? C.green + '18' : 'transparent',
+                                               paddingHorizontal: 14 }]}>
+                        <Text style={{ color: batteryPauseAt === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                          {n === 0 ? 'Never' : `${n}%`}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    Suspend the server when the phone's battery falls to this level, to stop it
+                    shutting down flat. Listeners are warned 10 and 5 points before, and told at
+                    the floor; every connection is then suspended and the radio released. The
+                    server comes back on its own once the battery is {batteryPauseAt > 0 ? `${batteryPauseAt + 20}%` : '20 points higher'}.
+                    The level is shown on the admin page and beside this server in the directory.
+                  </Text>
+                </View>
 
                 {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
                     channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to

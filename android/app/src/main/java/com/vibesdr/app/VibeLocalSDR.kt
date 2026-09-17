@@ -85,6 +85,10 @@ object VibeLocalSDR {
     /** ★ Automatic direct sampling below a frequency (RTL), and an up/down-converter in front of the
      *  radio — the two front-end settings the Linux setup page had and the phone's server did not. */
     fun setAutoDirectSampling(on: Boolean, belowHz: Double) { if (loaded) nativeSetAutoDirectSampling(on, belowHz) }
+    /** ★ The phone's battery, pushed from BatteryManager (see VibeServerBoot.startBatteryMonitor). */
+    fun setBattery(level: Int, charging: Boolean) { if (loaded) nativeSetBattery(level, charging) }
+    /** Owner policy: suspend the server at `pauseAt` % (0 = never), resume above `resumeAt` %. */
+    fun setBatteryPolicy(pauseAt: Int, resumeAt: Int) { if (loaded) nativeSetBatteryPolicy(pauseAt, resumeAt) }
     fun setConverter(offsetHz: Double, inLoHz: Double, inHiHz: Double) { if (loaded) nativeSetConverter(offsetHz, inLoHz, inHiHz) }
     fun setSampleRate(rate: Double) { if (loaded) nativeSetSampleRate(rate) }
     fun setDeemphasis(tau: Double) { if (loaded) nativeSetDeemphasis(tau) }
@@ -366,6 +370,8 @@ object VibeLocalSDR {
     private external fun nativeSetAgc(on: Boolean)
     private external fun nativeSetDirectSampling(mode: Int)
     private external fun nativeSetAutoDirectSampling(on: Boolean, belowHz: Double)
+    private external fun nativeSetBattery(level: Int, charging: Boolean)
+    private external fun nativeSetBatteryPolicy(pauseAt: Int, resumeAt: Int)
     private external fun nativeSetConverter(offsetHz: Double, inLoHz: Double, inHiHz: Double)
     private external fun nativeSetSampleRate(rate: Double)
     private external fun nativeSetDeemphasis(tau: Double)

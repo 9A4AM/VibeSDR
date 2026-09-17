@@ -179,6 +179,14 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
     const frac = sys.cpuPct / (sys.cores * 100);
     return frac >= 0.9 ? 'critical' : frac >= 0.66 ? 'warning' : 'ok';
   })();
+  /* ★ THE HOST'S BATTERY, where it has one (a phone, a laptop) — with the owner's floor and the
+   *  low power state named, so "why did everybody get disconnected" has its answer here. */
+  const bat = st.battery as { level: number; charging: boolean; paused: boolean; pauseAt: number; resumeAt: number } | undefined;
+  if (bat && typeof bat.level === 'number')
+    out.push(card('BATTERY', `${bat.level}%${bat.charging ? ' \u26A1' : ''}`,
+                  bat.paused ? `LOW POWER STATE \u00b7 back above ${bat.resumeAt}%`
+                  : bat.pauseAt > 0 ? `suspends at ${bat.pauseAt}% \u00b7 resumes above ${bat.resumeAt}%` : 'no suspend floor set',
+                  bat.paused ? 'bad' : (bat.pauseAt > 0 && !bat.charging && bat.level <= bat.pauseAt + 10) ? 'warn' : 'ok'));
   out.push(typeof sys.cpuPct === 'number'
     ? card(sys.cpuIsProcess ? 'CPU · THIS SERVER' : 'CPU USAGE', cpuOfMachine,
            sys.cpuIsProcess

@@ -1104,6 +1104,23 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
+    /* ★ SERVER BATTERY. A pill under the clock: quiet green while fine, amber inside ten points
+     *  of the owner's floor, red at the floor — so a listener who is then disconnected knows why.
+     *  The words come as VTS from the server; this is the number. */
+    onBattery: (b) => {
+      let el = document.getElementById('srvBattery');
+      if (!el) {
+        el = document.createElement('div'); el.id = 'srvBattery';
+        el.style.cssText = 'position:fixed;top:8px;right:8px;z-index:60;font:600 12px system-ui;padding:3px 8px;border-radius:12px;background:rgba(20,40,20,.75);color:#9be39b;border:1px solid rgba(120,200,120,.4);pointer-events:none';
+        document.body.appendChild(el);
+      }
+      const nearFloor = b.pauseAt > 0 && b.level <= b.pauseAt + 10;
+      const atFloor = b.pauseAt > 0 && b.level <= b.pauseAt;
+      el.style.color = atFloor ? '#f08080' : nearFloor ? '#f0b060' : '#9be39b';
+      el.style.borderColor = atFloor ? 'rgba(220,70,70,.5)' : nearFloor ? 'rgba(230,150,60,.5)' : 'rgba(120,200,120,.4)';
+      el.textContent = `\u{1F50B} server ${b.level}%${b.charging ? ' \u26A1' : ''}` + (nearFloor && !b.charging ? ` \u00b7 low power at ${b.pauseAt}%` : '');
+      el.title = b.charging ? 'The server\'s battery is charging' : `The server runs on a battery; it will suspend at ${b.pauseAt}% to protect itself`;
+    },
     // ★ A refusal in the server's own words, in the TRANSIENT slot — never the owner's notice
     //   slot, which somebody posted deliberately and which must not be clobbered by it.
     onRefused: (why: string) => showPill(why, 9000),

@@ -531,6 +531,71 @@ static void compatRecord(const char* kind, const std::string& reqLine, const std
     std::fprintf(f, "{\"kind\":\"%s\",\"req\":\"%s\",\"ua\":\"%s\"%s}\n", kind, esc(reqLine).c_str(), esc(ua).c_str(), extra.c_str());
     std::fclose(f);
 }
+/* ★★★ THE BATTERY (Stuart, 2026-09-17). A VibeServer runs on phones and laptops, and the use case
+ *  that matters is a phone on a solar panel at the allotment behind the tunnel: a grey winter day
+ *  drains it, and an Android phone that dies of a flat battery does not come back without a hand
+ *  on it. So the server WATCHES the battery, TELLS listeners (VTS at pauseAt+10, +5 and at pauseAt),
+ *  and at the owner's floor SUSPENDS: releases the radio and refuses connections until the level is
+ *  back above resumeAt. The level comes from the host — Android pushes it (BatteryManager), Linux
+ *  reads /sys/class/power_supply, macOS asks pmset — and is published in /vibeserver.json, the
+ *  admin status and the directory listing (a battery icon beside the entry).
+ *  ★ pauseAt 0 = never suspend (the monitor still reports). resumeAt is clamped above pauseAt. */
+static std::atomic<int>  g_vsBatteryLevel{-1};       // 0–100, −1 = no battery / not known
+static std::atomic<bool> g_vsBatteryCharging{false};
+static std::atomic<bool> g_vsBatteryPaused{false};
+static std::atomic<int>  g_vsBatteryPauseAt{0};
+static std::atomic<int>  g_vsBatteryResumeAt{40};
+static std::atomic<int>  g_vsBatteryWarned{0};       // the highest warning step already spoken (0..3)
+static std::string       g_vsBatterySource;          // "android" | "sysfs" | "pmset" | ""
+static std::string vsBatteryJsonFields() {
+    const int lv = g_vsBatteryLevel.load();
+    if (lv < 0) return "";
+    return ",\"batteryLevel\":" + std::to_string(lv)
+         + std::string(",\"batteryCharging\":") + (g_vsBatteryCharging.load() ? "true" : "false")
+         + std::string(",\"batteryPaused\":")   + (g_vsBatteryPaused.load()   ? "true" : "false")
+         + ",\"batteryPauseAt\":" + std::to_string(g_vsBatteryPauseAt.load())
+         + ",\"batteryResumeAt\":" + std::to_string(g_vsBatteryResumeAt.load());
+}
+/** Read the HOST's battery where the host has one we can read. Android pushes instead (JNI). */
+static void vsProbeHostBattery() {
+#if defined(__ANDROID__)
+    return;
+#elif defined(__linux__)
+    // /sys/class/power_supply/BAT*/{capacity,status} — a laptop; a Pi has none and stays −1.
+    static std::string batDir;
+    if (batDir.empty()) {
+        for (const char* cand : { "/sys/class/power_supply/BAT0", "/sys/class/power_supply/BAT1", "/sys/class/power_supply/battery" }) {
+            FILE* f = std::fopen((std::string(cand) + "/capacity").c_str(), "r");
+            if (f) { std::fclose(f); batDir = cand; break; }
+        }
+        if (batDir.empty()) batDir = "-";
+    }
+    if (batDir == "-") return;
+    int cap = -1; char st[32] = {0};
+    if (FILE* f = std::fopen((batDir + "/capacity").c_str(), "r")) { if (std::fscanf(f, "%d", &cap) != 1) cap = -1; std::fclose(f); }
+    if (FILE* f = std::fopen((batDir + "/status").c_str(), "r"))   { if (!std::fgets(st, sizeof st, f)) st[0] = 0; std::fclose(f); }
+    if (cap >= 0) {
+        g_vsBatteryLevel.store(std::min(100, cap));
+        g_vsBatteryCharging.store(std::strncmp(st, "Charging", 8) == 0 || std::strncmp(st, "Full", 4) == 0);
+        g_vsBatterySource = "sysfs";
+    }
+#elif defined(__APPLE__)
+    // "-InternalBattery-0 (id=…)	29%; discharging; 1:25 remaining" — a laptop; a Mac mini prints none.
+    FILE* p = ::popen("/usr/bin/pmset -g batt 2>/dev/null", "r");
+    if (!p) return;
+    char line[256]; int cap = -1; bool chg = false; bool seen = false;
+    while (std::fgets(line, sizeof line, p)) {
+        const char* pc = std::strstr(line, "%;");
+        if (!pc) continue;
+        const char* q = pc; while (q > line && isdigit((unsigned char)q[-1])) --q;
+        cap = atoi(q); seen = true;
+        chg = std::strstr(line, "; charging") != nullptr || std::strstr(line, "charged") != nullptr;
+        break;
+    }
+    ::pclose(p);
+    if (seen && cap >= 0) { g_vsBatteryLevel.store(std::min(100, cap)); g_vsBatteryCharging.store(chg); g_vsBatterySource = "pmset"; }
+#endif
+}
 constexpr int VS_PROTO     = 1;
 constexpr int VS_MIN_PROTO = 0;
 std::string queryParam(const std::string& reqLine, const char* key);   // defined below
@@ -13593,6 +13658,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Admin override rides the connect URL as a nonce + HMAC pair — never the
             // password — because the override has to be decided BEFORE the slot is claimed,
             // and the admin_unlock message arrives over a socket a busy server will not open.
+            if (g_vsBatteryPaused.load()) {
+                // ★ Low power state: no socket opens. The preflight said why; a bare upgrade gets it too.
+                const std::string b = "{\"reason\":\"battery-paused\",\"level\":" + std::to_string(g_vsBatteryLevel.load())
+                                    + ",\"resumeAt\":" + std::to_string(g_vsBatteryResumeAt.load()) + "}";
+                sock->sendstr("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nRetry-After: 300\r\nConnection: close\r\nContent-Length: "
+                              + std::to_string(b.size()) + "\r\n\r\n" + b);
+                sock->close(); return;
+            }
             compatRecord(wsAudio ? "ws-audio" : "ws-spectrum", reqLine, userAgent);
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
@@ -13694,11 +13767,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ Every refusal is logged with the peer, its client string and its proto. */
             const int cproto = protoOf(reqLine);
             const bool tooOld = cproto < VS_MIN_PROTO;
+            const bool batteryOff = g_vsBatteryPaused.load();
             if (tooOld)
                 LOGI("preflight REFUSED %s: proto %d below the floor %d (client \"%s\") — update-app",
                      sock->peerAddress().c_str(), cproto, VS_MIN_PROTO, queryParam(reqLine, "client").c_str());
             std::string body = isBanned
                 ? "{\"allowed\":false,\"reason\":\"banned\"}"
+                : batteryOff
+                ? std::string("{\"allowed\":false,\"reason\":\"battery-paused\",\"level\":") + std::to_string(g_vsBatteryLevel.load())
+                  + ",\"resumeAt\":" + std::to_string(g_vsBatteryResumeAt.load()) + "}"
                 : tooOld
                 ? std::string("{\"allowed\":false,\"reason\":\"update-app\",\"proto\":") + std::to_string(VS_PROTO)
                   + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"webUrl\":\"/\"}"
@@ -14272,7 +14349,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              //     the server would have said yes (a Pi owner's first try at
                              //     5.2.0, 2026-09-09). One rule, two readers — now one field.
                              + ",\"lan\":" + (isPrivateIp(sock->peerAddress()) ? "true" : "false")
-                             + ",\"admin\":" + (adminSet ? "true" : "false") + verField + hostField
+                             + ",\"admin\":" + (adminSet ? "true" : "false") + verField + hostField + vsBatteryJsonFields()
                              // ★ The owner's notice, so a client can say WHY the receiver is odd
                              //   before anybody concludes the radio is rubbish.
                              + ",\"notice\":\"" + vibeadmin::esc(g_vsNotice.current()) + "\""
@@ -19298,6 +19375,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     own two-second dwell — there is nothing to react to faster than that.
                 LocalSdrShim::instance().overloadTick();
                 LocalSdrShim::instance().autoBandwidthTick();
+                LocalSdrShim::instance().batteryTick();
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
                  *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
@@ -20652,6 +20730,13 @@ std::string LocalSdrShim::adminStatusJson() {
     j += ",\"listeners\":" + std::to_string(listenerCount())
        + ",\"maxUsers\":"  + std::to_string(g_vsMaxUsers.load())
        + ",\"waiting\":"   + std::to_string(waitingCount());
+    if (g_vsBatteryLevel.load() >= 0)
+        j += ",\"battery\":{\"level\":" + std::to_string(g_vsBatteryLevel.load())
+           + std::string(",\"charging\":") + (g_vsBatteryCharging.load() ? "true" : "false")
+           + std::string(",\"paused\":") + (g_vsBatteryPaused.load() ? "true" : "false")
+           + ",\"pauseAt\":" + std::to_string(g_vsBatteryPauseAt.load())
+           + ",\"resumeAt\":" + std::to_string(g_vsBatteryResumeAt.load())
+           + ",\"source\":\"" + g_vsBatterySource + "\"}";
 
     // ★ The radio, as the hardware endpoint reports it — an owner looking at a monitor page
     //   wants "is the dongle still there" answered HERE, not on another screen.
@@ -21629,6 +21714,81 @@ int LocalSdrShim::startFrontDoor(int port, std::string& err) {
 }
 
 int LocalSdrShim::radiosRequestProto() { return g_vsRadiosReqProto.load(); }
+void LocalSdrShim::setBattery(int levelPct, bool charging) {
+    if (levelPct < 0) { g_vsBatteryLevel.store(-1); return; }
+    g_vsBatteryLevel.store(std::min(100, levelPct));
+    g_vsBatteryCharging.store(charging);
+    g_vsBatterySource = "android";
+}
+void LocalSdrShim::setBatteryPolicy(int pauseAt, int resumeAt) {
+    pauseAt  = std::max(0, std::min(90, pauseAt));
+    resumeAt = std::max(pauseAt + 5, std::min(100, resumeAt));
+    g_vsBatteryPauseAt.store(pauseAt);
+    g_vsBatteryResumeAt.store(resumeAt);
+    if (pauseAt == 0 && g_vsBatteryPaused.load()) { g_vsBatteryPaused.store(false); LOGI("battery: policy off — resuming"); }
+    LOGI("battery policy: suspend at %d%% (0 = never), resume above %d%%", pauseAt, resumeAt);
+}
+bool LocalSdrShim::batteryPaused() const { return g_vsBatteryPaused.load(); }
+void LocalSdrShim::batteryTick() {
+    static int64_t lastProbe = 0, lastBroadcast = 0; static int lastLevel = -2; static bool lastChg = false;
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - lastProbe >= 30000) { lastProbe = now; vsProbeHostBattery(); }
+    const int lv = g_vsBatteryLevel.load();
+    if (lv < 0) return;
+    const bool chg = g_vsBatteryCharging.load();
+    const int pauseAt = g_vsBatteryPauseAt.load(), resumeAt = g_vsBatteryResumeAt.load();
+    // ★ Tell every listener the level every minute and on any change — a `battery` message, additive.
+    if (lv != lastLevel || chg != lastChg || now - lastBroadcast >= 60000) {
+        lastLevel = lv; lastChg = chg; lastBroadcast = now;
+        const std::string body = "{\"type\":\"battery\",\"level\":" + std::to_string(lv)
+            + std::string(",\"charging\":") + (chg ? "true" : "false")
+            + ",\"pauseAt\":" + std::to_string(pauseAt) + ",\"resumeAt\":" + std::to_string(resumeAt)
+            + std::string(",\"paused\":") + (g_vsBatteryPaused.load() ? "true" : "false") + "}";
+        if (p) for (auto& pr : p->allSpecPeers()) if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, body);
+    }
+    if (pauseAt <= 0) return;
+    if (!g_vsBatteryPaused.load()) {
+        /* ★ THE WARNINGS, in Stuart's words, through the VTS system every client already renders:
+         *   at pauseAt+10 and pauseAt+5 "Server battery at N% — server will enter low power state
+         *   at P%, connections will be suspended at this time", and at P% the suspension itself.
+         *   Each step is spoken once; charging back above the step re-arms it. */
+        int step = 0;
+        if (!chg) { if (lv <= pauseAt) step = 3; else if (lv <= pauseAt + 5) step = 2; else if (lv <= pauseAt + 10) step = 1; }
+        const int warned = g_vsBatteryWarned.load();
+        if (chg && lv > pauseAt + 10) g_vsBatteryWarned.store(0);
+        if (step > warned) {
+            g_vsBatteryWarned.store(step);
+            if (step < 3) {
+                sayVts("Server battery at " + std::to_string(lv) + "% \xe2\x80\x94 server will enter a low power state at "
+                       + std::to_string(pauseAt) + "%, connections will be suspended at this time.");
+            } else {
+                sayVts("Server battery at " + std::to_string(lv) + "% \xe2\x80\x94 to prevent server shutdown VibeServer is entering a "
+                       "low power state and suspending connections. Back when it reaches " + std::to_string(resumeAt) + "%.");
+                LOGI("battery: %d%% (not charging) — SUSPENDING at the owner's floor %d%%; resume above %d%%", lv, pauseAt, resumeAt);
+                g_vsBatteryPaused.store(true);
+                // ★ Give the VTS four seconds to be read, then close every listener and release the radio.
+                std::thread([this]{
+                    std::this_thread::sleep_for(std::chrono::seconds(4));
+                    if (!g_vsBatteryPaused.load() || !p) return;
+                    std::vector<std::shared_ptr<net::Socket>> all;
+                    for (auto& pr : p->allSpecPeers()) if (pr.sock) all.push_back(pr.sock);
+                    { std::lock_guard<std::mutex> lk(p->clientMtx);
+                      if (p->audioClient) all.push_back(p->audioClient);
+                      for (auto& a : p->audioExtra) if (a) all.push_back(a); }
+                    for (auto& s : all) if (s && s->isOpen()) s->close();
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    if (g_vsBatteryPaused.load()) { LOGI("battery: releasing the radio for the low power state"); releaseRadio(); }
+                }).detach();
+            }
+        }
+    } else {
+        // Resume: the level is back above the ceiling, or it is charging and clear of the floor.
+        if (lv >= resumeAt || (chg && lv > pauseAt + 5)) {
+            g_vsBatteryPaused.store(false); g_vsBatteryWarned.store(0);
+            LOGI("battery: %d%% (%s) — low power state over, accepting listeners again", lv, chg ? "charging" : "not charging");
+        }
+    }
+}
 int LocalSdrShim::protoNumber()        { return VS_PROTO; }
 int LocalSdrShim::minProtoNumber()     { return VS_MIN_PROTO; }
 void LocalSdrShim::setHandoffRouter(HandoffFn fn) {

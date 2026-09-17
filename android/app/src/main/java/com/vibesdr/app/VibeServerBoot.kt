@@ -1,5 +1,10 @@
 package com.vibesdr.app
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.util.Log
 import org.json.JSONObject
 import java.io.File
@@ -34,6 +39,30 @@ import java.io.File
  *   itself in SharedPreferences unchanged.
  */
 object VibeServerBoot {
+    /* ★★★ THE PHONE'S BATTERY, PUSHED INTO THE SERVER. ACTION_BATTERY_CHANGED is a sticky broadcast:
+     *     registering hands back the current state at once, then every change. The server uses it
+     *     for the level it publishes and for its low power state (Stuart, 2026-09-17: a phone on a
+     *     solar panel at the allotment that dies flat does not come back on its own). */
+    private var batteryReceiver: BroadcastReceiver? = null
+    fun startBatteryMonitor(ctx: Context) {
+        if (batteryReceiver != null) return
+        val app = ctx.applicationContext
+        val push = { i: Intent? ->
+            if (i != null) {
+                val lvl = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                val st = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+                val pct = if (lvl >= 0 && scale > 0) (lvl * 100) / scale else -1
+                val charging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL || plugged
+                try { VibeLocalSDR.setBattery(pct, charging) } catch (_: Throwable) {}
+            }
+        }
+        val r = object : BroadcastReceiver() { override fun onReceive(c: Context?, i: Intent?) { push(i) } }
+        batteryReceiver = r
+        val sticky = try { app.registerReceiver(r, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) } catch (t: Throwable) { Log.w(TAG, "battery monitor: ${t.message}"); null }
+        push(sticky)
+    }
     private const val TAG = "VibeServerBoot"
 
     // ── Tolerant readers ────────────────────────────────────────────────────────────────────────
@@ -98,6 +127,8 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerSessionLimit(cfg.i("sessionLimitMin", 0))
         VibeLocalSDR.setVibeServerSessionLimitSoft(cfg.b("sessionLimitSoft", false))
         VibeLocalSDR.setVibeServerIdleKick(cfg.i("idleKickMin", 0))
+        // ★ The battery floor — a phone on a solar panel must never run itself flat (2026-09-17).
+        VibeLocalSDR.setBatteryPolicy(cfg.i("batteryPauseAt", 0), cfg.i("batteryResumeAt", 40))
         VibeLocalSDR.setVibeServerWebEnabled(cfg.b("webServer", true))
         // ★★★ THE CAPTURED WINDOW. Shared listening only works because everybody gets a slice of
         //     ONE window, so the centre must be pinned.

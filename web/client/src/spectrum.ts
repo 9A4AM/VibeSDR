@@ -275,6 +275,8 @@ export interface SpectrumCallbacks {
   onDevice?: (present: boolean, reason?: string) => void;
   /** The owner's notice to listeners, pushed when it is posted or cleared ('' = nothing). */
   onNotice?: (text: string) => void;
+  /** ★ The server host's battery — level, charging, the owner's floor, and whether it is suspended. */
+  onBattery?: (b: { level: number; charging: boolean; pauseAt: number; resumeAt: number; paused: boolean }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
   onRefused?: (why: string) => void;
@@ -831,6 +833,10 @@ export class SpectrumClient {
       case 'session_warning':
         // Still connected — this is a countdown, not a refusal. Do NOT set refused.
         this.cb.onSessionWarning?.(Number(msg.secs) || 0);
+        break;
+      case 'battery':
+        this.cb.onBattery?.({ level: Number(msg.level), charging: msg.charging === true,
+                              pauseAt: Number(msg.pauseAt ?? 0), resumeAt: Number(msg.resumeAt ?? 0), paused: msg.paused === true });
         break;
       case 'notice':
         /* ★★★ ONE TYPE, TWO COMPLETELY DIFFERENT MESSAGES — AND ONE OF THEM WAS BEING DROPPED.

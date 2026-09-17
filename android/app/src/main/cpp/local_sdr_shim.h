@@ -437,6 +437,13 @@ public:
     static int radiosRequestProto();
     /** This server's protocol number and the lowest it accepts (docs/PROTOCOL.md). */
     static int protoNumber();
+    /** ★ The host's battery (Android pushes it from BatteryManager; Linux/macOS read their own). */
+    static void setBattery(int levelPct, bool charging);
+    /** Owner policy: suspend at `pauseAt` % (0 = never), resume once back above `resumeAt` %. */
+    static void setBatteryPolicy(int pauseAt, int resumeAt);
+    /** Poll + policy, once every couple of seconds from the hotplug thread. */
+    void batteryTick();
+    bool batteryPaused() const;
     static int minProtoNumber();
 
     /** ★★ ONE FORWARDED PORT. Given a request path, return the unix socket of the process that

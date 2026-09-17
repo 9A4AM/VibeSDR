@@ -540,6 +540,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAutoDirectSampling(JNIEnv*, jobject, 
     vibe::LocalSdrShim::instance().setAutoDirectSampling(on, belowHz);
 }
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBattery(JNIEnv*, jobject, jint level, jboolean charging) {
+    vibe::LocalSdrShim::setBattery((int)level, charging);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBatteryPolicy(JNIEnv*, jobject, jint pauseAt, jint resumeAt) {
+    vibe::LocalSdrShim::setBatteryPolicy((int)pauseAt, (int)resumeAt);
+}
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetConverter(JNIEnv*, jobject, jdouble offsetHz, jdouble inLoHz, jdouble inHiHz) {
     vibe::LocalSdrShim::instance().setConverter(offsetHz, inLoHz, inHiHz);
 }

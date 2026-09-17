@@ -445,6 +445,11 @@ std::string buildStatus(int port) {
     const std::string host = hostModel(), plat = platformName();
     if (!host.empty()) j += ",\"host\":\"" + host + "\"";
     if (!plat.empty()) j += ",\"platform\":\"" + plat + "\"";
+    // ★ The host's battery, where it has one (a laptop, a phone) — a badge beside the entry.
+    if (jsonNum(ident, "batteryLevel", -1) >= 0)
+        j += ",\"battery\":{\"level\":" + std::to_string((int)jsonNum(ident, "batteryLevel", 0))
+           + std::string(",\"charging\":") + (jsonBool(ident, "batteryCharging") ? "true" : "false")
+           + std::string(",\"paused\":") + (jsonBool(ident, "batteryPaused") ? "true" : "false") + "}";
     j += "}";
     return j;
 }

@@ -1455,6 +1455,10 @@ export abstract class SdrWsClient {
       this.updateAppWebUrl = /^https?:/.test(rel) ? rel : this.baseUrl.replace(/\/+$/, '') + rel;
       throw new Error(UPDATE_APP_MESSAGE);
     }
+    if (!json.allowed && json.reason === 'battery-paused') {
+      const lv = (json as any).level, ra = (json as any).resumeAt;
+      throw new Error(`The server is in a low power state to protect its battery (${lv}%). It comes back once the battery is above ${ra}%.`);
+    }
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
     // ★★★ ONLY NOW MAY THE AUDIO SOCKET OPEN. Proved against a live UberSDR (2026-08-18): a WS
     //     carrying a session id this POST has not registered gets a 101 and 213 bytes — the

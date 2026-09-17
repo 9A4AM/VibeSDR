@@ -550,6 +550,10 @@ struct ServerConfig {
     // ★★ OFF unless the owner says otherwise. Publishing somebody's receiver to the internet is
     //    not a default anyone should arrive at by upgrading.
     bool        dirList = false;
+    /** ★ Battery policy for a host with a battery (a phone, a laptop): suspend the server at
+     *  `batteryPauseAt` % (0 = never) and resume once back above `batteryResumeAt` %. */
+    int         batteryPauseAt = 0;
+    int         batteryResumeAt = 40;
     /** The public name. The shareable address is DERIVED from it, exactly as the .local label is
      *  derived from `mdnsName` — one name to think about, not two. */
     std::string dirName;

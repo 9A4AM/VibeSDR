@@ -1839,6 +1839,8 @@ final class UberClient: ObservableObject {
         // ★★★ TOO OLD FOR THIS SERVER (BRIEF-v11 §6): an instruction, not "connection lost".
         status = reason == "update-app"
           ? "This server needs a newer VibeSDR Jr \u{2014} update the app"
+          : reason == "battery-paused"
+          ? "Server in low power state \u{2014} battery \((j?["level"] as? Int) ?? 0)%, back above \((j?["resumeAt"] as? Int) ?? 0)%"
           : "HTTP \(http.statusCode): \(reason)"
       }
       return allowed

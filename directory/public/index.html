@@ -520,6 +520,9 @@
   a { color: var(--accent); }
   footer { color: var(--dim); font-size: 11px; text-align: center; padding: 0 20px 30px;
            letter-spacing: .06em; }
+  .tag.batt{background:rgba(120,200,120,.14);color:#9be39b;border:1px solid rgba(120,200,120,.35)}
+  .tag.batt.low{background:rgba(230,150,60,.16);color:#f0b060;border-color:rgba(230,150,60,.4)}
+  .tag.batt.paused{background:rgba(220,70,70,.16);color:#f08080;border-color:rgba(220,70,70,.4)}
 </style>
 </head>
 <body>
@@ -1056,6 +1059,9 @@ function serverBlock(s) {
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
+      ${s.battery && typeof s.battery.level === 'number'
+        ? `<span class="tag batt${s.battery.paused ? ' paused' : (s.battery.level <= 20 ? ' low' : '')}" title="${s.battery.paused ? 'Low power state — the battery is being protected; back when it has charged' : (s.battery.charging ? 'Battery, charging' : 'Battery, not charging')}">${s.battery.paused ? '\u{1F50B} paused' : `\u{1F50B} ${s.battery.level}%${s.battery.charging ? ' \u26A1' : ''}`}</span>`
+        : ''}
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       <!-- ★ No 'tunnel' tag: how a server reaches the internet is the operator's business, and
            the word only asked a listener a question they cannot answer (Stuart, 2026-09-16). -->

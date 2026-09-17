@@ -2141,6 +2141,7 @@ int main(int argc, char** argv) {
 #endif
     LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
     LocalSdrShim::setVibeServerReleaseWhenIdle(o.releaseWhenIdle);
+    LocalSdrShim::setBatteryPolicy(g_serverConfig.batteryPauseAt, g_serverConfig.batteryResumeAt);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
     // Built here in exactly the shape the Mac app produces (VibeServerApp.swift locationJson), so

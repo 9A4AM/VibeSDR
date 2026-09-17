@@ -347,6 +347,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
         val autoRestore = VibeServerBoot.autoRestore(cfg)
 
+        VibeServerBoot.startBatteryMonitor(reactContext)
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
                                                 reactContext.filesDir)
         // ★★★ PUT THE PUBLIC LISTING BACK IF IT WAS ON. The tunnel dies with the process that

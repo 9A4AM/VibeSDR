@@ -546,6 +546,10 @@ object VibeTunnel {
             //   box they cannot fill reads it as a broken server, and goes away rather than
             //   understanding it was never for them (Stuart, 2026-08-22).
             out.put("pin", j.optBoolean("pin", false))
+            // ★ The phone's battery, as the server publishes it — the badge beside the entry.
+            if (j.has("batteryLevel")) out.put("battery", JSONObject().apply {
+                put("level", j.optInt("batteryLevel", -1)); put("charging", j.optBoolean("batteryCharging", false))
+                put("paused", j.optBoolean("batteryPaused", false)) })
         } catch (t: Throwable) {
             Log.w(TAG, "could not read /vibeserver.json: ${t.message}")
         }

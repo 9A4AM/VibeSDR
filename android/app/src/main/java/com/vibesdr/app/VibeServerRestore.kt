@@ -105,6 +105,7 @@ object VibeServerRestore {
         //    easier to notice than one that comes back wrong.
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
+        VibeServerBoot.startBatteryMonitor(ctx)
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir)
         // ★★★ AND PUT THE PUBLIC LISTING BACK. The tunnel dies with the process that spawned it, so
         //     an update, a low-memory kill or a reboot leaves the directory advertising an address

@@ -614,6 +614,9 @@ async function list(env, url) {
       // ★ Passed through whole, `id` included — the page addresses each radio's own
       //   /r/<id>/vibeserver.json to refresh a count the ping cannot keep current.
       radios: radiosFor(status.radios),
+      // ★ The host's battery, where it has one — level, charging, and whether it is in its low power state.
+      battery: status.battery && typeof status.battery.level === 'number'
+        ? { level: status.battery.level, charging: !!status.battery.charging, paused: !!status.battery.paused } : undefined,
       // ★ The contract each server speaks (BRIEF-v11 §4) — forwarded whole, never interpreted here.
       proto: typeof status.proto === 'number' ? status.proto : undefined,
       minProto: typeof status.minProto === 'number' ? status.minProto : undefined,

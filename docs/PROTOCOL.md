@@ -84,6 +84,12 @@ today (`rtlsdr`, `sdrplay`, `airspyhf`, `hackrf`) is 0.
 - A **legacy** requester (no `proto`) is not told about it: the server and the directory omit it
   from the list. The directory filters **per request** from its `proto` query parameter.
 
+## Additions under proto 1 (additive — no bump)
+
+| Date | Addition | Older clients |
+|---|---|---|
+| 2026-09-17 | `{"type":"battery","level":N,"charging":b,"pauseAt":P,"resumeAt":R,"paused":b}` on the spectrum socket every minute and on change; `batteryLevel`/`batteryCharging`/`batteryPaused`/`batteryPauseAt`/`batteryResumeAt` in `/vibeserver.json`; `battery` in the admin status and the directory listing; preflight reason `battery-paused` (`level`, `resumeAt`) and a 503 with the same body on a bare upgrade while suspended; VTS notices at pauseAt+10, pauseAt+5 and pauseAt | Ignore the message and the fields; show the reason string |
+
 ## Changing the number
 
 Bump `proto` only when wire behaviour changes; raise `minProto` only when a change cannot be
