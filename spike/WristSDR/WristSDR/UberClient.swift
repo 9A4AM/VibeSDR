@@ -1895,7 +1895,14 @@ final class UberClient: ObservableObject {
     //   zoom FFT to the widest request, so this costs other listeners nothing and more would be
     //   silently capped. Do not "optimise" this back to the display width.
     // ★ UberSDR ignores the param (it sends its own count, which we downsample as before).
-    let binsParam = isVibe ? "&bins=1024" : ""
+    // ★★★ HALF THAT ON THE PHONE RELAY. Over Bluetooth the failure is not slowness, it is the
+    //     socket being DROPPED — the lesson KiwiClient.topWfSpeed recorded in July — and 1024 bins
+    //     at 5 fps (~5 KB/s) on top of ~12 KB/s of Opus sat at the floor of the relay's ~25 KB/s
+    //     on a bad day: "reconnecting" with the phone crossed out and the server glyph still green
+    //     (Stuart, 2026-09-17, the evening 1024 landed). 512 bins is still one real bin per column
+    //     of the 512-wide buffer — crisp, no oversampling headroom, no local zoom — and half the
+    //     bytes. Wifi keeps 1024. Decided at open; a relay drop reopens the socket anyway.
+    let binsParam = isVibe ? (onRelay ? "&bins=512" : "&bins=1024") : ""
     // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
     //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
     //    server prefers a real header and falls back to this.
