@@ -32,6 +32,17 @@ else
   echo "Node already present."
 fi
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# ★★ HOMEBREW IS NOT GUARANTEED TO DELIVER NODE. Run 299 (2026-09-17, the workflow pinned to Xcode
+#    26.6) landed on a runner where `brew install node` ended in "No such keg: /usr/local/Cellar/node"
+#    and the archive died at `node: command not found`. The official tarball from nodejs.org needs
+#    nothing from the image: fetched for this runner's architecture into $HOME and put on PATH.
+if ! command -v node >/dev/null 2>&1; then
+  ARCH=$(uname -m); case "$ARCH" in arm64) NARCH=arm64 ;; *) NARCH=x64 ;; esac
+  TAR=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | awk -v a="darwin-$NARCH.tar.gz" '$2 ~ a {print $2; exit}')
+  echo "Homebrew gave no Node; fetching https://nodejs.org/dist/latest-v22.x/$TAR"
+  mkdir -p "$HOME/node" && curl -fsSL "https://nodejs.org/dist/latest-v22.x/$TAR" | tar -xz -C "$HOME/node" --strip-components=1
+  export PATH="$HOME/node/bin:$PATH"
+fi
 
 echo "--- node/npm versions ---"
 node --version
