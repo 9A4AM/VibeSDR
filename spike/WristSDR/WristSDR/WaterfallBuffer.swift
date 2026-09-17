@@ -199,6 +199,9 @@ final class WaterfallBuffer {
   /// The most recently drawn row — i.e. exactly what the top of the waterfall is
   /// showing. The waterfall wants this raw.
   private(set) var liveRow: [UInt8] = []
+  /// The trace's TARGET: the blend from the last real row towards the next, advanced per sub-row
+  /// (see emitSubRow) so the trace always has something moving to chase.
+  private var traceRow: [Double] = []
 
   /// The spectrum trace's own copy, TIME-SMOOTHED.
   ///
@@ -383,6 +386,7 @@ final class WaterfallBuffer {
   /// with its sub-rows; the trace simply never got the same treatment.
   private func advanceTrace(dt: CFTimeInterval) {
     guard !liveRow.isEmpty, specRow.count == liveRow.count else { return }
+    let goal: [Double] = traceRow.count == specRow.count ? traceRow : liveRow.map(Double.init)
 
     // Time-based, so the feel doesn't change if the render rate does.
     //
@@ -408,7 +412,7 @@ final class WaterfallBuffer {
     let tc = max(0.10, interval / Double(subRows))   // seconds to close ~63% of the gap
     let a = min(1, max(0, dt / tc))
     for i in 0..<specRow.count {
-      specRow[i] += (Double(liveRow[i]) - specRow[i]) * a
+      specRow[i] += (goal[i] - specRow[i]) * a
     }
 
     guard peakHold else { return }
@@ -488,6 +492,18 @@ final class WaterfallBuffer {
      *  Every drawn row is now something the receiver actually heard — the same argument that
      *  set subRows to 1 in July, kept, while the scroll pace is kept too. */
     let row = subStep >= subRows ? dst : prevRow
+    /* ★★★ BUT THE TRACE KEEPS ITS BLENDED TARGET. Holding the pixels broke the trace's
+     *  interpolation (Stuart, 2026-09-17: "the spectrum trace is very slow all the interpolation
+     *  is not being applied"): advanceTrace eases towards the row the top of the waterfall shows,
+     *  and with blended sub-rows that row MOVED every sub-row, so the trace was always chasing.
+     *  Held, it moved once per real row — ease, hold, ease, hold. So the trace chases its own
+     *  target, `traceRow`, which is still the blend from the last real row towards the next: the
+     *  waterfall gets honest pixels, the trace gets the continuous motion that was dialled in. */
+    let t = Double(subStep) / Double(subRows)
+    if traceRow.count != Self.width { traceRow = [Double](repeating: 0, count: Self.width) }
+    for i in 0..<Self.width {
+      traceRow[i] = Double(prevRow[i]) + (Double(dst[i]) - Double(prevRow[i])) * t
+    }
     blit(row)
 
     if subStep >= subRows {
