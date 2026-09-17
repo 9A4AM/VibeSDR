@@ -4318,6 +4318,47 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     vibedsp::RxPipeline rx;
     std::vector<float> fftAccum;    // running sum for FFT averaging (fftshifted)
     int accumCount = 0;
+    /* ★★★ THE FRAMES A SLOW LISTENER DID NOT WANT ARE NOT THROWN AWAY ANY MORE — THEY ARE AVERAGED.
+     *  The engine runs at the fastest rate anyone asked for and dueForFrame() DROPS the frames a
+     *  slower listener did not ask for: at 5 fps against a 20 fps engine, three frames in four
+     *  went in the bin, and the one that went out was a single (FFT_AVG-averaged) snapshot — so
+     *  the noise floor speckled and sat high next to radiod's power-averaged bins. Jr on the
+     *  Airspy HF+ beside Jr on UberSDR, same band, same evening (Stuart, 2026-09-17): a raised
+     *  grainy floor against a black one. BRIEF-jr-vibeserver-display §6 measured, answered.
+     *  ★ A ring of the last kSlowAvgMax engine frames; a listener at 1/M of the engine rate gets
+     *    the mean of the last M. A 20 fps listener gets M = 1 — the frame exactly as before.
+     *  ★ In dB, as fftAccum already averages: cheap, and one convention for the whole path.
+     *  ★ One ring per path (wide / zoom) because each carries its own bin count. */
+    static constexpr int kSlowAvgMax = 8;
+    struct SlowAvg { std::deque<std::vector<float>> ring; std::vector<float> out; };
+    SlowAvg wideSlow_, zoomSlow_;
+    std::vector<float> wideRowAvg_;
+    void slowPush(SlowAvg& a, const float* row, int n) {
+        a.ring.emplace_back(row, row + n);
+        while ((int)a.ring.size() > kSlowAvgMax) a.ring.pop_front();
+        if (a.ring.size() > 1 && (int)a.ring.front().size() != n) a.ring.clear(), a.ring.emplace_back(row, row + n);
+    }
+    /** The last `m` pushed rows averaged (m ≤ 1 → the newest, untouched). */
+    const float* slowRow(SlowAvg& a, int m) {
+        if (a.ring.empty()) return nullptr;
+        if (m <= 1 || a.ring.size() < 2) return a.ring.back().data();
+        const int n = (int)a.ring.back().size();
+        const int use = std::min<int>(m, (int)a.ring.size());
+        a.out.assign(n, 0.0f);
+        for (int k = 0; k < use; k++) {
+            const float* r = a.ring[a.ring.size() - 1 - k].data();
+            for (int i = 0; i < n; i++) a.out[i] += r[i];
+        }
+        const float inv = 1.0f / (float)use;
+        for (int i = 0; i < n; i++) a.out[i] *= inv;
+        return a.out.data();
+    }
+    /** How many engine frames a listener at `fps` spans — the M above. */
+    int slowFramesFor(double fps) const {
+        const double engine = fftRate;
+        if (engine <= 0 || fps <= 0 || fps >= engine) return 1;
+        return std::max(1, std::min(kSlowAvgMax, (int)std::lround(engine / fps)));
+    }
     std::thread rtlThread;
     // ── Dongle hot-plug ─────────────────────────────────────────────────────
     // `stopping` distinguishes OUR cancel from the device disappearing; `deviceLost` is the state
@@ -7432,6 +7473,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    because this path SUPPRESSES that one (see `rx.zoomSpanHz()` in onSpectrum). Exactly
         //    one of the two advances each accumulator per frame; doing it in both would give every
         //    listener twice the rate it asked for.
+        slowPush(zoomSlow_, db, nb);        // every engine frame, before the gate (see SlowAvg)
         auto due = dueForFrame(peers);
         {
             bool any = false;
@@ -7443,6 +7485,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (due[pi] && std::find(widths.begin(), widths.end(), peers[pi].bins) == widths.end())
                 widths.push_back(peers[pi].bins);
         for (int outBins : widths) {
+        int slowM = 1;
+        for (size_t pi = 0; pi < peers.size(); pi++)
+            if (due[pi] && peers[pi].bins == outBins)
+                slowM = std::max(slowM, slowFramesFor(peers[pi].fps > 0 ? peers[pi].fps : baseFftRate));
+        const float* zrow = slowRow(zoomSlow_, slowM);
+        if (!zrow) zrow = db;
         // ★★ The zoom row arrives at `nb` REAL bins (the widest listener's width). A listener who
         //    asked for fewer is peak-held DOWN from it — never interpolated up — so a watch gets a
         //    128-bin view of the same sharp data instead of forcing everyone to its width.
@@ -7468,9 +7516,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int signedOut = (i <= half) ? i : i - outBins;   // same rule as onSpectrum
             int src = (half + signedOut) * grp;                    // -> index into the SHIFTED row
             if (src < 0) src = 0; else if (src >= nb) src = nb - 1;
-            float best = db[src];
+            float best = zrow[src];
             for (int k = 1; k < grp && src + k < nb; k++)          // peak-hold, don't drop carriers
-                if (db[src + k] > best) best = db[src + k];
+                if (zrow[src + k] > best) best = zrow[src + k];
             int v = (int)lround(best + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
@@ -7496,6 +7544,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
             return fftAccum[idx] * inv;
         };
+        // ★ Into the slow-listener ring EVERY engine frame, before any gating — a frame nobody is
+        //   due for is exactly the one the ring exists to keep (see SlowAvg).
+        {
+            if ((int)wideRowAvg_.size() != bins) wideRowAvg_.assign(bins, 0.0f);
+            for (int i = 0; i < bins; i++) wideRowAvg_[i] = fftAccum[i] * inv;
+            slowPush(wideSlow_, wideRowAvg_.data(), bins);
+        }
 
         /* ── Lightning, from the same averaged frame (see SfericDetect) ─────────────────────
          * ★★ SUPPRESSED AROUND A GAIN CHANGE. A gain step lifts every bin at once and is the one
@@ -7649,6 +7704,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ★ 0 is free as a sentinel: it means -256 dBFS, and the engine's floor is
             //       around -125. A real bin can never reach it.
             const int loValid = -bins / 2, hiValid = bins / 2;
+            // ★ The SLOWEST listener due on this view sets how many engine frames the row averages
+            //   (SlowAvg): one for a full-rate browser, four for a 5 fps watch on a 20 fps engine.
+            int slowM = 1;
+            for (size_t pi = 0; pi < peers.size(); pi++) {
+                if (!due[pi] || peers[pi].bins != outBins) continue;
+                auto c = dspFor(peers[pi].sock);
+                const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
+                const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
+                if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
+                slowM = std::max(slowM, slowFramesFor(peers[pi].fps > 0 ? peers[pi].fps : baseFftRate));
+            }
+            const float* srcRow = slowRow(wideSlow_, slowM);
+            auto srcAt = [&](int sOff) -> float {
+                if (!srcRow) return dbAt(sOff);
+                int idx = bins / 2 + sOff;
+                if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
+                return srcRow[idx];
+            };
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step - hwOffsetBin + viewOffsetBin;  // signed src offset from DC
@@ -7660,7 +7733,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (hi > hiValid) hi = hiValid;
                 float best = -1e9f;
                 for (int s = lo; s < hi; s++) {
-                    float val = dbAt(s);                    // averaged dB
+                    float val = srcAt(s);                   // averaged dB, over this listener's frames
                     if (val > best) best = val;             // peak-hold
                 }
                 int v = (int)lround(best + 256.0);
