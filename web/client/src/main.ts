@@ -1111,14 +1111,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       let el = document.getElementById('srvBattery');
       if (!el) {
         el = document.createElement('div'); el.id = 'srvBattery';
-        el.style.cssText = 'position:fixed;top:8px;right:8px;z-index:60;font:600 12px system-ui;padding:3px 8px;border-radius:12px;background:rgba(20,40,20,.75);color:#9be39b;border:1px solid rgba(120,200,120,.4);pointer-events:none';
+        el.style.cssText = 'position:fixed;top:8px;right:8px;z-index:60;display:flex;align-items:center;font:600 12px system-ui;padding:3px 8px;border-radius:12px;background:rgba(20,40,20,.75);color:#9be39b;border:1px solid rgba(120,200,120,.4);pointer-events:none';
         document.body.appendChild(el);
       }
       const nearFloor = b.pauseAt > 0 && b.level <= b.pauseAt + 10;
       const atFloor = b.pauseAt > 0 && b.level <= b.pauseAt;
       el.style.color = atFloor ? '#f08080' : nearFloor ? '#f0b060' : '#9be39b';
       el.style.borderColor = atFloor ? 'rgba(220,70,70,.5)' : nearFloor ? 'rgba(230,150,60,.5)' : 'rgba(120,200,120,.4)';
-      el.textContent = `\u{1F50B} server ${b.level}%${b.charging ? ' \u26A1' : ''}` + (nearFloor && !b.charging ? ` \u00b7 low power at ${b.pauseAt}%` : '');
+      el.innerHTML = batteryIcon(b.level, b.charging, b.paused) + `<span style="margin-left:6px">server</span>` + (nearFloor && !b.charging ? ` \u00b7 low power at ${b.pauseAt}%` : '');
       el.title = b.charging ? 'The server\'s battery is charging' : `The server runs on a battery; it will suspend at ${b.pauseAt}% to protect itself`;
     },
     // ★ A refusal in the server's own words, in the TRANSIENT slot — never the owner's notice
@@ -7919,6 +7919,23 @@ function stopDecoder() {
  *  button. Stuart, 2026-09-17: "when only one button is left simply move it to the demodulators
  *  tab in place of the Decoders button". The spots section counts as two buttons (spots + map),
  *  so it never collapses; only a lone client decoder does. */
+/* ★ THE BATTERY GLYPH — horizontal, iOS-style, the number inside (Stuart, 2026-09-17: "I always
+ *  find they read cleaner"). A rounded body, the nub on the right, the fill by level, a bolt over
+ *  the fill while charging. Colour: green; amber at 20 % or below; red in the low power state. */
+function batteryIcon(level: number, charging: boolean, paused: boolean, w = 46, h = 20): string {
+  const lv = Math.max(0, Math.min(100, Number(level) || 0));
+  const col = paused ? '#f08080' : lv <= 20 ? '#f0b060' : '#9be39b';
+  const bodyW = w - 4, r = 4, inner = Math.round((bodyW - 4) * lv / 100);
+  const text = paused ? 'zz' : String(lv);
+  return `<svg class="batt" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="battery ${lv}%${charging ? ', charging' : ''}" style="vertical-align:-5px">`
+    + `<rect x="0.75" y="0.75" width="${bodyW}" height="${h - 1.5}" rx="${r}" fill="none" stroke="${col}" stroke-opacity=".7" stroke-width="1.5"/>`
+    + `<rect x="${bodyW + 1.5}" y="${h / 2 - 3}" width="2.5" height="6" rx="1" fill="${col}" fill-opacity=".7"/>`
+    + `<rect x="2.5" y="2.5" width="${inner}" height="${h - 5}" rx="${r - 1.5}" fill="${col}" fill-opacity=".38"/>`
+    + `<text x="${bodyW / 2 + 0.75}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="${col}">${text}</text>`
+    + (charging ? `<text x="${bodyW - 5}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" fill="${col}">⚡</text>` : '')
+    + `</svg>`;
+}
+
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
   if (!blockedModes.has('spots')) return null;
   const left = (Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLButtonElement[])

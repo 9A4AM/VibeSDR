@@ -520,9 +520,7 @@
   a { color: var(--accent); }
   footer { color: var(--dim); font-size: 11px; text-align: center; padding: 0 20px 30px;
            letter-spacing: .06em; }
-  .tag.batt{background:rgba(120,200,120,.14);color:#9be39b;border:1px solid rgba(120,200,120,.35)}
-  .tag.batt.low{background:rgba(230,150,60,.16);color:#f0b060;border-color:rgba(230,150,60,.4)}
-  .tag.batt.paused{background:rgba(220,70,70,.16);color:#f08080;border-color:rgba(220,70,70,.4)}
+  .battWrap{display:inline-flex;align-items:center;margin-left:6px}
 </style>
 </head>
 <body>
@@ -678,6 +676,22 @@
 //     receivers are sitting in enhanced propagation right now, which is a reason to click one
 //     rather than a background texture.
 
+/* ★ THE BATTERY GLYPH — horizontal, iOS-style, the number inside (Stuart, 2026-09-17: "I always
+ *  find they read cleaner"). A rounded body, the nub on the right, the fill by level, a bolt over
+ *  the fill while charging. Colour: green; amber at 20 % or below; red in the low power state. */
+function batteryIcon(level, charging, paused, w = 46, h = 20) {
+  const lv = Math.max(0, Math.min(100, Number(level) || 0));
+  const col = paused ? '#f08080' : lv <= 20 ? '#f0b060' : '#9be39b';
+  const bodyW = w - 4, r = 4, inner = Math.round((bodyW - 4) * lv / 100);
+  const text = paused ? 'zz' : String(lv);
+  return `<svg class="batt" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="battery ${lv}%${charging ? ', charging' : ''}" style="vertical-align:-5px">`
+    + `<rect x="0.75" y="0.75" width="${bodyW}" height="${h - 1.5}" rx="${r}" fill="none" stroke="${col}" stroke-opacity=".7" stroke-width="1.5"/>`
+    + `<rect x="${bodyW + 1.5}" y="${h / 2 - 3}" width="2.5" height="6" rx="1" fill="${col}" fill-opacity=".7"/>`
+    + `<rect x="2.5" y="2.5" width="${inner}" height="${h - 5}" rx="${r - 1.5}" fill="${col}" fill-opacity=".38"/>`
+    + `<text x="${bodyW / 2 + 0.75}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="${col}">${text}</text>`
+    + (charging ? `<text x="${bodyW - 5}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" fill="${col}">⚡</text>` : '')
+    + `</svg>`;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -1060,7 +1074,7 @@ function serverBlock(s) {
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
       ${s.battery && typeof s.battery.level === 'number'
-        ? `<span class="tag batt${s.battery.paused ? ' paused' : (s.battery.level <= 20 ? ' low' : '')}" title="${s.battery.paused ? 'Low power state — the battery is being protected; back when it has charged' : (s.battery.charging ? 'Battery, charging' : 'Battery, not charging')}">${s.battery.paused ? '\u{1F50B} paused' : `\u{1F50B} ${s.battery.level}%${s.battery.charging ? ' \u26A1' : ''}`}</span>`
+        ? `<span class="battWrap" title="${s.battery.paused ? 'Low power state — the battery is being protected; back when it has charged' : (s.battery.charging ? `Battery ${s.battery.level}%, charging` : `Battery ${s.battery.level}%, not charging`)}">${batteryIcon(s.battery.level, s.battery.charging, s.battery.paused)}</span>`
         : ''}
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       <!-- ★ No 'tunnel' tag: how a server reaches the internet is the operator's business, and
