@@ -570,7 +570,30 @@ static void vsProbeHostBattery() {
         }
         if (batDir.empty()) batDir = "-";
     }
-    if (batDir == "-") return;
+    if (batDir == "-") {
+        /* ★ TERMUX (Saber's box: the Linux server in a proot Ubuntu on an Android phone). Where the
+         *  kernel hides /sys/class/power_supply from an unprivileged process, Termux:API's
+         *  `termux-battery-status` answers {"percentage":57,"status":"DISCHARGING",...}. Tried
+         *  once a minute at most; absent → −1 and the server simply says nothing. */
+        static int64_t lastTry = 0;
+        const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - lastTry < 60) return;
+        lastTry = now;
+        FILE* tp = ::popen("termux-battery-status 2>/dev/null", "r");
+        if (!tp) return;
+        std::string out; char buf[256];
+        while (std::fgets(buf, sizeof buf, tp)) out += buf;
+        ::pclose(tp);
+        const size_t pp = out.find("\"percentage\"");
+        if (pp == std::string::npos) return;
+        const int cap = atoi(out.c_str() + out.find(':', pp) + 1);
+        if (cap >= 0 && cap <= 100) {
+            g_vsBatteryLevel.store(cap);
+            g_vsBatteryCharging.store(out.find("\"CHARGING\"") != std::string::npos || out.find("\"FULL\"") != std::string::npos);
+            g_vsBatterySource = "termux";
+        }
+        return;
+    }
     int cap = -1; char st[32] = {0};
     if (FILE* f = std::fopen((batDir + "/capacity").c_str(), "r")) { if (std::fscanf(f, "%d", &cap) != 1) cap = -1; std::fclose(f); }
     if (FILE* f = std::fopen((batDir + "/status").c_str(), "r"))   { if (!std::fgets(st, sizeof st, f)) st[0] = 0; std::fclose(f); }
