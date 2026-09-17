@@ -837,7 +837,7 @@ async function connect(host: string, pin: string) {
   //    per frame on someone else's uplink plus the FFT work on the serving device. The app is
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024', auth)}`;
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024&proto=1', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -856,7 +856,7 @@ async function connect(host: string, pin: string) {
   const forceOpus = new URLSearchParams(location.search).has('opus');
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
   const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
-  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&proto=1' + (wantOpus ? '&codec=opus' : ''), auth)}`;
   // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
   // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
   // server then refused the uncompressed socket it had just been asked for — silence, on the only

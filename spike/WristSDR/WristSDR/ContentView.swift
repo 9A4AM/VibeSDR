@@ -766,7 +766,8 @@ link.setAutoContrast(wfAutoContrast)
               //     the bottom of this sheet; hold the credential and every radio opens.
               // ★ Unknown stays tappable. A radio that has not answered is not a radio in use.
               let busy = link.radioBusy[r.id] == true
-              let blocked = busy && !link.adminArmed
+              // ★ A radio Jr has no controls for is shown greyed and says why (BRIEF-v11 §7).
+              let blocked = (busy && !link.adminArmed) || r.unsupported
               Button {
                 link.chooseRadio(r)
               } label: {
@@ -777,6 +778,11 @@ link.setAutoContrast(wfAutoContrast)
                   Text(r.summary)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                  if r.unsupported {
+                    Text("Unsupported SDR \u{2014} update VibeSDR Jr")
+                      .font(.system(size: 10, weight: .semibold))
+                      .foregroundStyle(.orange)
+                  }
                   // ★★ IN USE OR NOT, WITHOUT OPENING IT. On a single-user radio that is the whole
                   //    question — arriving means displacing somebody or being refused — and the
                   //    only way to learn it used to be to try. Silent while unknown: a radio whose

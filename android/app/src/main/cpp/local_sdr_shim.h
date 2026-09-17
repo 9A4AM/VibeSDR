@@ -433,12 +433,18 @@ public:
      *  file. The shim knows nothing of the schema; the daemon supplies the JSON. */
     using RadiosFn = std::function<std::string()>;
     static void setRadiosHandler(RadiosFn fn);
+    /** The declared protocol of the /vibeserver/radios request currently being answered (0 = legacy). */
+    static int radiosRequestProto();
+    /** This server's protocol number and the lowest it accepts (docs/PROTOCOL.md). */
+    static int protoNumber();
+    static int minProtoNumber();
 
     /** ★★ ONE FORWARDED PORT. Given a request path, return the unix socket of the process that
      *  should answer it, or "" to answer here. The whole connection is then handed over
      *  (SCM_RIGHTS), so nothing is proxied and this process is not in the data path.
      *  ★ The shim knows nothing about radios or serials; the daemon owns that mapping. */
-    using HandoffFn = std::function<std::string(const std::string& path)>;
+    /** `path` is the request path; `head` the first ~1 KB of the request (headers included). */
+    using HandoffFn = std::function<std::string(const std::string& path, const std::string& head)>;
     static void setHandoffRouter(HandoffFn fn);
 
     /** Our own "/r/<serial>" prefix, stripped from arriving requests so every route below

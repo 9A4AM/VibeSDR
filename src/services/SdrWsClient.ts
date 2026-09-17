@@ -56,7 +56,7 @@ import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;
-import { USER_AGENT } from '../constants/version';
+import { USER_AGENT, APP_PROTO } from '../constants/version';
 
 /**
  * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
@@ -68,7 +68,9 @@ import { USER_AGENT } from '../constants/version';
  *    that can send one. It is the client's own word about itself either way — exactly what a
  *    User-Agent has always been — and it grants nothing.
  */
-const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}`;
+/** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
+export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the app, or open the receiver in your browser for now.';
+const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}&proto=${APP_PROTO}`;
 
 /** Powersave target, in frames/sec — an absolute floor, not a divisor. */
 const POWERSAVE_FPS = 5;
@@ -1069,6 +1071,8 @@ export abstract class SdrWsClient {
     try { if (this.spectrumWs?.readyState === WebSocket.OPEN) this.spectrumWs.send(msg); } catch {}
   }
   private lastActivityPing = 0;
+  /** Set when the server refused this app as too old — the receiver's web client to offer instead. */
+  updateAppWebUrl = '';
   // Capture sample rate = the spectrum span the server sends. The shim restarts
   // the IQ stream and pushes a fresh config, so the waterfall span self-updates.
   setHwSampleRate(rate: number) { this._sendCtl({ type: 'sampleRate', value: Math.round(rate) }); }
@@ -1390,7 +1394,7 @@ export abstract class SdrWsClient {
     // ★★ adminSuffix already carries its own leading '&' (setAdminAuth normalises it), so it is
     //    appended raw — the same string, in the same shape, as the sockets use.
     const resp = await fetch(
-      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}`
+      `${this.baseUrl}/connection?user_session_id=${encodeURIComponent(this.uuid)}&proto=${APP_PROTO}`
       + this.adminSuffix, {
       method: 'POST',
       headers: {
@@ -1442,6 +1446,15 @@ export abstract class SdrWsClient {
            + `idle=${this.idlePolicy.idleSecs}s maxSession=${this.idlePolicy.maxSessionSecs}s `
            + `dailyLeft=${this.idlePolicy.dailyLeftSecs}s`);
     this.callbacks.onIdlePolicy?.({ ...this.idlePolicy });
+    /* ★★★ TOO OLD FOR THIS SERVER (BRIEF-v11 §6). The server has said so BEFORE any socket, with
+     *  a reason this app understands, so the user gets an instruction rather than "Connection
+     *  lost" — the failure a store user hit for a month (xavxx, 2026-09-17). `updateAppWebUrl` is
+     *  the receiver's own web client, offered as the way to listen meanwhile. */
+    if (!json.allowed && json.reason === 'update-app') {
+      const rel = typeof (json as any).webUrl === 'string' ? String((json as any).webUrl) : '/';
+      this.updateAppWebUrl = /^https?:/.test(rel) ? rel : this.baseUrl.replace(/\/+$/, '') + rel;
+      throw new Error(UPDATE_APP_MESSAGE);
+    }
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
     // ★★★ ONLY NOW MAY THE AUDIO SOCKET OPEN. Proved against a live UberSDR (2026-08-18): a WS
     //     carrying a session id this POST has not registered gets a 101 and 213 bytes — the

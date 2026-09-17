@@ -584,7 +584,14 @@ async function eibi(request) {
   return res;
 }
 
-async function list(env) {
+/* ★★★ FILTERED BY THE REQUESTER, NOT ONCE FOR EVERYONE (BRIEF-v11 §7). Every client version
+ *  reads this one endpoint. A requester that sends no `proto` is a legacy app: it cannot read
+ *  `minProto`, so a radio it has no controls for is left OUT of what it is told. A requester
+ *  that sends `proto=N` gets every radio and greys out the ones above N itself. */
+async function list(env, url) {
+  const reqProto = url && url.searchParams.has('proto') ? Number(url.searchParams.get('proto')) || 0 : null;
+  const radiosFor = (rows) => !Array.isArray(rows) ? []
+    : reqProto === null ? rows.filter((r) => !(Number(r && r.minProto) > 0)) : rows;
   // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
   //     not selected. See schema.sql.
   const { results } = await env.DB.prepare(
@@ -606,7 +613,10 @@ async function list(env) {
       grid: r.grid, lat: r.lat, lon: r.lon, country: r.country,
       // ★ Passed through whole, `id` included — the page addresses each radio's own
       //   /r/<id>/vibeserver.json to refresh a count the ping cannot keep current.
-      radios: Array.isArray(status.radios) ? status.radios : [],
+      radios: radiosFor(status.radios),
+      // ★ The contract each server speaks (BRIEF-v11 §4) — forwarded whole, never interpreted here.
+      proto: typeof status.proto === 'number' ? status.proto : undefined,
+      minProto: typeof status.minProto === 'number' ? status.minProto : undefined,
       // ★★★ SAID, NOT INFERRED. The page guessed "temporary share" from how far the expiry sat
       //     from the last ping, so an ordinary listing with a 30-minute TTL was drawn as a yellow
       //     diamond — a product concept invented out of a timing value. A server says whether it
@@ -914,7 +924,7 @@ export default {
     }
 
     try {
-      if (p === '/api/directory' && request.method === 'GET') return await list(env);
+      if (p === '/api/directory' && request.method === 'GET') return await list(env, url);
       if (p === '/api/directory/name' && request.method === 'GET') return await checkName(url, env);
       if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);

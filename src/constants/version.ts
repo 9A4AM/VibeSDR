@@ -61,3 +61,11 @@ export const USER_AGENT = `VibeSDR/${APP_VERSION.split(' ')[0]} (+https://vibesd
 //   The watch is a different client with different behaviour on a shared radio,
 //   so an operator can allow one and refuse the other:
 //       VibeSDR Jr/1.0 (+https://vibesdr.net)
+
+/** ★★★ THE PROTOCOL NUMBER (BRIEF-v11-compatibility §4, docs/PROTOCOL.md). An integer the server
+ *  gates on — never the marketing version above, which has shipped wrong three times. Sent as
+ *  `&proto=N` on every socket upgrade, the /connection preflight and /vibeserver/radios. A server
+ *  whose `minProto` is above this refuses with reason `update-app`; a radio whose `minProto` is
+ *  above this is drawn greyed out ("Unsupported SDR — update VibeSDR"). Bump ONLY when this app
+ *  learns a wire change that PROTOCOL.md records under a new number. */
+export const APP_PROTO = 1;

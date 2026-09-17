@@ -508,6 +508,39 @@ constexpr double AUDIO_SR = 48000.0;
 // that many independent FFTs per emitted frame. Cuts per-frame variance so the
 // spectrum/waterfall doesn't shimmer (UberSDR/SDR++ average similarly).
 constexpr int FFT_AVG = 4;
+
+/* ★★★ THE PROTOCOL NUMBER (BRIEF-v11-compatibility §4). An integer, not the marketing version —
+ *  the version has shipped wrong three times and must never decide a connection. VS_PROTO is the
+ *  highest contract this server speaks; VS_MIN_PROTO the lowest it accepts. A client sends
+ *  `&proto=N` on every socket upgrade, the /connection preflight and /vibeserver/radios; one that
+ *  sends nothing (10.3.x, the current store Jr) is LEGACY and counts as 0. Raise VS_MIN_PROTO only
+ *  for a wire change that cannot be made additive — and write the line in docs/PROTOCOL.md first.
+ *  ★ proto 1 = the locked V11 core (docs/PROTOCOL.md). ★ Legacy is accepted for as long as
+ *    scripts/compat/legacy-10.3.1.mjs passes. */
+/* ★★★ COMPAT CAPTURE (BRIEF-v11 §8: "captured, not written"). With VIBE_COMPAT_RECORD=<file> in
+ *  the environment the server appends one JSON line per request it answers — the request line, the
+ *  User-Agent and the peer — and, per WebSocket, the first application messages. A fixture in
+ *  scripts/compat/ is made from these lines of a REAL session of the build it stands for, never
+ *  typed from today's code. Off unless asked for; never on a public server. */
+static void compatRecord(const char* kind, const std::string& reqLine, const std::string& ua, const std::string& extra = "") {
+    static const char* path = std::getenv("VIBE_COMPAT_RECORD");
+    if (!path || !*path) return;
+    static std::mutex m; std::lock_guard<std::mutex> lk(m);
+    FILE* f = std::fopen(path, "a"); if (!f) return;
+    auto esc = [](const std::string& s) { std::string o; for (char c : s) { if (c == '"' || c == '\\') { o += '\\'; o += c; } else if (c == '\n' || c == '\r') o += ' '; else o += c; } return o; };
+    std::fprintf(f, "{\"kind\":\"%s\",\"req\":\"%s\",\"ua\":\"%s\"%s}\n", kind, esc(reqLine).c_str(), esc(ua).c_str(), extra.c_str());
+    std::fclose(f);
+}
+constexpr int VS_PROTO     = 1;
+constexpr int VS_MIN_PROTO = 0;
+std::string queryParam(const std::string& reqLine, const char* key);   // defined below
+/** The requester's protocol number off its request line — 0 when it sent none (legacy). */
+static int protoOf(const std::string& reqLine) {
+    const std::string p = queryParam(reqLine, "proto");
+    if (p.empty()) return 0;
+    const int v = atoi(p.c_str());
+    return v < 0 ? 0 : v;
+}
 // Bins actually sent to the client (= waterfall texture width). Kept GPU-safe
 // (a 32768-wide texture exceeds mobile GPU max texture size → blank waterfall).
 // The internal FFT is finer (fftSizeForRate); we downsample/crop to this.
@@ -3427,6 +3460,7 @@ static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
 static LocalSdrShim::RadiosFn      g_vsRadiosFn;
+static std::atomic<int>            g_vsRadiosReqProto{0};   // the proto of the request being answered
 static LocalSdrShim::HandoffFn     g_vsHandoffFn;
 /// Our own "/r/<serial>" prefix, stripped from every request that arrives with it.
 static std::string                 g_vsPathPrefix;
@@ -5605,6 +5639,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the landing bug were written against paths that never ran on the radio reporting it
      *  (2026-08-16). This one is populated at the handshake, for all of them. */
     std::map<net::Socket*, std::string> sockSession;
+    /* ★★★ DEAD-SESSION RELEASE (BRIEF-v11-compatibility §9). A WebSocket PONG proves a kernel and a
+     *  process, not a listener: a Jr that watchOS left half-alive kept ponging and held the radio
+     *  "in use" (xavxx, Discord, 2026-09-17), and the same phantom held single-occupant slots
+     *  before (2026-07-23). So for a client that declares proto ≥ 1 the pong is NOT liveness —
+     *  only an APPLICATION message is (any text frame: ping, tune, anything), on ANY socket of
+     *  its session, within kAppLivenessMs. Jr sends one every 10 s while it is actually
+     *  listening (audio rendering) or on the wrist; a Jr that stopped playing and was forgotten
+     *  in the background sends none, and is released — "whatever the client does".
+     *  ★ Legacy clients (proto 0) keep the old 20 s any-frame rule: they cannot know. */
+    static constexpr int64_t kAppLivenessMs = 30000;
+    std::map<net::Socket*, int>        sockProto;         // declared protocol per socket
+    std::map<std::string, int64_t>     sessionLastAppMs;  // newest application message per session
     /* ★★★ SQUELCH ON A SHARED DIAL IS PER SESSION (Stuart, 2026-09-16: "a new user joining and
      *     hearing silence is the worst thing"). It used to be one global gate: the first listener
      *     to set it muted EVERYBODY, and a newcomer heard nothing with no idea why. It is only a
@@ -13138,7 +13184,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                               : head.find(' ', sp + 1);
                     if (sp != std::string::npos && sp2 != std::string::npos) {
                         const std::string path = head.substr(sp + 1, sp2 - sp - 1);
-                        const std::string dest = router(path);
+                        const std::string dest = router(path, head);
                         // ★ Routing decisions are invisible when they go wrong: the listener just
                         //   gets an answer from the wrong process, or none. Say what was decided.
                         if (path.rfind("/r/", 0) == 0)
@@ -13547,6 +13593,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Admin override rides the connect URL as a nonce + HMAC pair — never the
             // password — because the override has to be decided BEFORE the slot is claimed,
             // and the admin_unlock message arrives over a socket a busy server will not open.
+            compatRecord(wsAudio ? "ws-audio" : "ws-spectrum", reqLine, userAgent);
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
                      // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
                      //     is fanned out to everybody, so an older client asking for raw would
@@ -13572,7 +13619,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      // ★ Whether this arrival is ALLOWED to displace the current listener — see
                      //   the override decision in acceptWs. Absent means yes, so nothing that
                      //   predates the flag changes behaviour.
-                     queryParam(reqLine, "vs_takeover") != "0");
+                     queryParam(reqLine, "vs_takeover") != "0",
+                     protoOf(reqLine));
         // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
         //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
         //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
@@ -13596,6 +13644,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // available here, so an id sent in the POST body cannot be seen. Old
             // clients send nothing, and fall back to the previous behaviour.
             const std::string me = queryParam(reqLine, "user_session_id");
+            compatRecord("preflight", reqLine, userAgent);
             // ★★★ ROOM, NOT OCCUPANCY. This asked "is somebody else here", which is the right
             //     question for a one-at-a-time receiver and the wrong one for a shared dial: with
             //     ten slots and one listener the preflight refused everybody with `in-use`, so the
@@ -13638,8 +13687,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   the hard way.
             const bool isBanned = !isLoopback(sock->peerAddress())
                                && LocalSdrShim::isBanned(sock->peerAddress());
+            /* ★★★ A CLIENT BELOW THE FLOOR IS TOLD SO HERE, BEFORE ANY SOCKET (BRIEF-v11 §6). A
+             *  refused WebSocket upgrade reaches an app as a bare 1006, indistinguishable from
+             *  "server down"; the preflight is the one place a reason can be delivered. `webUrl`
+             *  is where the web client lives — the same origin, which every client already knows.
+             *  ★ Every refusal is logged with the peer, its client string and its proto. */
+            const int cproto = protoOf(reqLine);
+            const bool tooOld = cproto < VS_MIN_PROTO;
+            if (tooOld)
+                LOGI("preflight REFUSED %s: proto %d below the floor %d (client \"%s\") — update-app",
+                     sock->peerAddress().c_str(), cproto, VS_MIN_PROTO, queryParam(reqLine, "client").c_str());
             std::string body = isBanned
                 ? "{\"allowed\":false,\"reason\":\"banned\"}"
+                : tooOld
+                ? std::string("{\"allowed\":false,\"reason\":\"update-app\",\"proto\":") + std::to_string(VS_PROTO)
+                  + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"webUrl\":\"/\"}"
                 : busy
                 ? "{\"allowed\":false,\"reason\":\"in-use\"}"
                 : "{\"allowed\":true}";
@@ -14134,6 +14196,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
 
         } else if (reqLine.rfind("GET /vibeserver.json", 0) == 0) {
+            compatRecord("vibeserver.json", reqLine, userAgent);
             // ★★ POSITIVE IDENTITY. detectServerType() used to sniff the landing
             // page for the substring "vibeserver" — but serving that page is
             // OPTIONAL (--no-web / webServer:false), and with it off `GET /`
@@ -14184,7 +14247,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     evaluation of a moving clock returns.
             const bool vsClaimNow = LocalSdrShim::instance().claimableNow();
             const int  vsFreeIn   = vsClaimNow ? 0 : LocalSdrShim::instance().occupantSecsLeft();
-            std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
+            // ★ `proto` / `minProto`: the contract this server speaks and the lowest it accepts —
+            //   see VS_PROTO. A client draws "update the app" from these, never from `version`.
+            std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":") + std::to_string(VS_PROTO)
+                             + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"pin\":"
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
                              // ★★★ NEVER OFFER RAW ON A SHARED DIAL. Everybody hears ONE encode
@@ -14478,6 +14544,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
+            compatRecord("radios", reqLine, userAgent);
             // ★ Not when it is us — see vsIsSelfPoll.
             if (!vsIsSelfPoll(userAgent)) vsNoteVisitor(sock->peerAddress());
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
@@ -14487,6 +14554,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   needs to see both before they have connected to either.
             LocalSdrShim::RadiosFn rfn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); rfn = g_vsRadiosFn; }
+            // ★ The requester's protocol rides along so the list can leave out radios it cannot
+            //   drive (BRIEF-v11 §7): a legacy app must never be offered a radio it has no controls for.
+            g_vsRadiosReqProto.store(protoOf(reqLine));
             const std::string body = rfn ? rfn() : std::string("{\"radios\":[]}");
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
@@ -14910,12 +14980,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   //    credential is NOT the same as asking to interrupt somebody — see where it
                   //    is used. Defaults to true so callers and clients that predate it are
                   //    unaffected.
-                  bool mayEvict = true) {
+                  bool mayEvict = true,
+                  // ★ The client's declared protocol (0 = legacy) — decides the liveness rule below.
+                  int proto = 0) {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
         // ★ Who this socket belongs to, before anything can ask. See sockSession.
+        { std::lock_guard<std::mutex> lk(clientMtx); sockProto[sock.get()] = proto; }
         if (!session.empty())
             { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session;
               // ★★★ NOT nowSecs() — see turnStartForLocked. On a shared dial this stamp IS the
@@ -15863,11 +15936,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::chrono::steady_clock::now().time_since_epoch()).count();
         };
         int64_t lastRx = monoMs();
+        int64_t lastApp = monoMs();                           // this socket's own last text frame
+        int appMsgsSeen = 0;                                  // compat capture: the first few only
+        // ★ A session's liveness is the NEWEST application message on ANY of its sockets — Jr
+        //   drops its spectrum socket with the wrist down and keeps only audio, and the phone pings
+        //   only its spectrum socket. Either is enough to say "somebody is here".
+        auto sessionAppMs = [&]() -> int64_t {
+            int64_t t = lastApp;
+            if (!session.empty()) {
+                std::lock_guard<std::mutex> lk(clientMtx);
+                auto it = sessionLastAppMs.find(session);
+                if (it != sessionLastAppMs.end() && it->second > t) t = it->second;
+            }
+            return t;
+        };
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
             int op = recvWs(sock, payload, 5000);
             if (op == -2) {                                   // quiet slice — probe liveness
-                if (monoMs() - lastRx > 20000) {
+                const int64_t now = monoMs();
+                if (proto >= 1) {
+                    const int64_t quiet = now - sessionAppMs();
+                    if (quiet > kAppLivenessMs) {
+                        LOGI("%s WS: no application message from session %.8s for %lld s (proto %d) — releasing the dead session",
+                             isAudio ? "audio" : "spectrum", session.c_str(), (long long)(quiet / 1000), proto);
+                        break;
+                    }
+                } else if (now - lastRx > 20000) {
                     LOGI("%s WS idle >20s (no pong) — dropping stale peer", isAudio ? "audio" : "spectrum");
                     break;
                 }
@@ -15875,11 +15970,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 continue;
             }
             if (op < 0 || op == 0x8) break;
-            lastRx = monoMs();                                // any frame (incl. pong) = alive
+            lastRx = monoMs();                                // any frame (incl. pong) = alive (legacy rule)
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
-            if (op == 0xA) continue;                          // pong — liveness only
-            if (op == 0x1) handleControl(sock, payload);
+            if (op == 0xA) continue;                          // pong — liveness only for legacy
+            if (op == 0x1) {
+                lastApp = lastRx;
+                if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sessionLastAppMs[session] = lastApp; }
+                if (appMsgsSeen < 12) { ++appMsgsSeen; compatRecord(isAudio ? "msg-audio" : "msg-spectrum", payload, "", ",\"session\":\"" + session.substr(0, 8) + "\""); }
+                handleControl(sock, payload);
+            }
         }
+        { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); }
         bool bothGone = false;
         std::shared_ptr<ClientDsp> goneDsp;
         { std::lock_guard<std::mutex> lk(clientMtx);
@@ -21409,6 +21510,9 @@ static std::string vsTunableJson() {
      *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this
      *  MACHINE do it". Only the second one has a fix the owner can apply from a button. */
     j += std::string(",\"dabDecoder\":") + (vsDabDecoderAvailable() ? "true" : "false");
+    // ★ The contract, for the directory to forward (BRIEF-v11 §4): a client greys a server out by
+    //   these, never by its version string.
+    j += ",\"proto\":" + std::to_string(VS_PROTO) + ",\"minProto\":" + std::to_string(VS_MIN_PROTO);
     /* ★ Two more fields so the client can draw the boost toggle ONLY where it can matter:
      *  `dabBoost` is the setting, `dabBoostUseful` is true when the hardware could reach 2.048
      *  but the rate in force does not. AGENTS.md: never draw a control whose every use is a
@@ -21524,6 +21628,9 @@ int LocalSdrShim::startFrontDoor(int port, std::string& err) {
     return chosen;
 }
 
+int LocalSdrShim::radiosRequestProto() { return g_vsRadiosReqProto.load(); }
+int LocalSdrShim::protoNumber()        { return VS_PROTO; }
+int LocalSdrShim::minProtoNumber()     { return VS_MIN_PROTO; }
 void LocalSdrShim::setHandoffRouter(HandoffFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsHandoffFn = std::move(fn);

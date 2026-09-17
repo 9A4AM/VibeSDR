@@ -1,3 +1,4 @@
+import { APP_PROTO } from '../constants/version';
 // SDR directory providers — separate receiver lists the picker presents as
 // distinct "directories" (like different websites). Each is fetched on demand
 // and normalised to SDRInstance[]; duplicates ACROSS directories are fine (they
@@ -70,7 +71,7 @@ const DIR_TIMEOUT_MS = 12_000;
 const dirFetch = (url: string, init?: RequestInit) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(DIR_TIMEOUT_MS) });
 
-const VIBESERVER_DIR_URL = 'https://vibeserver.vibesdr.net/api/directory';
+const VIBESERVER_DIR_URL = 'https://vibeserver.vibesdr.net/api/directory?proto=' + APP_PROTO;
 
 /**
  * Public VibeServers, from our own directory.
@@ -142,6 +143,7 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
       coverage: isNumRanges(cov) ? cov : undefined,
       allowed,
       allowedNames: names,
+      minProto: typeof r.minProto === 'number' ? r.minProto : 0,
     };
   });
 }

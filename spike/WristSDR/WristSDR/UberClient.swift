@@ -16,6 +16,11 @@ import CryptoKit
 /// ★ The fallback is only reachable if the Info.plist key is missing, which would be a broken
 ///   build; it names a version rather than "unknown" so a log line is still greppable.
 enum JrVersion {
+  /// ★★★ THE PROTOCOL NUMBER (BRIEF-v11-compatibility §4, docs/PROTOCOL.md) — Jr's OWN, which
+  ///     only rises when JR is updated. Sent as `&proto=N` on every socket, the preflight and the
+  ///     radios list; a server whose minProto is above it refuses with `update-app`, a radio whose
+  ///     minProto is above it is greyed out in the picker.
+  static let proto = 1
   static let short: String =
     (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.2"
 }
@@ -1793,7 +1798,7 @@ final class UberClient: ObservableObject {
     //     address and UberSDR did not — which isolated it to this client rather than to
     //     the network, the watch or watchOS.
     let httpScheme = secure ? "https" : "http"
-    guard let cu = URL(string: "\(httpScheme)://\(host)\(radioPath)/connection") else {
+    guard let cu = URL(string: "\(httpScheme)://\(host)\(radioPath)/connection?proto=\(JrVersion.proto)") else {
       status = "bad server URL"; return false
     }
     // ★★★ THE NETWORK WAS INVISIBLE IN JR'S OWN LOG. jr-vitals.log carried seventy lines of audio
@@ -1831,7 +1836,10 @@ final class UberClient: ObservableObject {
         let reason = (j?["reason"] as? String)
           ?? String(data: data.prefix(80), encoding: .utf8)
           ?? "no reason given"
-        status = "HTTP \(http.statusCode): \(reason)"
+        // ★★★ TOO OLD FOR THIS SERVER (BRIEF-v11 §6): an instruction, not "connection lost".
+        status = reason == "update-app"
+          ? "This server needs a newer VibeSDR Jr \u{2014} update the app"
+          : "HTTP \(http.statusCode): \(reason)"
       }
       return allowed
     } catch {
@@ -1847,8 +1855,30 @@ final class UberClient: ObservableObject {
   /// bails instead of tearing down the fresh one.
   private var specOpenSeq = 0
 
+  /* ★★★ THE APPLICATION HEARTBEAT (BRIEF-v11 §9, server: kAppLivenessMs). A WebSocket pong proves
+   *  a process, not a listener — a Jr that watchOS left half-alive kept ponging and held the radio
+   *  (xavxx, 2026-09-17). A proto ≥ 1 client is therefore judged alive by its APPLICATION messages
+   *  alone, and this is the one it sends when nothing else is happening: every 10 s, on every
+   *  socket that is open. ★ It keeps going with the wrist down while audio is playing, because
+   *  the process is running (background audio) and so is this task — that IS a listener, and the
+   *  server must not release them. A Jr that has stopped playing and been left in the background
+   *  is suspended, sends nothing, and is released after 30 s — whatever its kernel still pongs. */
+  private var heartbeatTask: Task<Void, Never>?
+  private func startHeartbeat() {
+    heartbeatTask?.cancel()
+    heartbeatTask = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        guard let self, !self.goingIdle else { return }
+        self.specSock.send(json: ["type": "ping"])
+        self.audioSock.send(json: ["type": "ping"])
+      }
+    }
+  }
+
   private func openSpectrum() {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
+    startHeartbeat()
     specOpenSeq &+= 1
     let seq = specOpenSeq
     // ★★★ OVERSAMPLE: 1024 BINS, REDUCED ON THE WATCH (BRIEF-jr-vibeserver-display §2).
@@ -1869,7 +1899,7 @@ final class UberClient: ObservableObject {
     // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
     //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
     //    server prefers a real header and falls back to this.
-    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&mode=binary8\(binsParam)\(authSuffix)\(adminWire)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
+    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&proto=\(JrVersion.proto)&mode=binary8\(binsParam)\(authSuffix)\(adminWire)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -1997,6 +2027,8 @@ final class UberClient: ObservableObject {
   /// Go quiet without dying — the user backed out to the instance picker. Drop both sockets and
   /// the audio, but leave the once-only timers/path monitor alone so a later reconnect is cheap.
   func goIdle() {
+    heartbeatTask?.cancel(); heartbeatTask = nil
+
     // TEAR DOWN FOR GOOD — this client is being discarded (server switch / back to picker). Without the
     // goingIdle latch the retry Tasks (which pass their `framesPerSec == 0` guard precisely BECAUSE we
     // zero it here) reopen the sockets, so the old client keeps reconnecting and pegs the CPU while the
@@ -2895,7 +2927,7 @@ final class UberClient: ObservableObject {
       //    decoder mid-session — the cause of the Safari drops at a mode/DAB change. WatchAudio.play
       //    folds stereo to mono for the speaker itself (Stuart: "we play stereo FM on Jr's speaker
       //    downmixed to mono"). Cost on Bluetooth: 12 KB/s of the ~19 the link carries.
-      url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/audio?user_session_id=\(uuid)&codec=opus\(extra)")
+      url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/audio?user_session_id=\(uuid)&proto=\(JrVersion.proto)&codec=opus\(extra)")
       audioSock.onData = { [weak self] d in
         guard let self else { return }
         self.decodeVibeAudio(d)

@@ -30,7 +30,9 @@ await step('vibeserver.json', async () => {
   ok(r.status === 200 && j.server === 'vibeserver', `GET /vibeserver.json → ${r.status}, server=${j.server}, version=${j.version}`);
 });
 await step('auth', async () => {
-  const r = await withTimeout(fetch(`${base}/vibeserver/auth`), 5000, 'auth');
+  // ★ The 10.3.1 app's URLSession default User-Agent begins with its bundle name — which is what
+  //   the front door keys on to hand an APP's bare auth to the primary radio (5.6.18).
+  const r = await withTimeout(fetch(`${base}/vibeserver/auth`, { headers: { 'User-Agent': 'VibeSDR/300 CFNetwork/1568.100.1 Darwin/24.0.0' } }), 5000, 'auth');
   const j = await r.json().catch(() => ({}));
   ok(r.status === 200, `GET /vibeserver/auth → ${r.status}, required=${j.required}`);
   if (j.required) console.log('  note: PIN-protected — 10.3.1 cannot pass a front door with a PIN (nonce minted in the wrong process)');

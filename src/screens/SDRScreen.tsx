@@ -14,6 +14,8 @@
  *   └── AudioPlayer           (renderless; plays Opus stream)
  */
 
+import { UPDATE_APP_MESSAGE } from '../services/SdrWsClient';
+import { APP_PROTO } from '../constants/version';
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
@@ -4770,6 +4772,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         // private password, slot limits) can't be fixed by the UberSDR bypass-password box, so
         // it's never offered here — that route is UberSDR-only, for per-IP RATE limits.
         if (isKiwiProtocol(route.params.serverType)) { kiwiRefusedRef.current = true; setKiwiRefused(msg); return; }
+        /* ★★★ TOO OLD FOR THIS SERVER (BRIEF-v11 §6): say so, and offer the receiver's own web
+         *  client as the way to listen meanwhile. Matched on the client's one sentence. */
+        if (msg.includes(UPDATE_APP_MESSAGE)) {
+          const web = client.current?.updateAppWebUrl || route.params.url || '';
+          Alert.alert('Update VibeSDR', UPDATE_APP_MESSAGE, [
+            { text: 'Back to Servers', onPress: () => navigation.goBack() },
+            ...(web ? [{ text: 'Open in browser', onPress: () => { Linking.openURL(web).catch(() => {}); navigation.goBack(); } }] : []),
+          ]);
+          return;
+        }
         if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
           setPwPrompt(true);
         } else {
@@ -8113,7 +8125,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             //   choice on the strength of a missing answer is the same error as claiming it is
             //   free.
             const busy = radioBusy[r.id]?.busy === true;
-            const blocked = busy && !adminAuthQ;
+            /* ★★★ A RADIO THIS APP HAS NO CONTROLS FOR IS SHOWN, GREYED, AND SAYS WHY (BRIEF-v11
+             *  §7) — never hidden, never offered: "Unsupported SDR — update VibeSDR". The number
+             *  comes from the server's driver, so new hardware needs no app change to land here. */
+            const unsupported = (r.minProto ?? 0) > APP_PROTO;
+            const blocked = (busy && !adminAuthQ) || unsupported;
             return (
               <Pressable
                 key={r.id}
@@ -8142,6 +8158,9 @@ export default function SDRScreen({ route, navigation }: Props) {
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <Text style={[styles.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
+                  {unsupported && (
+                    <Text style={styles.radioPickBusy}>UNSUPPORTED SDR — UPDATE VIBESDR</Text>
+                  )}
                   {/* ★ The official DAB+ logo, only beside a receiver whose own status says it can decode DAB.
                       See assets/branding/dabplus/README.md — unaltered, and never under 32 px. */}
                   {radioBusy[r.id]?.dab === true && <DabPlusBadge width={36} />}

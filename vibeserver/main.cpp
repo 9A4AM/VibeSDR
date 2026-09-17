@@ -1627,6 +1627,8 @@ int main(int argc, char** argv) {
         //   nothing. See ServerConfig::landingMessage for why this is NOT the transient notice.
         std::string j = std::string("{\"frontDoor\":")
                       + (g_amFrontDoor.load() ? "true" : "false")
+                      + ",\"proto\":" + std::to_string(LocalSdrShim::protoNumber())
+                      + ",\"minProto\":" + std::to_string(LocalSdrShim::minProtoNumber())
                       + ",\"name\":\"" + jsonEscape(srv.name) + "\"";
         if (!srv.landingMessage.empty())
             j += ",\"landingMessage\":\"" + jsonEscape(srv.landingMessage) + "\"";
@@ -1644,6 +1646,14 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < srv.radios.size(); i++) {
             const auto& r = srv.radios[i];
             if (!r.enabled || !r.configured) continue;   // ★ both gates, same as the supervisor
+            /* ★★★ THE LOWEST CLIENT PROTOCOL WITH CONTROLS FOR THIS RADIO (BRIEF-v11 §7) — set
+             *     from the DRIVER here, never listed in an app, so new hardware needs no app
+             *     change to be handled right. Every driver shipping today is drivable by the
+             *     10.3.1 app (proto 0); a driver whose controls only a newer app has gets a
+             *     higher number here, and: a V11 app greys it out ("Unsupported SDR — update
+             *     VibeSDR"), a legacy requester (proto 0) is simply not told about it. */
+            const int minProto = 0;   // rtlsdr, sdrplay, airspyhf, hackrf — all in the locked core
+            if (minProto > LocalSdrShim::radiosRequestProto()) continue;
             if (!first) j += ",";
             first = false;
             // ★★ THE ID IS WHAT LINKS USE. The serial stays in the JSON because the setup page
@@ -1651,6 +1661,7 @@ int main(int argc, char** argv) {
             //    which is where it was visible to everyone: address bar, history, bookmarks, and
             //    any link a listener passed on (Stuart, 2026-08-09).
             j += "{\"id\":\"" + jsonEscape(vsconfig::radioId(r.serial)) + "\"";
+            j += ",\"minProto\":" + std::to_string(minProto);
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.
@@ -2544,7 +2555,18 @@ int main(int argc, char** argv) {
                                  herr.c_str());
             }
             if (frontDoorOnly) {
-                LocalSdrShim::setHandoffRouter([dir](const std::string& path) -> std::string {
+                LocalSdrShim::setHandoffRouter([dir](const std::string& path, const std::string& head) -> std::string {
+                    /* ★★★ THE PIN'D DOOR AND A LEGACY APP (BRIEF-v11 §5, the last hole). The setup
+                     *     page mints its nonce HERE, so a bare /vibeserver/auth used to stay at the
+                     *     door — and a 10.3.1 app on a PIN-protected server then presented a nonce
+                     *     the radio process had never issued. The app names itself in User-Agent
+                     *     ("VibeSDR/…", "VibeSDR Jr/…"), a browser never does — so an APP's bare
+                     *     auth goes to the primary radio with its /connection, and the page's stays. */
+                    auto uaIsApp = [&]() {
+                        const size_t p = head.find("User-Agent: ");
+                        return p != std::string::npos && head.compare(p + 12, 7, "VibeSDR") == 0;
+                    };
+                    const bool appAuth = path.rfind("/vibeserver/auth", 0) == 0 && uaIsApp();
                     /* ★★★ A LEGACY CLIENT NEVER SAYS /r/<id>/ — SEND IT TO THE PRIMARY RADIO.
                      *     The App Store app (10.3.1, tree of 2026-07-29) strips any path from an
                      *     address on purpose and knows only host:port; the door arrived ten days
@@ -2557,7 +2579,8 @@ int main(int argc, char** argv) {
                      *  ★ /vibeserver/auth is NOT forwarded: the setup page mints its own nonce
                      *    here. A PIN-protected server therefore still refuses a legacy app (its
                      *    nonce comes from the wrong process) — an open server works in full. */
-                    if (path.rfind("/connection", 0) == 0 ||
+                    if (appAuth ||
+                        path.rfind("/connection", 0) == 0 ||
                         path.rfind("/ws/user-spectrum", 0) == 0 ||
                         path.rfind("/ws/audio", 0) == 0) {
                         vsconfig::ServerConfig sc; std::string se;

@@ -1,3 +1,4 @@
+import { APP_PROTO } from '../constants/version';
 /**
  * A multi-radio VibeServer (V3), from the app's side.
  *
@@ -54,6 +55,9 @@ export interface VibeRadio {
    *  publishers, and absent must read as "unknown", never as zero — saying FREE about a full
    *  receiver sends somebody to a radio that will refuse them. */
   listeners?: number;
+  /** ★ The lowest client protocol with controls for this radio (BRIEF-v11 §7). Above APP_PROTO the
+   *  picker greys it out as "Unsupported SDR — update VibeSDR". Absent (older server) = 0. */
+  minProto?: number;
 }
 
 export interface VibeFrontDoor {
@@ -86,7 +90,7 @@ export async function fetchFrontDoor(
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(`${base}/vibeserver/radios`, { signal: ctrl.signal, cache: 'no-store' });
+    const r = await fetch(`${base}/vibeserver/radios?proto=${APP_PROTO}`, { signal: ctrl.signal, cache: 'no-store' });
     if (!r.ok) return null;
     const j: any = await r.json();
     // ★★ `frontDoor` is ABSENT on a radio and on every older server, so a missing key must read as
@@ -112,6 +116,7 @@ export async function fetchFrontDoor(
         primary: x.primary === true,
         antenna: typeof x.antenna === 'string' && x.antenna ? x.antenna : undefined,
         antennaIcon: typeof x.antennaIcon === 'string' ? x.antennaIcon : undefined,
+        minProto: typeof x.minProto === 'number' ? x.minProto : 0,
       }));
     if (!radios.length) return null;         // a door with nothing behind it is not a choice
     return {

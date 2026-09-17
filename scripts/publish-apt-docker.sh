@@ -19,6 +19,19 @@
 #   nothing is left behind in the image or in a layer.
 set -euo pipefail
 
+# ★★★ THE COMPATIBILITY GATE (docs/PROTOCOL.md, BRIEF-v11-compatibility §8). Nothing is published
+#     unless every captured client fixture passes against a server running THIS tree — set
+#     VIBE_COMPAT_TARGET to it (a bench box on the candidate build). A publish without a target is
+#     refused unless VIBE_COMPAT_SKIP names the reason, which is printed and lands in the log.
+if [ -n "${VIBE_COMPAT_TARGET:-}" ]; then
+  echo "==> compat gate against $VIBE_COMPAT_TARGET"
+  bash "$(dirname "$0")/compat/run.sh" "$VIBE_COMPAT_TARGET" || { echo "!! compat gate FAILED — not publishing"; exit 1; }
+elif [ -n "${VIBE_COMPAT_SKIP:-}" ]; then
+  echo "==> compat gate SKIPPED: $VIBE_COMPAT_SKIP"
+else
+  echo "!! no VIBE_COMPAT_TARGET (a server on the candidate build) and no VIBE_COMPAT_SKIP=<reason> — refusing to publish"; exit 1
+fi
+
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 KEY_FILE="${VIBESERVER_SIGNING_KEY:-$HOME/Documents/VibeSDR-keys/vibesdr-apt-signing-key.asc}"

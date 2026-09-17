@@ -22,6 +22,10 @@ struct VibeRadio: Identifiable, Hashable {
     let restricted: Bool
     let centreHz: Double
     let mode: String
+    /// ★ The lowest client protocol with controls for this radio (BRIEF-v11 §7); above
+    ///   JrVersion.proto the picker greys it out. Absent on an older server = 0.
+    var minProto: Int = 0
+    var unsupported: Bool { minProto > JrVersion.proto }
 
     /// What this radio is FOR, short enough for a 41 mm screen.
     ///
@@ -53,7 +57,7 @@ enum FrontDoor {
     ///    majority of servers, and treating an unknown answer as a door would break every one.
     static func probe(host: String, tls: Bool, timeout: TimeInterval = 4) async -> VibeFrontDoor? {
         let scheme = tls ? "https" : "http"
-        guard let url = URL(string: "\(scheme)://\(host)/vibeserver/radios") else { return nil }
+        guard let url = URL(string: "\(scheme)://\(host)/vibeserver/radios?proto=\(JrVersion.proto)") else { return nil }
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -78,7 +82,8 @@ enum FrontDoor {
                 locked: (r["locked"] as? Bool) ?? false,
                 restricted: (r["restricted"] as? Bool) ?? false,
                 centreHz: (r["centreHz"] as? Double) ?? Double((r["centreHz"] as? Int) ?? 0),
-                mode: (r["mode"] as? String) ?? "")
+                mode: (r["mode"] as? String) ?? "",
+                minProto: (r["minProto"] as? Int) ?? 0)
         }
         guard !radios.isEmpty else { return nil }   // a door with nothing behind it is not a choice
         return VibeFrontDoor(name: (j["name"] as? String) ?? "VibeServer", radios: radios)
