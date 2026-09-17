@@ -83,7 +83,7 @@ final class WaterfallBuffer {
   ///     for a 10 fps feed and is overtaken at 5), 15+ → 1. Image rebuilds per second stay where
   ///     the wifi feed always had them, so this costs nothing new.
   private var subRows = 1
-  private static let kTargetRowsPerSec = 15.0
+  private static let kTargetRowsPerSec = 20.0   // ★ 20, as first dialled in (2 sub-rows × 10 fps)
   private func subRows(forFps fps: Double) -> Int {
     guard fps > 0 else { return 1 }
     return max(1, min(4, Int((Self.kTargetRowsPerSec / fps).rounded())))
@@ -99,7 +99,10 @@ final class WaterfallBuffer {
   /// in SignalProcessor, so the row we borrow arrives unsharpened — and we then
   /// bilinear-upscale it, which softens it further. An SSB signal is only ~12 of
   /// the 256 bins wide, so it loses the most and goes mushy.
-  var sharpness: Double = 0.0
+  /// ★★★ 4, NOT 0 (2026-09-17). Jr has no menu for this — it was a Buddy-era mirror of the phone's
+  ///     setting — so it sat at zero and the unsharp mask below NEVER RAN on the wrist. With blended
+  ///     sub-rows back, this is the sharpening that keeps a carrier a line rather than a smear.
+  var sharpness: Double = 4.0
 
   // ── WATCH-LOCAL BRIGHTNESS / CONTRAST ──────────────────────────────────────
   //
@@ -494,8 +497,17 @@ final class WaterfallBuffer {
      *  `progress` offset does that on the render clock); only the CONTENT stops being invented.
      *  Every drawn row is now something the receiver actually heard — the same argument that
      *  set subRows to 1 in July, kept, while the scroll pace is kept too. */
-    let row = subStep >= subRows ? dst : prevRow
-    /* ★★★ BUT THE TRACE KEEPS ITS BLENDED TARGET. Holding the pixels broke the trace's
+    /* ★★★ BLENDED AGAIN, AS FIRST DIALLED IN — with the unsharp mask ON to hold the smear down
+     *  (Stuart, 2026-09-17: "the smoothness needs to be how it was when we first got it dialled
+     *  in, 20 fps scroll with some sharpening done to prevent interpolation smearing"). The
+     *  sample-and-hold tried earlier tonight (d5e283ab) was crisper and read as steps. */
+    let t0 = Double(subStep) / Double(subRows)
+    var row = [UInt8](repeating: 0, count: Self.width)
+    for i in 0..<Self.width {
+      let v = Double(prevRow[i]) + (Double(dst[i]) - Double(prevRow[i])) * t0
+      row[i] = UInt8(clamping: Int(v.rounded()))
+    }
+    /* ★ THE TRACE KEEPS ITS OWN BLENDED TARGET (same blend, kept separate so the two can differ again). Holding the pixels broke the trace's
      *  interpolation (Stuart, 2026-09-17: "the spectrum trace is very slow all the interpolation
      *  is not being applied"): advanceTrace eases towards the row the top of the waterfall shows,
      *  and with blended sub-rows that row MOVED every sub-row, so the trace was always chasing.
