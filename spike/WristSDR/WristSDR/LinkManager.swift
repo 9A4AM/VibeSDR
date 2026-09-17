@@ -12,7 +12,7 @@ import Foundation
 ///
 ///   UberSDR    `set_rate` divisor 1/2/3  →  10 / 5 / 3.3 fps   (12.4 / 6.1 / 4.2 KB/s)
 ///   KiwiSDR    `wf_speed`  4/3/2         →  23 / 13 / 5  fps
-///   VibeServer `fftRate`   20/10/5       →  20 / 10 / 5  fps
+///   VibeServer `fftRate`   — fixed at 5 on every connection (UberClient.fixedFps, brief §5)
 ///   OpenWebRX  — no lever at all; fps/fft_fps/fft_size are ignored. No LinkManager.
 @MainActor
 final class LinkManager {

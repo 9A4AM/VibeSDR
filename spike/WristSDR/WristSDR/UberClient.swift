@@ -1130,9 +1130,17 @@ final class UberClient: ObservableObject {
   /// ★ Sent on every spectrum (re)connect and whenever the transport changes, because the watch
   ///   moves between the relay and its own wifi while running — that is the normal case, not an
   ///   edge one, and a rate chosen once at launch would be wrong for most of the session.
+  /// ★★★ ONE FRAME RATE: 5 fps ON EVERY CONNECTION (BRIEF-jr-vibeserver-display §5). This used to
+  ///     ask 5 on the phone relay and 15 on the watch's own wifi. Stuart: 5 fps looks good on the
+  ///     watch and the row interpolation smooths it — and at 1024 bins it is what keeps a
+  ///     VibeServer session the same cost as an UberSDR one (~42 kb/s). UberSDR and Kiwi already
+  ///     pin 5 through LinkManager's Low Data rung, so this brings the last backend into line.
+  /// ★ STILL SENT, on every (re)connect: a listener who never asks sits on the server's 2 fps
+  ///   idle floor — the bug described above setFftRate. The rate is fixed; the request is not.
+  static let fixedFps = 5
   func applyVibeFrameRate() {
     guard isVibe else { return }
-    let fps = onRelay ? 5 : 15
+    let fps = Self.fixedFps
     setFftRate(fps)
     // ★ Seed the interpolator with the rate we just asked for rather than making it rediscover a
     //   cadence we already know — the same courtesy the UberSDR ladder does in linkMgr's apply.
@@ -1332,6 +1340,12 @@ final class UberClient: ObservableObject {
   /// Absolute signal level in dBFS for the meter text. NaN while we only have spectrum SNR (which
   /// is a RATIO, not a level — there is no honest dBFS to show then, so the readout falls back).
   @Published var signalDbfs: Double = .nan
+  /// ★★★ WHAT THE SQUELCH NEEDLE COMPARES AGAINST, in the unit the GATE speaks (BRIEF-jr §4).
+  ///     A VibeServer gate keys off dBFS (SpikeLink.sqlScale: (db+130)/90), so the bar must read
+  ///     the dBFS the server's `sig` message carries — never the spectrum SNR, which is what pinned
+  ///     it at full. UberSDR's gate takes an SNR, so there the SNR is right. One rule, one place.
+  ///     NaN (no `sig` yet) falls back to the SNR so the bar is never blank on an old server.
+  var sqlNeedleDb: Double { (isVibe && !signalDbfs.isNaN) ? signalDbfs : signalDb }
   @Published var framesPerSec: Double = 0
   @Published var audioPerSec: Double = 0
   /// DEBUG: total incoming KB/s (spectrum + audio), for the on-wrist counter.
@@ -1837,12 +1851,21 @@ final class UberClient: ObservableObject {
     guard !goingIdle else { return }   // never reopen a torn-down client (server switch)
     specOpenSeq &+= 1
     let seq = specOpenSeq
-    // FFT/BIN lever (VibeServer only): ask for exactly our waterfall width instead of the server's
-    // full 4096. The server keeps its full sample rate and peak-holds its fine FFT down to this many
-    // bins as it crops for zoom — so zoomed out is coarse (UberSDR-style), zoomed in sharpens, and
-    // the wire cost is a flat ~128 bins/frame at every zoom. Cuts each SPEC frame ~32x. UberSDR
-    // ignores the param (it sends its own count, which we downsample as before).
-    let binsParam = isVibe ? "&bins=\(WaterfallBuffer.width)" : ""
+    // ★★★ OVERSAMPLE: 1024 BINS, REDUCED ON THE WATCH (BRIEF-jr-vibeserver-display §2).
+    //     This used to ask for exactly the display width (128), the one backend where Jr did so —
+    //     UberSDR and Kiwi send 1024, OWRX its whole FFT — and the result was the coarse, blurry
+    //     VibeServer waterfall Stuart saw beside a clean UberSDR one on the same signal. With 128
+    //     bins SignalProcessor's 5-tap smooth ran AT display resolution: a one-pixel carrier was
+    //     smeared over five pixels and lost ~4.8 dB of peak. At 1024 the same smooth covers less
+    //     than one output pixel after the 8× peak-hold decimate(), so the picture is as sharp as
+    //     UberSDR's. It also leaves 8× headroom for the instant local zoom (see localCropFactor).
+    // ★ SENT EXPLICITLY, never omitted: leaving `bins=` off gives 1024 only because of the server's
+    //   current default, which was 4096 before 4 August 2026 — an older server would send 4096.
+    // ★ 1024 is also the CEILING: with per-client DSP the server caps `bins` there and sizes its
+    //   zoom FFT to the widest request, so this costs other listeners nothing and more would be
+    //   silently capped. Do not "optimise" this back to the display width.
+    // ★ UberSDR ignores the param (it sends its own count, which we downsample as before).
+    let binsParam = isVibe ? "&bins=1024" : ""
     // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
     //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
     //    server prefers a real header and falls back to this.
@@ -2150,20 +2173,40 @@ final class UberClient: ObservableObject {
     // any row we draw would use a span left over from the last one — the reconnect-misalignment
     // bug. Hold the paint (frames are already counted above, so the watchdog still sees life).
     // Fail open after ~2s so a server that never re-sends config can't blank us forever.
+    /* ★★★ INSTANT LOCAL ZOOM (BRIEF-jr-vibeserver-display §3). While the server has not yet
+     *  confirmed a ZOOM-IN, the rows still arriving carry the OLD, wider span — and at 1024 bins
+     *  over 128 pixels there is 8× of real resolution to spare. So instead of holding the paint
+     *  and leaving the crown feeling stuck for a beat, crop the last real row around the VFO by
+     *  the ratio asked for and draw it at once; the server's own rows take over the moment its
+     *  config lands (specConfigSeq catches up). Nothing is stretched: the crop is clamped so at
+     *  least one genuine bin lands on every pixel. A zoom OUT has nothing to crop from, and a
+     *  crop beyond 8× would be invented pixels — both keep the old hold-the-last-row behaviour.
+     *  ★ The crop is taken AFTER the unwrap below; cropping the raw frame centres on the wrong bin.
+     *  ★ VibeServer only to start with, as the brief says. */
+    var cropFactor = 1.0
     if specConfigSeq != specSubscribeSeq {
       gatedFrames += 1
-      if gatedFrames == 1 { Vitals.crumb("UBER paint GATED — waiting for config (sub=\(specSubscribeSeq) cfg=\(specConfigSeq))") }
-      if gatedFrames < 20 { return }
-      Vitals.crumb("UBER paint gate FAILED OPEN after 20 frames — drawing anyway")
-      specConfigSeq = specSubscribeSeq          // give up waiting; draw with what we have
+      let n0 = bins.count
+      let maxCrop = Double(n0) / Double(WaterfallBuffer.width)
+      let want = (isVibe && viewBinBw > 0 && binBandwidth > 0) ? binBandwidth / viewBinBw : 1
+      if n0 >= 2 * WaterfallBuffer.width, want > 1.001, want <= maxCrop + 0.001 {
+        cropFactor = min(want, maxCrop)
+        if gatedFrames == 1 { Vitals.crumb("UBER local zoom ×\(String(format: "%.2f", cropFactor)) while waiting for config") }
+      } else {
+        if gatedFrames == 1 { Vitals.crumb("UBER paint GATED — waiting for config (sub=\(specSubscribeSeq) cfg=\(specConfigSeq))") }
+        if gatedFrames < 20 { return }
+        Vitals.crumb("UBER paint gate FAILED OPEN after 20 frames — drawing anyway")
+        specConfigSeq = specSubscribeSeq          // give up waiting; draw with what we have
+      }
+    } else {
+      gatedFrames = 0
     }
-    gatedFrames = 0
     // ★ The one line that says the picture is real. Everything else in this file can be healthy
     //   while this never happens — which is precisely what the black waterfall was.
     if !everPainted { everPainted = true; Vitals.crumb("UBER FIRST ROW PAINTED (bins=\(bins.count))") }
 
     // ── THE COST JR PAYS. Unwrap, then the full DSP, then the paint. Every frame.
-    let n = bins.count
+    var n = bins.count
     guard n > 1 else { return }
     if unwrapped.count != n { unwrapped = [Float](repeating: 0, count: n) }
     let half = n / 2
@@ -2171,6 +2214,17 @@ final class UberClient: ObservableObject {
     // Without this every signal is drawn half a span from where it actually is.
     for i in 0..<half { unwrapped[i] = bins[half + i] }
     for i in 0..<half { unwrapped[half + i] = bins[i] }
+    // The local crop, centred: the view is VFO-centred by design (sendView is always sent with
+    // the tuned frequency), so the middle of the unwrapped row IS the VFO.
+    let fullSpan = binBandwidth * Double(n)
+    var rowSpan = fullSpan
+    if cropFactor > 1 {
+      let keep = max(WaterfallBuffer.width, Int((Double(n) / cropFactor).rounded()))
+      let start = (n - keep) / 2
+      unwrapped = Array(unwrapped[start ..< start + keep])
+      rowSpan = fullSpan * Double(keep) / Double(n)
+      n = keep
+    }
 
     // ★★★ THE DSP RUNS OFF MAIN. It used to run here, on the main actor, every frame — the
     // histogram, the 5-tap smooth, the normalise/clip/stretch and the decimate. On a watch that
@@ -2179,7 +2233,7 @@ final class UberClient: ObservableObject {
     // consumption"). Main now only hands over a buffer and takes back a finished row.
     // ★ `proc`, `out256` and the working copy live on specDecodeQueue and are touched nowhere else.
     let work = unwrapped
-    let centre = freq, span = binBandwidth * Double(n), packetSnr = chanSnr, packetDbfs = chanDbfs
+    let centre = freq, span = rowSpan, packetSnr = chanSnr, packetDbfs = chanDbfs
     specDecodeQueue.async { [weak self] in
       guard let self else { return }
       let row = self.proc.process(work, centerHz: centre, bwHz: span)
@@ -2274,6 +2328,19 @@ final class UberClient: ObservableObject {
     guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
     let type = j["type"] as? String
     if type == "hwinfo" { onHwInfo(j); return }         // VibeServer: offered gains/rates + owner ceiling
+    /* ★★★ THE GATE'S OWN READING (BRIEF-jr-vibeserver-display §4). A VibeServer sends, on every
+     *  spectrum frame, the value its squelch compares — `chan` is THIS listener's tuned-channel
+     *  power in dBFS (per-listener squelch, 5.6.14) and `floor` the noise floor beside it. Jr
+     *  ignored the message and fed the dBFS needle scale ((db+130)/90) with the SPECTRUM SNR,
+     *  so 25 dB of SNR read as 1.7 and the bar sat pinned at full (xavxx, Discord, 2026-09-17).
+     *  ★ NO −30 here: that correction is radiod's audio-packet offset and is UberSDR-only. */
+    if type == "sig", isVibe {
+      if let chan = j["chan"] as? Double, chan.isFinite {
+        chanDbfs = chan
+        if let floor = j["floor"] as? Double, floor.isFinite { chanSnr = chan - floor }
+      }
+      return
+    }
     if type == "rds" {
       // Station naming from WFM RDS. An empty ps IS the "station lost" signal (the server change-detects
       // and sends it once), so assigning it straight through clears the band strip — no stale name.

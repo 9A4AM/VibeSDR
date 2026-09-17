@@ -603,7 +603,18 @@ link.setAutoContrast(wfAutoContrast)
           BatteryPill(level: link.battery).hidden()
         }
         .frame(maxWidth: .infinity)
-        Button { if !locked { showNumpad = true } } label: { readout }
+        /* ★★★ ON A SHARED DIAL THE PAD ONLY OPENS WHEN TUNING IS ARMED. Stuart typed a frequency
+         *  in on a shared VFO, forgot the dial was locked, and wondered why nothing happened
+         *  (2026-09-17): the pad took the digits and the tune was refused silently. Now a locked
+         *  dial refuses to open the pad and says where the arm switch is instead. */
+        Button {
+          guard !locked else { return }
+          if let v = link.vibe, v.sharedDial, !v.canTune {
+            link.notify("Tuning locked \u{2014} arm it on the chat page first", for: 3)
+          } else {
+            showNumpad = true
+          }
+        } label: { readout }
           .buttonStyle(.plain)
       }
       .padding(.horizontal, 6)

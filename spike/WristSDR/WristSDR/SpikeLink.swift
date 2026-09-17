@@ -767,7 +767,7 @@ final class SpikeLink: ObservableObject {
     if abs(level - client.signalLevel) > 0.005 { level = client.signalLevel }
     let mt = Self.meterText(unit: meterUnit, snrDb: client.signalDb, dbfs: client.signalDbfs + visualGainDb)
     if meter != mt { meter = mt }
-    let sn = sqlNorm(client.signalDb)   // signal on the needle's 0..1 scale, per backend
+    let sn = sqlNorm(needleDb(client))  // signal on the needle's 0..1 scale, per backend
     if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
     // ★ A squelch remembered for this VibeServer (GitHub #28) — put the needle where the gate is.
     if let u = client as? UberClient, u.squelchRestoreSeq != squelchRestoreSeen {
@@ -1233,10 +1233,16 @@ final class SpikeLink: ObservableObject {
   func pollSignal() {
     client?.drainSpectrum(now: ProcessInfo.processInfo.systemUptime)
     if let l = client?.signalLevel, abs(level - l) > 0.003 { level = l }
-    if let db = client?.signalDb {
-      let sn = sqlNorm(db)
+    if let c = client {
+      let sn = sqlNorm(needleDb(c))
       if abs(sqlSignal - sn) > 0.004 { sqlSignal = sn }
     }
+  }
+  /// The signal in the unit the CURRENT backend's gate speaks — a VibeServer's dBFS from its `sig`
+  /// message, everyone else's SNR (see UberClient.sqlNeedleDb). Both callers above go through here.
+  private func needleDb(_ c: any SDRClient) -> Double {
+    if let u = c as? UberClient { return u.sqlNeedleDb }
+    return c.signalDb
   }
 }
 

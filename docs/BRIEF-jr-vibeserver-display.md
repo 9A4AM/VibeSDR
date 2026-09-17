@@ -2,7 +2,9 @@
 
 **Project:** VibeSDR Jr (`spike/WristSDR/WristSDR/`)
 **Author:** Stuart Carr (Stuey3D) with Claude, 2026-09-17
-**Status:** SCOPED — not started. Ships with V11 (see `BRIEF-v11-compatibility.md`).
+**Status:** BUILT 2026-09-17 (fixes 1–4; §6 is measure-only and still open). Ships in the next Jr
+build. Also in that build: the frequency pad on a shared dial refuses to open until tuning is armed
+and says where the arm switch is.
 
 ---
 
