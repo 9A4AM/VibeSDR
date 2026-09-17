@@ -7931,8 +7931,8 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 46, 
     + `<rect x="0.75" y="0.75" width="${bodyW}" height="${h - 1.5}" rx="${r}" fill="none" stroke="${col}" stroke-opacity=".7" stroke-width="1.5"/>`
     + `<rect x="${bodyW + 1.5}" y="${h / 2 - 3}" width="2.5" height="6" rx="1" fill="${col}" fill-opacity=".7"/>`
     + `<rect x="2.5" y="2.5" width="${inner}" height="${h - 5}" rx="${r - 1.5}" fill="${col}" fill-opacity=".38"/>`
-    + `<text x="${bodyW / 2 + 0.75}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="${col}">${text}</text>`
-    + (charging ? `<text x="${bodyW - 5}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" fill="${col}">⚡</text>` : '')
+    + `<text x="${bodyW / 2 + 0.75 - (charging ? 5 : 1)}" y="${h / 2 + 4}" text-anchor="middle" font-size="11" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="${col}">${text}</text>`
+    + (charging ? `<text x="${bodyW - 4}" y="${h / 2 + 4}" text-anchor="middle" font-size="10" fill="${col}">⚡</text>` : '')
     + `</svg>`;
 }
 
