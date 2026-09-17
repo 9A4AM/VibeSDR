@@ -107,6 +107,7 @@
      2026-08-22). A class that draws a shape must not depend on where it is used. */
   .sh-free, .sh-busy, .sh-temp, .sh-down { display: inline-block; box-sizing: border-box; }
   .legend i { width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+  .legend .lg { display: inline-flex; align-items: center; gap: 5px; }
   /* ★ SHAPE AS WELL AS COLOUR. Red/green is the commonest form of colour blindness and this
      legend is entirely red/green/yellow, so the shape carries the same information. */
   .sh-free { background: var(--free); border-radius: 50%; }
@@ -125,6 +126,8 @@
   .mk { width: 13px; height: 13px; box-shadow: 0 0 0 1.5px rgba(0,0,0,.55); }
   /* ★ Leaflet's own icon class carries a white background in some builds — ours must not. */
   .mkWrap { background: none; border: 0; }
+  .mkGlyph { position: relative; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; }
+  .mkGlyph .mkN { position: absolute; right: -4px; top: -4px; min-width: 14px; height: 14px; border-radius: 7px; background: #111; color: #fff; font: 700 9px/14px system-ui; text-align: center; padding: 0 3px; border: 1px solid rgba(255,255,255,.35); }
   .srv.down > summary { opacity: 0.55; }
 
   .country { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;
@@ -536,11 +539,12 @@
 </header>
 
 <div class="legend">
-  <span><i class="sh-free"></i>Free slot</span>
-  <span><i class="sh-busy"></i>Full</span>
+  <span class="lg" data-glyph="free">Free slot</span>
+  <span class="lg" data-glyph="busy">Full</span>
 <!-- ★ Back in the legend now that a share can declare itself — see untilText(). It was removed
        while nothing could produce the state, which is the only reason a key entry should exist. -->
-  <span><i class="sh-temp"></i>Temporary share</span>
+  <span class="lg" data-glyph="temp">Temporary share</span>
+  <span class="lg" data-glyph="pin">PIN</span>
   <span style="margin-left:auto" id="count" role="button" tabindex="0"
         title="Jump to the server list" class="countJump"></span>
 </div>
@@ -676,6 +680,33 @@
 //     receivers are sitting in enhanced propagation right now, which is a reason to click one
 //     rather than a background texture.
 
+/* ★★★ THE MARKER IS THE VIBESDR RADIO (Stuart, 2026-09-17: "instead of little dots… the little
+ *  VibeSDR radio glyph as the marker on the map, green free slots, red in use, blue temporary
+ *  share. If a PIN is set then the icon is a little yellow padlock"). The app icon's own radio:
+ *  the box, the dial with its dot, three grille bars, the antenna off the top right — drawn in
+ *  strokes so one glyph takes any state colour. Legend, popup and map share these two functions. */
+document.addEventListener('DOMContentLoaded', () => {
+  for (const el of document.querySelectorAll('.legend .lg')) {
+    const k = el.dataset.glyph;
+    el.insertAdjacentHTML('afterbegin', k === 'pin' ? padlockGlyph(16) : radioGlyph(STATE_COL[k], 16));
+  }
+});
+const STATE_COL = { free: '#3ee07a', busy: '#ff5a5a', temp: '#5aa9ff', down: '#6b7785', unknown: '#ffb000' };
+function radioGlyph(col, size = 22) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block;filter:drop-shadow(0 0 2px rgba(0,0,0,.9))">`
+    + `<rect x="3" y="8.5" width="18" height="12.5" rx="1.5"/>`
+    + `<circle cx="8.6" cy="14.8" r="2.9"/><circle cx="8.6" cy="14.8" r="1" fill="${col}" stroke="none"/>`
+    + `<path d="M14.2 11.6v6.4M16.8 11.6v6.4M19.2 11.6v6.4"/>`
+    + `<path d="M14.6 8.5 19.3 3.2"/>`
+    + `</svg>`;
+}
+function padlockGlyph(size = 22) {
+  const col = '#ffd23f';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block;filter:drop-shadow(0 0 2px rgba(0,0,0,.9))">`
+    + `<rect x="5" y="10.5" width="14" height="10.5" rx="2" fill="${col}" fill-opacity=".22"/>`
+    + `<path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/><circle cx="12" cy="15.8" r="1.2" fill="${col}" stroke="none"/>`
+    + `</svg>`;
+}
 /* ★ THE BATTERY GLYPH — horizontal, iOS-style, the number inside (Stuart, 2026-09-17: "I always
  *  find they read cleaner"). A rounded body, the nub on the right, the fill by level, a bolt over
  *  the fill while charging. Colour: green; amber at 20 % or below; red in the low power state. */
@@ -2607,11 +2638,14 @@ function render(servers, filtered) {
     const cls = group.length > 1 ? (free ? 'free' : st.cls) : st.cls;
     const n = group.length;
     pts.push([s.lat, s.lon]);
+    // ★ A PIN'd server wears the padlock; a group takes the glyph of its best state and a count.
+    const pinned = group.every((g) => g.pin);
+    const glyph = pinned ? padlockGlyph(24) : radioGlyph(STATE_COL[cls] || STATE_COL.unknown, 24);
     L.marker([s.lat, s.lon], {
       title: group.map((g) => g.name).join(', '),
       icon: L.divIcon({
-        className: 'mkWrap', iconSize: [n > 1 ? 18 : 13, n > 1 ? 18 : 13], iconAnchor: [n > 1 ? 9 : 7, n > 1 ? 9 : 7], popupAnchor: [0, -7],
-        html: `<i class="mk ${cls}${n > 1 ? ' multi' : ''}" title="${esc(st.label)}">${n > 1 ? n : ''}</i>`,
+        className: 'mkWrap', iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12],
+        html: `<div class="mkGlyph" title="${esc(st.label)}">${glyph}${n > 1 ? `<b class="mkN">${n}</b>` : ''}</div>`,
       }),
     }).addTo(markers).bindPopup(
       group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${g.pin ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
