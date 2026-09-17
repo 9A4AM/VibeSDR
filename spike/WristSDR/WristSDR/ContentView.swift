@@ -5,7 +5,7 @@ import WatchKit
 // ── Link-hint tuning ─────────────────────────────────────────────────────────
 /// Rows quiet for longer than this and the local hop is suspect. A watch on the
 /// end of Bluetooth drops the odd frame; that is not news.
-private let hintRowGap   = 1.2
+private let hintRowGap   = 3.0   // ★ was 1.2 — one burst's worth at 15 fps, three at 5 fps (2026-09-17)
 /// Hold a condition for this long before showing a pill. A single late frame must
 /// not strobe it.
 private let hintDebounce = 0.7

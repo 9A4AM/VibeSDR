@@ -947,7 +947,13 @@ final class SpikeLink: ObservableObject {
     // overlay (a phone-companion concept — there's no watch↔phone link to lose here). We're
     // recovering whenever frames have stopped after having flowed, and we're NOT intentionally
     // backgrounded (wrist-down keeps the audio and drops the waterfall on purpose).
-    let recovering = everGotRow && client.framesPerSec == 0 && !isBackground
+    // ★★★ A GAP, NOT A TICK. This read `framesPerSec == 0` — one whole-second window with no frame —
+    //     which at 15 fps meant something and at a fixed 5 fps over a bursty relay means nothing:
+    //     one empty second is ordinary, and the pill said "reconnecting" while nothing reconnected
+    //     (Stuart, 2026-09-17: "dropping the spectrum connection", the link detector silent). Three
+    //     seconds without a row is fifteen missing frames at 5 fps — that is a stall worth naming.
+    let rowGap = lastRowAt.map { Date().timeIntervalSince($0) } ?? 0
+    let recovering = everGotRow && rowGap > 3.0 && !isBackground
     let newWhy = recovering ? "reconnecting" : "live"
     if why != newWhy { why = newWhy }
 
