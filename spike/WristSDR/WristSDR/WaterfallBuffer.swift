@@ -322,7 +322,9 @@ final class WaterfallBuffer {
     // matters, and a growing queue is just latency. The cap was 8 — i.e. we were
     // willing to sit ~800ms behind the radio before throwing anything away, which is
     // most of the lag we're trying to remove. 4 is still ample slack for a hiccup.
-    if queue.count > 4 { queue.removeFirst(queue.count - 4) }
+    // ★ 2 now, not 4: with sub-rows the bank is 2 rows = 6 drawn rows at 5 fps, ample — and
+    //   anything deeper is exactly the backlog that the catch-up rate then plays at 1.5×.
+    if queue.count > 2 { queue.removeFirst(queue.count - 2) }
   }
 
   /// Unsharp mask across the bins: subtract a blurred copy of the row from itself,

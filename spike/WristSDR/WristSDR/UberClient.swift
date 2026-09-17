@@ -2254,7 +2254,20 @@ final class UberClient: ObservableObject {
         // line up. Drained on the main actor from the render tick (see drainSpectrum).
         if dec.count == WaterfallBuffer.width {
           self.rowsPushed += 1
-          self.specQueue.append((ProcessInfo.processInfo.systemUptime, dec))
+          let t = ProcessInfo.processInfo.systemUptime
+          /* ★★★ A BURST IS ONE ROW. While the app is suspended (wrist down) the socket's bytes
+           *  queue in the network stack; on wake the whole backlog lands in one go, is decoded in
+           *  one go and stamped with the WAKE time — so the drain's age check (which only catches
+           *  rows that aged in the queue) saw them as fresh and played the lot: still "speeding up
+           *  on wrist up" after 106 (Stuart, 2026-09-17). Rows are due one per interval; two rows
+           *  stamped within half an interval of each other cannot both be "now", so the newer
+           *  REPLACES the older. A waterfall is a record of now, not a tape. */
+          let burstGap = 0.5 / Double(Self.fixedFps)
+          if let last = self.specQueue.last, t - last.t < burstGap {
+            self.specQueue[self.specQueue.count - 1] = (t, dec)
+          } else {
+            self.specQueue.append((t, dec))
+          }
         }
       }
     }
