@@ -496,7 +496,11 @@ link.setAutoContrast(wfAutoContrast)
           .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 1))
           .padding(.bottom, 2)
           .transition(.opacity)
-        } else if link.showSessionPill {
+        } else if link.showSessionPill && !(link.sessionLimitSoft && link.sessionSecsLeft == 0) {
+          /* ★ Once a soft guarantee has run out the pill goes AWAY rather than reading "YOURS":
+           *  on the wrist it sat over the waterfall for the rest of the session saying nothing
+           *  that needed saying (Stuart, 2026-09-17: "dont need the yours"). The shield counts
+           *  down while the guarantee lasts, then leaves the screen to the signal. */
           HStack(spacing: 4) {
             // ★ A soft limit is a SHIELD, not an hourglass draining away — and once it has expired
             //   the number is meaningless, so the pill stops counting and says what is true.
