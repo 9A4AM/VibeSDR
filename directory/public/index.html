@@ -2634,13 +2634,14 @@ function render(servers, filtered) {
   const pts = [];
   for (const group of byPos.values()) {
     const s = group[0], st = state(s);
-    const free = group.some((g) => state(g).cls === 'free');
-    const cls = group.length > 1 ? (free ? 'free' : st.cls) : st.cls;
+    const free = group.some((g) => state(g).cls === 'sh-free');
+    const cls = group.length > 1 ? (free ? 'sh-free' : st.cls) : st.cls;
     const n = group.length;
     pts.push([s.lat, s.lon]);
     // ★ A PIN'd server wears the padlock; a group takes the glyph of its best state and a count.
     const pinned = group.every((g) => g.pin);
-    const glyph = pinned ? padlockGlyph(24) : radioGlyph(STATE_COL[cls] || STATE_COL.unknown, 24);
+    // ★ The state carries its own colour (the page's --free/--busy/--temp); the key is the class.
+    const glyph = pinned ? padlockGlyph(24) : radioGlyph(STATE_COL[String(cls).replace(/^sh-/, '')] || st.colour || STATE_COL.unknown, 24);
     L.marker([s.lat, s.lon], {
       title: group.map((g) => g.name).join(', '),
       icon: L.divIcon({
