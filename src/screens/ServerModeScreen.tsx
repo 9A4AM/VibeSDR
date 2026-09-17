@@ -137,7 +137,7 @@ const K = {
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
   ppm: 'vs_ppm', directSampling: 'vs_directsampling', autoDs: 'vs_autods', autoDsMhz: 'vs_autodsmhz',
-  convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi',
+  convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi', convDown: 'vs_convdown',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -271,6 +271,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [convOffsetMhz, setConvOffsetMhz] = useState('');
   const [convLoMhz, setConvLoMhz]     = useState('');
   const [convHiMhz, setConvHiMhz]     = useState('');
+  const [convDown, setConvDown]       = useState(false);   // an LNB / transverter block; an up-converter is the default
   /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
    *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
    *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
@@ -523,6 +524,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setConvOffsetMhz(await g2(K.convOffsetMhz));
           setConvLoMhz(await g2(K.convLoMhz));
           setConvHiMhz(await g2(K.convHiMhz));
+          setConvDown((await g2(K.convDown)) === '1');
         })();
         void (async () => {
           const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
@@ -955,7 +957,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
       [K.ppm, ppm], [K.directSampling, directSampling], [K.autoDs, autoDs ? '1' : '0'], [K.autoDsMhz, autoDsMhz],
-      [K.convOffsetMhz, convOffsetMhz], [K.convLoMhz, convLoMhz], [K.convHiMhz, convHiMhz],
+      [K.convOffsetMhz, convOffsetMhz], [K.convLoMhz, convLoMhz], [K.convHiMhz, convHiMhz], [K.convDown, convDown ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
       [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
     ]);
@@ -1042,7 +1044,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         directSampling: directSampling === 'i' ? 1 : directSampling === 'q' ? 2 : 0,
         autoDirectSampling: autoDs,
         directSamplingBelowHz: (Number(autoDsMhz) || 24) * 1e6,
-        converterOffsetHz: (Number(convOffsetMhz) || 0) * 1e6,
+        // ★ Sign as the setup page stores it: an UP-converter (HF moved up to the tuner) is NEGATIVE,
+        //   a down-converter (LNB, transverter block) positive — see vibe_setup_page.h's convDown.
+        converterOffsetHz: (convDown ? 1 : -1) * (Number(convOffsetMhz) || 0) * 1e6,
         converterInputLoHz: (Number(convLoMhz) || 0) * 1e6,
         converterInputHiHz: (Number(convHiMhz) || 0) * 1e6,
       });
@@ -1073,7 +1077,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost,
       gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
-      oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz]);
+      oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -2039,6 +2043,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 <TextInput value={convHiMhz} onChangeText={(t) => { setConvHiMhz(t); AsyncStorage.setItem(K.convHiMhz, t); }}
                   placeholder="to (MHz)" placeholderTextColor={C.textDim} keyboardType="numeric"
                   style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border, marginTop: 8, flex: 1 }]} />
+              </View>
+              <View style={[styles.rowBetween, { marginTop: 8 }]}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  This is a down-converter (an LNB or transverter block)
+                </Text>
+                <Switch value={convDown}
+                  onValueChange={(v) => { setConvDown(v); AsyncStorage.setItem(K.convDown, v ? '1' : '0'); }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                 The dial then shows the real frequency and the converter's range is what listeners can tune.
