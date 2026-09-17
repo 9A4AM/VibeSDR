@@ -2410,9 +2410,16 @@ function stnPick(row) {
 }
 document.getElementById('stnQ').addEventListener('input', (e) => {
   const v = e.target.value;
-  if (stationPick && v !== `${stationPick.name} · ${stationPick.khz} kHz`) { stationPick = null; applyFilters(); }
+  if (stationPick && v !== `${stationPick.name} · ${stationPick.khz} kHz`) {
+    // ★ Un-picking the station un-picks its frequency too: the red marker was placed BY the
+    //   pick, so clearing the box (the field's own ⓧ included) must not leave the list filtered
+    //   to a frequency nobody asked for (Stuart, 2026-09-17).
+    stationPick = null; redSet = false; needleV = 0; syncMk(); renderDial(); applyFilters();
+  }
   loadEibi().then(() => stnSearch(document.getElementById('stnQ').value));
 });
+// ★ Safari fires `search` (not `input`) for the ⓧ on a search field.
+document.getElementById('stnQ').addEventListener('search', (e) => { if (!e.target.value) e.target.dispatchEvent(new Event('input')); });
 document.getElementById('stnQ').addEventListener('focus', () => loadEibi());
 document.addEventListener('click', (e) => { if (!e.target.closest('.stnFind')) { const r = document.getElementById('stnRes'); r.hidden = true; } });
 
