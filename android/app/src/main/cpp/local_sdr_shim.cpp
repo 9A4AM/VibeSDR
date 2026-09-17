@@ -547,7 +547,17 @@ static std::atomic<int>  g_vsBatteryPauseAt{0};
 static std::atomic<int>  g_vsBatteryResumeAt{40};
 static std::atomic<int>  g_vsBatteryWarned{0};       // the highest warning step already spoken (0..3)
 static std::string       g_vsBatterySource;          // "android" | "sysfs" | "pmset" | ""
+static void vsProbeHostBattery();
 static std::string vsBatteryJsonFields() {
+    /* ★ ON DEMAND TOO. The FRONT DOOR has no radio and so no hotplug thread to tick batteryTick(),
+     *  yet the directory publisher reads the door's own /vibeserver.json — so a laptop's door
+     *  published no battery while its radio process did (the Lenovo, 2026-09-18). Probe here,
+     *  throttled to once every 30 s, whenever anyone asks. Android pushes and is untouched. */
+    {
+        static std::atomic<int64_t> lastProbe{0};
+        const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - lastProbe.load() >= 30) { lastProbe.store(now); vsProbeHostBattery(); }
+    }
     const int lv = g_vsBatteryLevel.load();
     if (lv < 0) return "";
     return ",\"batteryLevel\":" + std::to_string(lv)
