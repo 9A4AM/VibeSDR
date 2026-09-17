@@ -215,18 +215,12 @@ final class SignalProcessor {
 
     // ── Spatial 5-tap smooth [1,2,3,2,1]/9. This is the expensive one: O(n) with five
     //    reads per bin, every frame.
-    // ★ MATCHED TO THE OVERSAMPLING. The 5-tap was tuned for a frame drawn at its own width; a
-    //   1024-bin frame folded 2:1 onto 512 columns puts 5 taps across 2.5 COLUMNS, which is the
-    //   horizontal half of the blur (2026-09-17). When the frame carries at least twice the
-    //   columns the peak-hold fold already averages the speckle, so a 3-tap [1,2,1]/4 is enough.
-    if n >= 2 * WaterfallBuffer.width, n >= 3 {
-      dbAvg.withUnsafeBufferPointer { a in
-        tmp.withUnsafeMutableBufferPointer { t in
-          t[0]     = (a[0] * 3 + a[1]) / 4
-          t[n - 1] = (a[n - 2] + a[n - 1] * 3) / 4
-          for k in 1..<(n - 1) { t[k] = (a[k - 1] + a[k] * 2 + a[k + 1]) / 4 }
-        }
-      }
+    // ★ A LITTLE SMOOTHING STAYS. The 3-tap tried for oversampled frames (2026-09-17, d5e283ab)
+    //   went too far the other way — "the signals on both look a little too sharp" (Stuart, on
+    //   UberSDR and VibeServer alike, same evening). The 5-tap over a 1024 frame folded onto 512
+    //   columns spans ~2.5 columns, which on the wrist is the touch of softening that makes a
+    //   carrier read as a line rather than a comb. Back to the one smooth, at every width.
+    if false {
     } else if n >= 5 {
       dbAvg.withUnsafeBufferPointer { a in
         tmp.withUnsafeMutableBufferPointer { t in
