@@ -1142,7 +1142,10 @@ final class UberClient: ObservableObject {
   ///     pin 5 through LinkManager's Low Data rung, so this brings the last backend into line.
   /// ★ STILL SENT, on every (re)connect: a listener who never asks sits on the server's 2 fps
   ///   idle floor — the bug described above setFftRate. The rate is fixed; the request is not.
-  static let fixedFps = 5
+  /// ★ 10, not 5 (2026-09-18). Stuart: "I think I am too cautious with it" — the browser client
+  ///   runs 1024 bins + FM stereo at 20 fps for ~35 kB/s; 10 fps on the wrist is ~10 kB/s of
+  ///   spectrum on top of the audio, inside what the relay was measured to carry.
+  static let fixedFps = 10
   func applyVibeFrameRate() {
     guard isVibe else { return }
     let fps = Self.fixedFps
@@ -3393,7 +3396,8 @@ final class UberClient: ObservableObject {
   /// Adaptive waterfall rate. UberSDR ladder: divisor 1/2/3 = 10/5/3.3 fps (measured).
   /// Low Data may pin rung 2 (5 fps) but never rung 3 — 3.3 fps is jerky and reserved for a
   /// genuinely poor link. VibeServer has richer levers and is driven separately.
-  lazy var linkMgr = LinkManager(ladder: [10, 5, 10.0 / 3.0], lowDataRung: 2) { [weak self] rung, fps in
+  // ★ Low Data pins rung 1 = 10 fps now (was rung 2 = 5): one rate on every backend, 2026-09-18.
+  lazy var linkMgr = LinkManager(ladder: [10, 5, 10.0 / 3.0], lowDataRung: 1) { [weak self] rung, fps in
     self?.rateDivisor = rung                     // didSet sends set_rate
     self?.waterfall.setExpectedRowRate(fps)      // don't make the interpolator rediscover it
   }

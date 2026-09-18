@@ -852,7 +852,8 @@ final class KiwiClient: ObservableObject, SDRClient {
   ///
   /// Rung 4 (`wf_speed=1`, 1 fps) is DELIBERATELY NOT IN THE LADDER — Stuart: "no amount of
   /// interpolation will rescue that". 5 fps is the floor for both adaptation and Low Data.
-  lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 3) { [weak self] rung, fps in
+  // ★ Low Data pins rung 2 = 13 fps now (was rung 3 = 5) — the nearest Kiwi offers to the 10 fps every other backend runs (2026-09-18).
+  lazy var linkMgr = LinkManager(ladder: [23, 13, 5], lowDataRung: 2) { [weak self] rung, fps in
     // Never ABOVE the cap: on the relay rung 1 means 3 (med), not 4 (fast).
     self?.wfSpeedMirror = 5 - rung
     self?.wfSend("SET wf_speed=\(self?.wfSpeedNow ?? 3)")
