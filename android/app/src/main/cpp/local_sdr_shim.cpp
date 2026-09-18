@@ -13529,6 +13529,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reqLine = reqLine.substr(0, sp + 1) + (bare ? "/" : "") + reqLine.substr(cut);
                 break;
             }
+            /* ★★★ THE FRONT DOOR ANSWERING FOR A RADIO THAT IS RESTARTING. When a hand-off fails
+             *  (the radio process is mid-restart — an update, a settings save) the door answers the
+             *  request itself, but it has NO prefix of its own, so `/r/<id>/vibeserver/admin/status`
+             *  kept its radio prefix and fell through to the generic 404. The Pi's four radios
+             *  restart staggered and the window is short; the Lenovo's one RSP takes ten seconds to
+             *  re-acquire, so the admin page's update flow 404'd there every time (Stuart,
+             *  2026-09-18, via the tunnel). Strip ANY /r/<segment> prefix here, so the API paths the
+             *  door answers answer as themselves. A process with a prefix of its own was handled above. */
+            if (g_vsPathPrefix.empty() && sp != std::string::npos && reqLine.compare(sp + 1, 3, "/r/") == 0) {
+                const size_t seg = reqLine.find_first_of("/ ?#", sp + 4);
+                if (seg != std::string::npos && seg > sp + 4) {
+                    const bool bare = reqLine[seg] != '/';
+                    reqLine = reqLine.substr(0, sp + 1) + (bare ? "/" : "") + reqLine.substr(seg);
+                }
+            }
         }
         while (sock->recvline(line, 8192, 5000) > 0) {
             if (line.empty() || line == "\r") break;
