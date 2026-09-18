@@ -38,12 +38,24 @@ echo "==> applying android-dns.patch"
 # ★ --3way so a moved line in a newer upstream is a conflict to look at, not a silent no-op.
 git -C "$WORK/src" apply --3way "$HERE/android-dns.patch"
 
-echo "==> building android/arm64"
-# ★ arm64 ONLY. armeabi-v7a is not built: the switch simply does not appear there, per AGENTS.md
-#   ("a control that only works in one scenario should be removed rather than left dead").
+ARCH="${VIBE_CF_ARCH:-arm64}"
+echo "==> building android/$ARCH"
+# ★ THE MAIN APP IS arm64 ONLY. armeabi-v7a is not built for it: the switch simply does not appear
+#   there, per AGENTS.md ("a control that only works in one scenario should be removed rather than
+#   left dead").
 # ★ CGO_ENABLED=0 keeps it a single static binary with no NDK toolchain needed.
-( cd "$WORK/src" && GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
-    go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/cloudflared )
+# ★★ VIBE_CF_ARCH=arm is VibeServer Lite's (2026-09-18: a 2017 Fire 7 is 32-bit only). Go will not
+#    link android/arm internally — it needs the NDK's clang as the external linker, hence cgo.
+if [ "$ARCH" = "arm" ]; then
+  NDK="${ANDROID_NDK:-$HOME/Library/Android/sdk/ndk/27.1.12297006}"
+  CC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang"
+  [ -x "$CC" ] || { echo "NDK clang not found at $CC — set ANDROID_NDK"; exit 1; }
+  ( cd "$WORK/src" && GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=1 CC="$CC" \
+      go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/cloudflared )
+else
+  ( cd "$WORK/src" && GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
+      go build -trimpath -ldflags "-s -w" -o "$OUT" ./cmd/cloudflared )
+fi
 
 echo "==> $(ls -lh "$OUT" | awk '{print $5}')  ->  $OUT"
 

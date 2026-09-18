@@ -1,0 +1,8 @@
+// VibeServer Lite — a SEPARATE Android app (GitHub-only APK) for hardware the store left behind:
+// 32-bit ARMv7, 1 GB, Android 5.0+. It is the VibeServer half of the main app and nothing else.
+// ★ The main app (../../android) is never built, changed or depended on by this project; it only
+//   READS the shared engine sources and the React-free Kotlin that starts the server.
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+rootProject.name = 'VibeServerLite'
+include ':app'
