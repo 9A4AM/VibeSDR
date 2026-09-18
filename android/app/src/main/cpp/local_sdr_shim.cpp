@@ -997,6 +997,16 @@ static std::string dabBlocksJson() {
 /** The DAB status message, with the per-block memory appended. ★ ONE helper, because there are
  *  five callers of g_dab.json() and a field added at four of them is the "one rule, several
  *  readers" fault this codebase keeps paying for. */
+static void dabStatusJsonFinish_(std::string& j) {
+    const std::string blocks = dabBlocksJson();
+    if (!blocks.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
+}
+/** ★ Non-blocking, for vibe-dsp — see DabService::jsonTry. False = the decoder is busy, try again. */
+static bool dabStatusJsonTry(std::string& j) {
+    if (!g_dab.jsonTry(j)) return false;
+    dabStatusJsonFinish_(j);
+    return true;
+}
 static std::string dabStatusJson() {
     std::string j = g_dab.json();
     const std::string blocks = dabBlocksJson();
@@ -9871,9 +9881,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double hz = double(g_dab.centreHz());
                 for (const auto& r : g_dab.learnable()) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
             }
-            if (tnow - lastDabJson_ >= 0.5) {
+            std::string j;
+            // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".
+            if (tnow - lastDabJson_ >= 0.5 && dabStatusJsonTry(j)) {
                 lastDabJson_ = tnow;
-                const std::string j = dabStatusJson();
                 std::vector<std::shared_ptr<net::Socket>> socks;
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                 for (auto& sk : socks) sendText(sk, j);

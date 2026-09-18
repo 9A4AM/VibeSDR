@@ -60,6 +60,7 @@ public:
         dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
         for (auto& t : taps_) t.reset();
         rx_.setCentreHz(double(kBandIII[idx].centreHz));
+        publishQuality_();                                          // ★ a new block is not locked yet
         iq_.clear();
         { std::lock_guard<std::mutex> ik(inM_); inQ_.clear(); }   // ★ queued IQ is the OLD block
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
@@ -81,7 +82,7 @@ public:
          *  ratio (see aacStartedKnown_ below), one access unit later — tens of milliseconds, and
          *  far better than claiming a ratio we may not have for the configuration about to play. */
         aacStartedKnown_ = AacDecoder::kExactFrames;
-        adts_.clear();
+        { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
         cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();   // ★ and the gallery it belonged to
@@ -143,7 +144,7 @@ public:
         sf_.clear();
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;   // ★ a restarted pipe primes again — see the count
         aacStartedKnown_ = AacDecoder::kExactFrames;   // ★ as in setChannel — the first unit answers it
-        adts_.clear();
+        { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();
         slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
         pcmOwed_ = 0; pcmPushed_ = 0;
@@ -321,6 +322,7 @@ public:
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
                     rx_.reset(); iq_.clear(); lsfPend_.clear();
+                    publishQuality_();
                     /* ★★★ THE SELECTION MUST BE RE-APPLIED AFTER THE RESET. rx_.reset() empties the
                      *  ensemble and with it the receiver's chosen service — but sid_ still said it
                      *  was selected, so the worker's "want_ != sid_" re-select never fired and the
@@ -330,7 +332,7 @@ public:
                      *  intent and it re-applies the moment the ensemble is read again. */
                     sid_ = 0;
                     resetAudioCounters();   // ★ a new multiplex starts its own tally
-                    mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear(); sf_.clear();
+                    mp2_.reset(); aac_.reset(); pad_.reset(); { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); } sf_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
                     pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
@@ -390,6 +392,7 @@ private:
         while (iq_.size() >= need) {
             ++pushCalls_;
             if (rx_.push(iq_.data(), need)) ++pushOk_;
+            publishQuality_();
             /* ★★★ TRACK ACROSS THE BOUNDARY — DO NOT RE-ACQUIRE EVERY FRAME.
              *  This used to call resetSync() here, throwing the lock away and acquiring afresh on
              *  every 96 ms frame. Acquisition takes the GLOBAL MINIMUM over a frame-long scan, so
@@ -489,8 +492,13 @@ public:
     /** True while the selected service is DAB+ — its audio leaves as ADTS, not PCM. */
     bool dabPlus() { std::lock_guard<std::mutex> lk(m_); return rx_.selectedType() != 0; }
     /** Take one reframed access unit, or false when none is waiting. */
+    /** ★★★ NOT m_ (2026-09-18, a Raspberry Pi 2). pumpDabPlusAudio calls this on vibe-dsp for EVERY
+     *  IQ block, and m_ is held by the worker for each frame's whole decode (~80 ms on a Cortex-A7):
+     *  so vibe-dsp waited behind the decoder on every block, the IQ queue's 256 ms ran out and DAB
+     *  lost samples with vibe-dab at 84 % and vibe-dsp asleep. adts_ now has its own leaf lock,
+     *  exactly as pcm_ has pm_. */
     bool takeAdts(std::vector<uint8_t>& out) {
-        std::lock_guard<std::mutex> lk(m_);
+        std::lock_guard<std::mutex> ak(adtsM_);
         if (adts_.empty()) return false;
         out = std::move(adts_.front());
         adts_.pop_front();
@@ -498,8 +506,9 @@ public:
     }
     /** The rate the ADTS header declares — the AAC CORE rate. Under SBR the decoder doubles it
      *  itself, so this is what a decoder must be CONFIGURED with, not what it will output. */
-    int aacCoreRateHz() { std::lock_guard<std::mutex> lk(m_); return afmt_.coreRateHz; }
-    int aacChannels()   { std::lock_guard<std::mutex> lk(m_); return aacOutCh_; }
+    // ★ Read on vibe-dsp beside takeAdts — atomics mirrored where the format is set, never m_.
+    int aacCoreRateHz() { return aacCoreRateA_.load(std::memory_order_relaxed); }
+    int aacChannels()   { return aacOutChA_.load(std::memory_order_relaxed); }
     /** ★★★ THE CORE CHANNEL COUNT — 1 FOR PARAMETRIC STEREO, WHICH IS WHAT A DECODER MUST BE
      *  TOLD. aacChannels() is what comes OUT (PS reconstructs a second channel from a mono core);
      *  the AudioSpecificConfig and the ADTS header describe what goes IN. This file already wrote
@@ -507,7 +516,7 @@ public:
      *  built its config from "2 channels" over a bitstream containing one — and Apple's decoder
      *  refused every frame: "InternalAudioDecoderCocoa decoding failed", 0 good frames, for as
      *  long as DAB+ has existed on Safari. Chromium is lenient about it; Apple is not. */
-    int aacCoreChannels() { std::lock_guard<std::mutex> lk(m_); return aacCoreCh_; }
+    int aacCoreChannels() { return aacCoreChA_.load(std::memory_order_relaxed); }
     /** ★★★ PARAMETRIC STEREO IN USE — HE-AAC v2. The core is mono and the second channel is
      *  reconstructed from side information. A decoder that is not told this decodes the core and
      *  stops: mono, and only the lower half of the spectrum, because SBR is not applied either.
@@ -515,7 +524,7 @@ public:
      *  quality almost like hold music on a phone call", against Edge on the same service sounding
      *  "like proper musical audio and in stereo". Chromium infers both from the payload; Apple
      *  signals nothing it was not told. */
-    bool aacParametricStereo() { std::lock_guard<std::mutex> lk(m_); return aacPs_; }
+    bool aacParametricStereo() { return aacPsA_.load(std::memory_order_relaxed); }
 
     /** ★ The transmitter directory (by country) and where THIS receiver is, so a TII code can be
      *  printed as a place and a distance. Either may be absent: then the codes stand alone. */
@@ -623,22 +632,51 @@ public:
      *  ★ Under the same mutex as everything else here; `json()` reads it via rx_.ensemble() and
      *    the FIC thread overwrites it on every FIG 1/0, so reading it unlocked is a data race. */
     std::string ensembleLabel() {
-        std::lock_guard<std::mutex> lk(m_);
-        return rx_.ensemble().label;
+        std::lock_guard<std::mutex> qk(qM_);   // ★ the snapshot — see publishQuality_
+        return labelSnap_;
     }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer;
                      float merDb; };   // ★ merDb: the gain loop hill-climbs on it — see vsSdrplayDabGainTick
     std::chrono::steady_clock::time_point noFibSince_{};
     uint32_t fibWatchdog_ = 0;   // ★ false locks broken by the no-FIB watchdog
+    std::mutex  qM_;                                  // ★ the snapshot's own lock — see quality()
+    Quality     qSnap_{ false, 0.0f, 0.0f, 0.0, 0.0f };
+    std::string labelSnap_;
+    /** ★★★ A SNAPSHOT, NEVER THE DECODER'S LOCK (2026-09-18, a Raspberry Pi 2).
+     *  This took m_ — and the worker holds m_ for the whole of every frame's decode, ~80 ms on a
+     *  900 MHz Cortex-A7. The shim's gain and acquisition logic calls quality() from vibe-dsp on
+     *  every spectrum frame, at several call sites, so vibe-dsp queued behind decode after decode:
+     *  more than the IQ queue's 256 ms of slack, and "IQ overrun — dropping a buffer" with vibe-dsp
+     *  only 23 % busy and asleep on a futex. The worker now publishes these figures after each
+     *  frame (publishQuality_) under qM_, a lock held for a struct copy. */
     Quality quality() {
-        std::lock_guard<std::mutex> lk(m_);
+        std::lock_guard<std::mutex> qk(qM_);
+        return qSnap_;
+    }
+    /** Called by the worker with m_ held, after anything that changes the receiver's state. */
+    void publishQuality_() {
         const DabStats& s = rx_.stats();
-        return { s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer, s.merDb };
+        const Quality q{ s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer, s.merDb };
+        std::string label = rx_.ensemble().label;
+        std::lock_guard<std::mutex> qk(qM_);
+        qSnap_ = q; labelSnap_.swap(label);
     }
 
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {
         std::lock_guard<std::mutex> lk(m_);
+        return jsonLocked_();
+    }
+    /** ★ The same, but never WAITS for the decoder: false if the worker holds m_ right now. For
+     *  vibe-dsp, which must not sit behind a frame's decode — the caller simply tries again on its
+     *  next block, a few ms later (the worker lets go of m_ between frames). */
+    bool jsonTry(std::string& out) {
+        std::unique_lock<std::mutex> lk(m_, std::try_to_lock);
+        if (!lk.owns_lock()) return false;
+        out = jsonLocked_();
+        return true;
+    }
+    std::string jsonLocked_() {
         const Ensemble& e = rx_.ensemble();
         const DabStats& s = rx_.stats();
         std::string j = "{\"type\":\"dab\"";
@@ -1748,6 +1786,10 @@ private:
         aacCoreCh_  = s.stereo ? 2 : 1;
         aacOutCh_   = (s.stereo || s.ps) ? 2 : 1;
         aacPs_      = s.ps;      // ★ mono core, stereo out — the decoder must be TOLD, see below
+        aacCoreRateA_.store(afmt_.coreRateHz, std::memory_order_relaxed);
+        aacCoreChA_.store(aacCoreCh_, std::memory_order_relaxed);
+        aacOutChA_.store(aacOutCh_, std::memory_order_relaxed);
+        aacPsA_.store(aacPs_, std::memory_order_relaxed);
         /* ★★★ DECODE HERE IF THE SERVER'S OS CAN, AND ONLY PUT ADTS ON THE WIRE IF IT CANNOT.
          *  ★★★ THIS IS WHAT MAKES DAB+ EXACTLY WHAT MP2 ALREADY IS. Decoded here, it goes out as
          *      PCM through the ordinary audio path — Opus or uncompressed, whatever the listener
@@ -1897,10 +1939,10 @@ private:
                  *  a server whose decoder dies mid-programme degrades to the old behaviour rather
                  *  than to silence. */
             }
-            adts_.push_back(std::move(pkt));
+            { std::lock_guard<std::mutex> ak(adtsM_); adts_.push_back(std::move(pkt)); }
         }
         // ★ Bounded like the PCM: audio minutes late is worse than a gap.
-        while (adts_.size() > 250) adts_.pop_front();
+        { std::lock_guard<std::mutex> ak(adtsM_); while (adts_.size() > 250) adts_.pop_front(); }
     }
 
     static std::string esc(const std::string& s) {
@@ -1921,7 +1963,8 @@ private:
      *    frame rather than dropping all five, or a stream that starts mid-super-frame never
      *    aligns at all. */
     std::deque<std::vector<uint8_t>> sf_;      ///< the five-frame window
-    std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, for a server with no decoder
+    std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, for a server with no decoder — under adtsM_
+    std::mutex adtsM_;                         ///< adts_ only; a leaf, never held with anything else taken after it
     AacDecoder aac_;                           ///< the PLATFORM's decoder — we ship none
     uint32_t   aacDecoded_ = 0;
     uint32_t   aacPcmPerAu_ = 0;
@@ -2145,6 +2188,8 @@ private:
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
     bool aacPs_     = false;                   ///< parametric stereo: mono core, stereo output
+    std::atomic<int>  aacCoreRateA_{0}, aacCoreChA_{2}, aacOutChA_{2};   ///< mirrors, for vibe-dsp
+    std::atomic<bool> aacPsA_{false};
 
     /** ★ The first half of a 24 kHz Layer II frame, waiting for its second. See drainAudio(). */
     std::vector<uint8_t>    lsfPend_;
