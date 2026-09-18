@@ -708,7 +708,18 @@ public:
         n_ = std::max(3, taps | 1);              // odd, so there is a true centre
         w_.assign((size_t)n_, cf32{0.0f, 0.0f});
         w_[(size_t)(n_ / 2)] = cf32{1.0f, 0.0f}; // pass-through until it learns otherwise
-        hist_.assign((size_t)n_, cf32{0.0f, 0.0f});
+        /* ★★★ THE HISTORY IS STORED TWICE, SO THE TAP LOOPS NEVER TAKE A MODULO (2026-09-18).
+         *  This used to be a ring indexed `(pos_ - k + 2n) % n_` INSIDE both per-tap loops — two
+         *  integer divides per tap per channel sample. On AArch64 and x86 that is one instruction
+         *  and nobody noticed; on a 32-bit ARMv7 build (`-march=armv7-a` assumes no divider) each
+         *  one is a call into libgcc. `perf` on a Pi 2, WFM: __divsi3 + __aeabi_idivmod = 24 % of
+         *  vibe-demod the moment the CEQ engaged — "clean for a minute, then it stutters", cured
+         *  for another minute by anything that rebuilt the chain (Stuart toggling de-emphasis).
+         *  ★ Each sample is written at p and p + n with p counting DOWN, so the last n samples are
+         *    always hist_[p .. p+n-1], newest first — exactly the old u_k, read in a straight line.
+         *    Same arithmetic in the same order: the output is bit-identical (checked against the
+         *    old code on a million random samples). */
+        hist_.assign((size_t)n_ * 2, cf32{0.0f, 0.0f});
         pos_ = 0;
         p_ = 0.0f; pSeeded_ = false;             // the level is re-learned, never assumed
     }
@@ -718,11 +729,14 @@ public:
     void process(cf32* z, int n, float mu) {
         if (w_.empty() || n <= 0) return;
         for (int i = 0; i < n; ++i) {
+            pos_ = (pos_ == 0) ? n_ - 1 : pos_ - 1;
             hist_[(size_t)pos_] = z[i];
+            hist_[(size_t)(pos_ + n_)] = z[i];
+            const cf32* hp = hist_.data() + pos_;     // hp[k] = the sample k steps ago
             // y = w . history (most recent first)
             cf32 y{0.0f, 0.0f};
             for (int k = 0; k < n_; ++k) {
-                const cf32& u = hist_[(size_t)((pos_ - k + n_ * 2) % n_)];
+                const cf32& u = hp[k];
                 y = cf32{ y.real() + w_[(size_t)k].real() * u.real() - w_[(size_t)k].imag() * u.imag(),
                           y.imag() + w_[(size_t)k].real() * u.imag() + w_[(size_t)k].imag() * u.real() };
             }
@@ -759,7 +773,7 @@ public:
             const float e = p - p_;
             const float g = mu * e / (p_ * p_ + 1.0e-20f);
             for (int k = 0; k < n_; ++k) {
-                const cf32& u = hist_[(size_t)((pos_ - k + n_ * 2) % n_)];
+                const cf32& u = hp[k];
                 // w -= mu * e * y * conj(u)
                 const cf32 yu{ y.real() * u.real() + y.imag() * u.imag(),
                                y.imag() * u.real() - y.real() * u.imag() };
@@ -767,7 +781,6 @@ public:
                                       w_[(size_t)k].imag() - g * yu.imag() };
             }
             z[i] = y;
-            pos_ = (pos_ + 1) % n_;
         }
         // ★★★ RUNAWAY GUARD. CMA is an unconstrained gradient descent: on a signal it cannot fix
         //     it will keep growing the taps, and a diverged equaliser is far worse than none —
