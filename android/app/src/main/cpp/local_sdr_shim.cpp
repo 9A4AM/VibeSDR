@@ -7876,6 +7876,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (lo < loValid) lo = loValid;      // partly outside: peak-hold the REAL part only
                 if (hi > hiValid) hi = hiValid;
                 float best = -1e9f;
+                if (step < 1.0) {
+                    /* ★ ZOOMED PAST THE FFT'S OWN RESOLUTION: several output bins used to copy ONE
+                     *  source bin — a staircase at the deepest zooms ("really blocky", Stuart,
+                     *  2026-09-18). Interpolate between the two neighbours instead. It invents no
+                     *  resolution (the Zoom spectrum setting does that, with a second FFT), but a
+                     *  smooth curve between real points is what the eye expects, and it costs one
+                     *  multiply per bin. */
+                    const double c = center;
+                    const int i0 = (int)std::floor(c);
+                    const double f = c - (double)i0;
+                    const float a = srcAt(std::max(loValid, std::min(hiValid - 1, i0)));
+                    const float b = srcAt(std::max(loValid, std::min(hiValid - 1, i0 + 1)));
+                    best = (float)(a + (b - a) * f);
+                } else
                 for (int s = lo; s < hi; s++) {
                     float val = srcAt(s);                   // averaged dB, over this listener's frames
                     if (val > best) best = val;             // peak-hold
