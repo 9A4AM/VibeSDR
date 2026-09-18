@@ -10,10 +10,11 @@
  *   goBack()                     — "Stop & back" / "Cancel": back to a fresh setup form (remount).
  *   navigate('InstancePicker')   — "keep serving and browse": there is no client here, so the app
  *                                   steps into the background and the server carries on.
- *   replace('RtlTcpServer')      — rtl_tcp serving is not in Lite yet; say so rather than do nothing.
+ * ★ Lite is a VibeServer-ONLY build: `vibeServerOnly` removes the protocol picker from the screen,
+ *   so its rtl_tcp branch (navigation.replace) is unreachable and needs no destination.
  */
 import React, { useMemo, useState } from 'react';
-import { AppRegistry, Alert, BackHandler, StatusBar } from 'react-native';
+import { AppRegistry, BackHandler, StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ServerModeScreen from '../../src/screens/ServerModeScreen';
 
@@ -22,8 +23,7 @@ function Lite() {
   const navigation = useMemo(() => ({
     goBack: () => setMount((n) => n + 1),
     navigate: () => BackHandler.exitApp(),
-    replace: () => Alert.alert('Not in VibeServer Lite yet',
-      'Serving raw rtl_tcp is not part of this build. Choose VibeServer to share this radio.'),
+    replace: () => {},
     addListener: () => () => {},
     setOptions: () => {},
     isFocused: () => true,
@@ -31,7 +31,7 @@ function Lite() {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
-      <ServerModeScreen key={mount} navigation={navigation} route={{ key: 'ServerMode', name: 'ServerMode', params: undefined }} />
+      <ServerModeScreen key={mount} navigation={navigation} route={{ key: 'ServerMode', name: 'ServerMode', params: { vibeServerOnly: true } }} />
     </SafeAreaProvider>
   );
 }

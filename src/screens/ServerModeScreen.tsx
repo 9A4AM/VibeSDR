@@ -148,6 +148,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const { colors: C, font: F } = themeFor();
 
   const [proto, setProto]         = useState<Proto>('vibeserver');
+  /* ★ VibeServer Lite mounts THIS screen (lite/app/index.js) and is a VibeServer-only build —
+   *  Stuart, 2026-09-18: "rtl-tcp can be fully removed". AGENTS.md: a control that cannot work is
+   *  removed, not left inert, so with this param the protocol picker is absent and a saved
+   *  'rtltcp' is never restored. The main app never passes it; nothing changes here for it. */
+  const vibeServerOnly = !!(route.params as any)?.vibeServerOnly;
   const [name, setName]           = useState(route.params?.name ?? 'VibeSDR');
   const [advertise, setAdvertise] = useState(true);
   const [pinMode, setPinMode]     = useState<PinMode>('random');
@@ -491,7 +496,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
           AsyncStorage.getItem(K.biasT),
         ]);
-        if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
+        if (!vibeServerOnly && (p === 'rtltcp' || p === 'vibeserver')) setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
         if (apw != null) setAdminPw(apw);
@@ -1414,7 +1419,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           {`Share this phone's ${radio?.model ?? 'SDR'} over your network.`}
         </Text>
 
-        {/* Protocol picker */}
+        {/* Protocol picker — absent in a VibeServer-only build (see vibeServerOnly) */}
+        {vibeServerOnly ? null : (<>
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PROTOCOL</Text>
         {/* ★★★ PERSISTED THE MOMENT IT IS CHOSEN, not only when the server starts.
              Every other setting on this screen is written by start()'s multiSet, which means a
@@ -1437,6 +1443,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           onPress={() => { setProto('rtltcp'); void AsyncStorage.setItem(K.proto, 'rtltcp'); }}
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
+        </>)}
 
         {/* ★★ "LOCAL NAME", not "advertised name" — it names this server ON THIS NETWORK, and
             the .local address is derived from it. It was renamed when public listing arrived
