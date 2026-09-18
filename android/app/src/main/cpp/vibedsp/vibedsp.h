@@ -13,6 +13,9 @@
 //   Phase 5  RDS (redsea)
 #pragma once
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
@@ -1952,6 +1955,36 @@ public:
      *  span AT OR ABOVE what was asked for. A caller that assumes otherwise draws the scale wrong. */
     double zoomSpanHz() const { return zoomSpanOut_.load(std::memory_order_relaxed); }
     void stop();
+    ~RxPipeline();
+    /** ★★★ THE SPECTRUM FFT ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
+     *  `perf` on a Cortex-A7 put the wide FFT + dB conversion at ~11 % of vibe-dsp, the thread that
+     *  also makes the audio, while two of four cores sat idle and the audio surged. With this on,
+     *  the DSP thread still gathers the window and still CALLS cb.spectrum — so everything a host
+     *  does in that callback (a VibeServer runs its whole AGC there) stays on the thread it was
+     *  written for. Only the arithmetic moves: the window is copied (8 KB) to a worker, and the
+     *  finished frame is delivered on the NEXT feed(), a few tens of ms later.
+     *  ★★ The spectrum is lossy-tolerant and the audio is not: a frame that arrives while the
+     *     worker is still busy is DROPPED, never waited for.
+     *  ★ Also seeded by VIBE_SPEC_THREAD=1 at start(), so a bench can try it with no host change.
+     *    Call from the thread that calls start()/feed(), or before either. */
+    void setSpectrumThread(bool on) { specThreadWant_ = on; }
+    unsigned spectrumFramesDropped() const { return specDropped_.load(std::memory_order_relaxed); }
+    /** ★★★ THE DEMODULATOR ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
+     *  `perf` on a Cortex-A7 (Pi 2 = Fire 7's core): WFM stereo pinned vibe-dsp at 99.9 % with two
+     *  cores idle, and the audio surged. feed() is cut at the channel buffer: the NCO and the
+     *  decimators (and the spectrum) stay on the caller's thread, everything after — IF filter,
+     *  blanker, CEQ, demod, stereo, RDS, audio filters, resampler AND every callback they make,
+     *  cb.audio included — runs on vibe-demod. Two stages, two cores.
+     *  ★★ The callbacks move with it, so a host must not assume cb.audio and cb.spectrum share a
+     *     thread. A VibeServer never did: its shared-dial listeners already ran their audio on
+     *     their own threads.
+     *  ★ Any tune/rebuild request drains the worker first — see the top of feed().
+     *  ★ Also seeded by VIBE_DEMOD_THREAD=1 (or VIBE_DSP_THREADS=1 for every split) at start(). */
+    void setDemodThread(bool on) { demodThreadWant_ = on; }
+    unsigned demodQueueWaits() const { return demodWaits_.load(std::memory_order_relaxed); }
+    /** Run first on every worker thread this class starts (name + priority are the HOST's business:
+     *  a VibeServer raises them as it does vibe-dsp). Set once, before any start(). */
+    static std::function<void(const char*)>& workerInit();
     int outRate() const { return outRate_; }
     // WFM: force mono (off) vs allow stereo (on, default). When on, the L-R is
     // blended in by pilot-lock confidence so weak/edge signals fade smoothly
@@ -2016,6 +2049,20 @@ public:
      * ★ Applied live in feed() instead, on the DSP thread that owns the decoder.
      */
     void setRdsNoiseCorrection(bool on) { rdsNoiseCorr_ = on; rdsNoiseCorrReq_.store(true); }
+    /** ★★★ THE SCOPE AND THE DEVIATION METER RUN ONLY WHILE SOMEBODY IS LOOKING (2026-09-18).
+     *  Everything the extended-RDS block produces — the three-band eye, the MPX deviation figures,
+     *  the MPX spectrum — leaves through cb.rdsExt and nowhere else, and a VibeServer's callback
+     *  DROPS it unless a listener has Advanced RDS open. But the pipeline ran it regardless, on
+     *  every MPX sample: three high-pass poles, six eye resonators and six deviation biquads, each
+     *  with its NaN guard. `perf` on a Pi 2 (Cortex-A7, the Fire 7's core) put that at ~16 % of
+     *  vibe-dsp for EVERY WFM listener — the difference between clean audio and a surging one
+     *  there, and Stuart's "FM stereo went from 60 % to 80 % on the XCover".
+     *  ★★ A POINTER TO THE HOST'S OWN FLAG, not a setter to remember: a server has one main
+     *     pipeline and one per shared-dial listener, built and rebuilt at different times, and a
+     *     copied boolean would need every one of them told on every change. Read each block.
+     *  ★ nullptr (the default) means WANTED — a host that never calls this, the phone's local
+     *    path included, behaves exactly as before. */
+    void setRdsExtWantedFlag(const std::atomic<bool>* f) { rdsExtWantedFlag_ = f; }
 
     /** ★★ DROP STALE STATE AFTER A BREAK IN THE SAMPLE STREAM.
      *
@@ -2155,6 +2202,36 @@ private:
     // spectrum
     std::unique_ptr<ComplexFFT> cfft_;
     std::vector<float> win_, specBuf_, specDb_;
+    // ── the optional spectrum worker — see setSpectrumThread ──
+    bool specThreadWant_ = false;            // asked for (or VIBE_SPEC_THREAD=1)
+    bool specThreadOn_   = false;            // running; while true ONLY the worker touches cfft_
+    std::thread specThread_;
+    std::mutex  specM_;
+    std::condition_variable specCv_;
+    std::vector<cf32>  specWork_;            // the window in flight — the worker's while specBusy_
+    std::vector<float> specDone_;            // its result — the DSP thread's once specReady_
+    int   specWorkN_ = 0;
+    bool  specBusy_ = false, specReady_ = false, specStop_ = false;
+    std::atomic<unsigned> specDropped_{0};
+    void startSpecThread_();
+    void stopSpecThread_();
+    // ── the optional demod worker — see setDemodThread ──
+    static constexpr int kDemodQ = 4;        // channel blocks in flight
+    bool demodThreadWant_ = false, demodOn_ = false;
+    std::thread demodThread_;
+    std::mutex  demodM_;
+    std::condition_variable demodCv_, demodIdleCv_;
+    std::vector<cf32> demodQ_[kDemodQ];
+    int  demodQn_[kDemodQ] = {};
+    std::vector<cf32> demodIn_;              // the worker's channel buffer for the block in hand
+    int  demodHead_ = 0, demodCount_ = 0;
+    bool demodBusy_ = false, demodStop_ = false;
+    std::atomic<unsigned> demodWaits_{0};
+    void startDemodThread_();
+    void stopDemodThread_();
+    void flushDemod_();
+    void enqueueDemod_(const cf32* ch, int nc);
+    void demodTail_(std::vector<cf32>& chB, int nc);
     int specFill_ = 0;          // samples gathered toward the next frame
     // ── Overlapping spectrum window ────────────────────────────────────────
     // ★★★ WHY THIS IS A RING AND NOT A GATHER. Disjoint blocks cap the frame rate at
@@ -2546,6 +2623,7 @@ private:
     bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
     bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     std::atomic<bool>   rdsNoiseCorr_{false};  // guard-band deviation correction only
+    const std::atomic<bool>* rdsExtWantedFlag_ = nullptr;   // see setRdsExtWantedFlag — nullptr = wanted
     std::atomic<bool>   rdsNoiseCorrReq_{false};  // apply it in feed(), without a rebuild
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()

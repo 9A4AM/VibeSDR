@@ -6349,6 +6349,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             c->chanRate = sampleRate * (double)want / (double)fftSize;
             c->slice.assign((size_t)want, cf32{0.0f, 0.0f});
             c->rx.reset(new vibedsp::RxPipeline());
+            c->rx->setRdsExtWantedFlag(&rdsxOn);   // the scope runs only while Advanced RDS is open somewhere
             vibedsp::RxPipeline::Callbacks cb{};
             cb.ctx = c;
             cb.audio = &Impl::clientAudioCb;
@@ -10590,6 +10591,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.rdsBer   = &Impl::rdsBerCb;
         cb.rdsSig   = &Impl::rdsSigCb;
         cb.rdsExt   = &Impl::rdsExtCb;
+        rx.setRdsExtWantedFlag(&rdsxOn);       // ★ the eye + deviation block costs ~16 % of vibe-dsp on a Cortex-A7 — only while somebody has Advanced RDS open
+        // ★ The pipeline's optional worker threads (spectrum, demod — VIBE_DSP_THREADS=1) are real-time
+        //   work like vibe-dsp itself, so they get its name-and-priority treatment, not the default.
+        vibedsp::RxPipeline::workerInit() = [](const char* name) { vibeAudioThread(name); };
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;

@@ -1,5 +1,8 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
 #include "vibedsp.h"
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -50,6 +53,8 @@ void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
     cb_         = cb;
 
     // Spectrum: window + FFT, one frame every (sampleRate/fftRate) input samples.
+    stopSpecThread_();                       // ★ it owns cfft_ while it runs — never replace it underneath
+    stopDemodThread_();                      // ★ and this one owns the demod chain rebuildAudio() replaces
     cfft_ = std::make_unique<ComplexFFT>(fftSize_);
     win_.resize(fftSize_);
     nuttallWindow(win_.data(), fftSize_);
@@ -61,6 +66,110 @@ void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
 
     dirty_ = true;
     rebuildAudio();
+    if (const char* e = std::getenv("VIBE_SPEC_THREAD")) if (e[0] == '1') specThreadWant_ = true;
+    if (const char* e = std::getenv("VIBE_DEMOD_THREAD")) if (e[0] == '1') demodThreadWant_ = true;
+    if (const char* e = std::getenv("VIBE_DSP_THREADS")) if (e[0] == '1') specThreadWant_ = demodThreadWant_ = true;
+    if (specThreadWant_ && cb_.spectrum) startSpecThread_();
+    if (demodThreadWant_ && cb_.audio) startDemodThread_();
+}
+
+std::function<void(const char*)>& RxPipeline::workerInit() {
+    static std::function<void(const char*)> f;
+    return f;
+}
+
+void RxPipeline::startDemodThread_() {
+    if (demodOn_) return;
+    demodHead_ = demodCount_ = 0; demodBusy_ = demodStop_ = false;
+    demodOn_ = true;
+    demodThread_ = std::thread([this] {
+        if (workerInit()) workerInit()("vibe-demod");
+#if defined(__linux__)
+        else pthread_setname_np(pthread_self(), "vibe-demod");
+#endif
+        std::unique_lock<std::mutex> lk(demodM_);
+        for (;;) {
+            demodCv_.wait(lk, [this] { return demodCount_ > 0 || demodStop_; });
+            if (demodCount_ == 0) return;                   // stopping, nothing left
+            // ★ The head slot is never the one the DSP thread writes (that is head+count), so
+            //   swapping it out under the lock is safe and costs no copy.
+            demodIn_.swap(demodQ_[demodHead_]);
+            const int nc = demodQn_[demodHead_];
+            demodBusy_ = true;
+            lk.unlock();
+            demodTail_(demodIn_, nc);
+            lk.lock();
+            demodBusy_ = false;
+            demodHead_ = (demodHead_ + 1) % kDemodQ;
+            --demodCount_;
+            demodIdleCv_.notify_all();
+        }
+    });
+}
+
+void RxPipeline::enqueueDemod_(const cf32* ch, int nc) {
+    std::unique_lock<std::mutex> lk(demodM_);
+    if (demodCount_ >= kDemodQ) {
+        demodWaits_.fetch_add(1, std::memory_order_relaxed);
+        demodIdleCv_.wait(lk, [this] { return demodCount_ < kDemodQ; });
+    }
+    const int slot = (demodHead_ + demodCount_) % kDemodQ;
+    demodQ_[slot].assign(ch, ch + nc);
+    demodQn_[slot] = nc;
+    ++demodCount_;
+    lk.unlock();
+    demodCv_.notify_one();
+}
+
+void RxPipeline::flushDemod_() {
+    if (!demodOn_) return;
+    std::unique_lock<std::mutex> lk(demodM_);
+    demodIdleCv_.wait(lk, [this] { return demodCount_ == 0 && !demodBusy_; });
+}
+
+void RxPipeline::stopDemodThread_() {
+    if (!demodOn_) return;
+    flushDemod_();
+    { std::lock_guard<std::mutex> lk(demodM_); demodStop_ = true; }
+    demodCv_.notify_all();
+    if (demodThread_.joinable()) demodThread_.join();
+    demodOn_ = false;
+}
+
+RxPipeline::~RxPipeline() { stopDemodThread_(); stopSpecThread_(); }
+
+void RxPipeline::startSpecThread_() {
+    if (specThreadOn_) return;
+    specWork_.assign((size_t)fftSize_, cf32{0.0f, 0.0f});
+    specDone_.assign((size_t)fftSize_, 0.0f);
+    specWorkN_ = fftSize_;
+    specBusy_ = specReady_ = specStop_ = false;
+    specThreadOn_ = true;
+    specThread_ = std::thread([this] {
+        if (workerInit()) workerInit()("vibe-spec");
+#if defined(__linux__)
+        else pthread_setname_np(pthread_self(), "vibe-spec");
+#endif
+        std::unique_lock<std::mutex> lk(specM_);
+        for (;;) {
+            specCv_.wait(lk, [this] { return specBusy_ || specStop_; });
+            if (specStop_) return;
+            lk.unlock();
+            // ★ Outside the lock: the window and cfft_ are this thread's alone while specBusy_.
+            const float scale = 1.0f / (float)((double)specWorkN_ * (double)specWorkN_);
+            cfft_->powerDbShifted(specWork_.data(), win_.data(), specDone_.data(), scale);
+            lk.lock();
+            specBusy_ = false; specReady_ = true;
+        }
+    });
+}
+
+void RxPipeline::stopSpecThread_() {
+    if (!specThreadOn_) return;
+    { std::lock_guard<std::mutex> lk(specM_); specStop_ = true; }
+    specCv_.notify_all();
+    if (specThread_.joinable()) specThread_.join();
+    specThreadOn_ = false; specBusy_ = specReady_ = false;
 }
 
 // ── The AM chain-width ladder ────────────────────────────────────────────────
@@ -597,6 +706,15 @@ void RxPipeline::rebuildAudio() {
 }
 
 void RxPipeline::feed(const cf32* iq, int n) {
+    // ★ Every request below rebuilds or re-seeds state the demod worker owns. Let it finish the
+    //   blocks it has first, so the code below stays single-threaded exactly as it was written.
+    //   A retune is rare; one block of waiting for it is nothing.
+    if (demodOn_ && (dirty_ || resetReq_.load(std::memory_order_relaxed)
+                     || rdsNoiseCorrReq_.load(std::memory_order_relaxed)
+                     || rdsResyncReq_.load(std::memory_order_relaxed)
+                     || bwReq_.load(std::memory_order_relaxed)
+                     || tuneReq_.load(std::memory_order_relaxed)))
+        flushDemod_();
     // ★★ A GAP IN THE STREAM INVALIDATES EVERY RECURSIVE STATE. Honoured HERE because
     // this is the thread that owns them (see requestReset). The RDS decoder is the one
     // that mattered in the field: its timing hypotheses kept their scores across an
@@ -698,6 +816,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
         }
         cf32* ring = reinterpret_cast<cf32*>(specRing_.data());
         cf32* sb   = reinterpret_cast<cf32*>(specBuf_.data());
+        // ★ A frame the worker finished since the last block is delivered HERE, on the DSP thread —
+        //   the callback never runs anywhere else. See setSpectrumThread.
+        if (specThreadOn_) {
+            bool have = false;
+            { std::lock_guard<std::mutex> lk(specM_); if (specReady_) { specDb_.swap(specDone_); specReady_ = false; have = true; } }
+            if (have) cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
+        }
         const long long stride = std::max(1, specStride_.load(std::memory_order_relaxed));
         /* ★ BLOCK COPIES, NOT A PER-SAMPLE LOOP (2026-09-16). This walked every IQ sample of
          *  every mode with four counters and two branches each — 3 % of a Pi 3's WFM budget for
@@ -729,6 +854,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const int tail = fftSize_ - specRingW_;
             std::memcpy(sb,        ring + specRingW_, (size_t)tail       * sizeof(cf32));
             std::memcpy(sb + tail, ring,              (size_t)specRingW_ * sizeof(cf32));
+            if (specThreadOn_) {
+                bool taken = false;
+                {
+                    std::lock_guard<std::mutex> lk(specM_);
+                    if (!specBusy_ && !specReady_ && specWorkN_ == fftSize_) {
+                        std::memcpy(specWork_.data(), sb, (size_t)fftSize_ * sizeof(cf32));
+                        specBusy_ = true; taken = true;
+                    }
+                }
+                if (taken) specCv_.notify_one();
+                else specDropped_.fetch_add(1, std::memory_order_relaxed);   // busy: drop, never wait
+                continue;
+            }
             const float scale = 1.0f / (float)(fftSize_ * fftSize_);
             cfft_->powerDbShifted(sb, win_.data(), specDb_.data(), scale);
             cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
@@ -783,7 +921,6 @@ void RxPipeline::feed(const cf32* iq, int n) {
 
     // ── Audio (DDC -> demod -> resample) ─────────────────────────────────────
     if (cb_.audio) {
-        faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
         baseBuf_.resize(n);
         nco_.mix(iq, baseBuf_.data(), n);
 
@@ -803,13 +940,27 @@ void RxPipeline::feed(const cf32* iq, int n) {
             chBuf_.assign(src, src + nc);
         }
         // ★ RAW IQ OUT tap — the channel as it stands, before the demod touches anything.
-        if (cb_.iq && nc > 0) cb_.iq(cb_.ctx, chBuf_.data(), nc, chFs_);
+        // ★ THE CUT (setDemodThread): everything above is the DSP thread's, everything below may run
+        //   on vibe-demod. The channel block is handed over whole; a full queue is WAITED for, never
+        //   dropped — a hole in the channel is a click, and a late block is only a late block.
+        if (demodOn_) { enqueueDemod_(chBuf_.data(), nc); return; }
+        demodTail_(chBuf_, nc);
+    }
+}
+
+/** ★ The second half of the audio path: channel IQ in, audio (and every RDS/stereo/meter callback)
+ *  out. On the DSP thread by default; on vibe-demod with setDemodThread. `chB` is the channel buffer
+ *  it owns for this call — the DSP thread keeps writing its own chBuf_ meanwhile. */
+void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
+    {
+        faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
+        if (cb_.iq && nc > 0) cb_.iq(cb_.ctx, chB.data(), nc, chFs_);
 
         demodBuf_.resize(nc);
         // ★★★ MEASURED ON THE IQ, BEFORE DEMODULATION — this is the ONLY place the information
         //     exists. The FM demodulator throws amplitude away by design (that is what makes FM
         //     immune to AM noise), so after this line the envelope wobble that reveals multipath
-        //     is simply gone. Read-only; chBuf_ is untouched.
+        //     is simply gone. Read-only; chB is untouched.
         // ★ The adaptive IF sits BEFORE the multipath meter and the demod, because it is part of
         //   the receiver, not part of the measurement — everything downstream should see the
         //   signal as filtered, exactly as it would with a narrower crystal filter.
@@ -818,7 +969,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //     would be steering by its own output — the feedback trap this whole design is built to
         //     avoid ("a probe is part of the system it measures").
         if (mode_ == Mode::WFM && shadowTick_ + 1 >= 4) {
-            shadowBuf_.assign(chBuf_.begin(), chBuf_.begin() + nc);
+            shadowBuf_.assign(chB.begin(), chB.begin() + nc);
         }
         if (mode_ == Mode::WFM) {
             // ★★★ THE NARROWER OF THE TWO REQUESTS — see setAutoBandwidth for why there are two.
@@ -829,7 +980,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const double want = (imsWant > 0.0 && autoWant > 0.0) ? std::min(imsWant, autoWant)
                               : (imsWant > 0.0 ? imsWant : autoWant);
             if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
-            adaptIf_.process(chBuf_.data(), nc);
+            adaptIf_.process(chB.data(), nc);
         }
         // ── NOISE BLANKER ────────────────────────────────────────────────────────────────────
         // ★★★ FIRST IN THE CHAIN, because everything after it AVERAGES. The noise meters, the
@@ -850,7 +1001,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
         const bool on = (mode_ == Mode::WFM) ? nbOn_.load(std::memory_order_relaxed)
                                              : nbxOn_.load(std::memory_order_relaxed);
         if (on) {
-            nb_.process(chBuf_.data(), nc);
+            nb_.process(chB.data(), nc);
             nbRate_ += 0.1f * (nb_.rate() - nbRate_);
             if (!std::isfinite(nbRate_)) nbRate_ = 0.0f;
         } else {
@@ -859,7 +1010,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
 
         // ★ The RAW reading first — what arrived, before we touch it. It is both the trigger for
         //   the equaliser and half of its scorecard, so it must never see the equaliser's output.
-        if (mode_ == Mode::WFM) multipath_.process(chBuf_.data(), nc);
+        if (mode_ == Mode::WFM) multipath_.process(chB.data(), nc);
 
         // ── CEQ ──────────────────────────────────────────────────────────────────────────────
         // ★★★ GATED ON A GOOD SIGNAL WITH REAL MULTIPATH, because those are the only conditions in
@@ -927,9 +1078,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
             if (ceqEngaged_) {
                 // ★ A small step size. This runs at the channel rate, and a fast CMA on anything
                 //   less than a clean signal is exactly how the algorithm goes wrong.
-                ceq_.process(chBuf_.data(), nc, 2.0e-4f);
+                ceq_.process(chB.data(), nc, 2.0e-4f);
                 ceqEffort_ = ceq_.effort();
-                ceqOut_.process(chBuf_.data(), nc);   // ...and score ourselves on the result
+                ceqOut_.process(chB.data(), nc);   // ...and score ourselves on the result
             } else {
                 ceqEffort_ = 0.0f;
                 ceqOut_.reset();
@@ -1039,9 +1190,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const float need = multipathValid_ ? 10.0f : 13.0f;
             multipathValid_ = snrValid_ && multipath_.plausible() && (blendSnrDb_ > need);
         } else { multipathCorr_ = 0.0f; multipathValid_ = false; }
-        if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
-        else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
-        else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
+        if (am_)       am_->process(chB.data(), demodBuf_.data(), nc);
+        else if (fm_)  fm_->process(chB.data(), demodBuf_.data(), nc);
+        else if (ssb_) ssb_->process(chB.data(), demodBuf_.data(), nc);
         trace_("demod", demodBuf_.data(), nc);
 
         // ★★★ Strip the discriminator's DC before ANYTHING downstream sees it. That DC is
@@ -1171,10 +1322,12 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //     is aligned by construction. bitClk = (cycle*2pi + phase)/16, so multiplying
             //     back by 16 recovers a phase that runs continuously across cycles — no extra
             //     per-sample work in the PLL loop, which is the hottest loop in WFM.
+            // ★ Nobody reading the scope ⇒ none of it runs — see setRdsExtWantedFlag.
+            const bool rdsExtWanted = !rdsExtWantedFlag_ || rdsExtWantedFlag_->load(std::memory_order_relaxed);
             // ★★ TWO CYCLES, because the cycle counter wraps at 16 and 16 is divisible by 2.
             //    Three cycles would leave one sweep in sixteen starting at the wrong phase and
             //    smear the whole picture.
-            if (wantRds && cb_.rdsExt) {
+            if (wantRds && cb_.rdsExt && rdsExtWanted) {
                 // ★★ 96 COLUMNS, FIXED. The grid was sized to the channel rate for one release
                 //    and came out at 30 columns on every radio — see the note on eyeW_ for why
                 //    the argument was wrong and what the wire measured.
@@ -1495,7 +1648,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // ★ The MPX spectrum, computed only when the Advanced RDS panel is watching.
             // demodBuf_ IS the MPX — the same buffer the stereo and RDS decoders read — so
             // this costs one FFT and no new signal path.
-            if (wantRds && cb_.rdsExt) {
+            if (wantRds && cb_.rdsExt && rdsExtWanted) {
                 if (!mpxFft_) {
                     mpxFft_ = std::make_unique<RealFFT>(kMpxFft);
                     mpxWin_.resize(kMpxFft);
@@ -1531,7 +1684,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 }
                 }
             }
-            if (wantRds && cb_.rdsExt) {
+            if (wantRds && cb_.rdsExt && rdsExtWanted) {
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
@@ -1891,6 +2044,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
 }
 
 void RxPipeline::stop() {
+    stopDemodThread_();
+    stopSpecThread_();
     cfft_.reset(); zoom_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
 }
 
