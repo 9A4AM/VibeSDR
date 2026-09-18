@@ -6,3 +6,12 @@ pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal()
 dependencyResolutionManagement { repositories { google(); mavenCentral() } }
 rootProject.name = 'VibeServerLite'
 include ':app'
+
+// ★ Stage 2: React Native 0.73 — the last line whose floor is API 21 — consumed as plain Maven
+//   AARs, with NO React Native Gradle plugin and no autolinking: that plugin wants its own Gradle,
+//   AGP and Kotlin, and Lite has exactly three libraries to link. They build from lite/app's
+//   node_modules (run `npm install` there first).
+def NM = new File(rootDir, '../app/node_modules')
+include ':async-storage';      project(':async-storage').projectDir      = new File(NM, '@react-native-async-storage/async-storage/android')
+include ':slider';             project(':slider').projectDir             = new File(NM, '@react-native-community/slider/android')
+include ':safe-area-context';  project(':safe-area-context').projectDir  = new File(NM, 'react-native-safe-area-context/android')
