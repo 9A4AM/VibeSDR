@@ -60,6 +60,8 @@
 #include <cctype>    // ★ tolower — reached transitively on the desktop toolchains, not guaranteed on the NDK's libc++
 #include <dirent.h>
 #include <deque>
+#include <net/if.h>
+#include <sys/ioctl.h>
 #include <ifaddrs.h>          // ★ raw IQ out: the machine's own LAN address for the "connect to" line
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -4008,6 +4010,33 @@ static bool isPrivateIp(const std::string& ip) {
     return false;
 }
 /** The machine's own LAN address, for the "connect your app to …" line. First non-loopback IPv4. */
+#if defined(__ANDROID__) && __ANDROID_API__ < 24
+/* ★ getifaddrs() arrived in API 24. VibeServer Lite builds at API 21 for tablets the store left
+ *  behind (a 2017 Fire 7 is Android 5.1), so below 24 the same answer comes from SIOCGIFCONF,
+ *  which is IPv4-only — and IPv4 is all this function ever returned. The main app is API 24 and
+ *  never compiles this branch. */
+static std::string primaryIpv4() {
+    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return "";
+    struct ifreq reqs[16];
+    struct ifconf conf; conf.ifc_len = sizeof reqs; conf.ifc_req = reqs;
+    std::string out;
+    if (ioctl(fd, SIOCGIFCONF, &conf) == 0) {
+        const int n = conf.ifc_len / int(sizeof(struct ifreq));
+        for (int i = 0; i < n; ++i) {
+            if (reqs[i].ifr_addr.sa_family != AF_INET) continue;
+            char buf[INET_ADDRSTRLEN] = {0};
+            const auto* sa = reinterpret_cast<const sockaddr_in*>(&reqs[i].ifr_addr);
+            if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) continue;
+            std::string a = buf;
+            if (a.rfind("127.", 0) == 0) continue;
+            if (out.empty() || a.rfind("192.168.", 0) == 0 || a.rfind("10.", 0) == 0) out = a;
+        }
+    }
+    close(fd);
+    return out;
+}
+#else
 static std::string primaryIpv4() {
     struct ifaddrs* ifa = nullptr;
     if (getifaddrs(&ifa) != 0) return "";
@@ -4024,6 +4053,7 @@ static std::string primaryIpv4() {
     freeifaddrs(ifa);
     return out;
 }
+#endif
 /** ★★★ ONE OS-RANDOM BYTE PER CHARACTER, REJECTION-SAMPLED. See vsRandomBytes for why the old
  *  clock-seeded xorshift had to go. The rejection loop matters as much as the source: `x % A` over
  *  a 256-value byte is BIASED whenever A does not divide 256 — with a 30-character alphabet the

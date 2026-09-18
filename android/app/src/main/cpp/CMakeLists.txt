@@ -128,7 +128,10 @@ add_library(vibelocalsdr SHARED
     decoders/time_decoder.cpp
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_compile_options(vibelocalsdr PRIVATE -std=c++17 -O3 -ffp-contract=fast)
+# ★ -std=c++17 on the C++ sources ONLY: the target also carries vendored C (libairspyhf, libhackrf)
+#   and a plain CMake + NDK 27 configure refuses the flag on them outright (found building the
+#   armeabi-v7a / API 21 engine for VibeServer Lite, 2026-09-18).
+target_compile_options(vibelocalsdr PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=c++17> -O3 -ffp-contract=fast)
 target_include_directories(vibelocalsdr PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
@@ -139,7 +142,9 @@ target_include_directories(vibelocalsdr PRIVATE
 # Vendored per-ABI static lib built by tools/build_opus_android.sh. VIBE_HAVE_OPUS gates the Opus
 # path in local_sdr_shim.cpp; without the lib the shim falls back to raw PCM. Fail loudly if the
 # ABI's lib is missing so a stale checkout can't silently ship the PCM fallback.
-set(OPUS_A "${CMAKE_CURRENT_SOURCE_DIR}/opus/lib/${ANDROID_ABI}/libopus.a")
+# ★ CACHE, like SDR_KIT_ROOT, so VibeServer Lite can point at its API-21 build (lite/native) without
+#   touching this one. The main app never sets it and gets exactly the path below.
+set(OPUS_A "${CMAKE_CURRENT_SOURCE_DIR}/opus/lib/${ANDROID_ABI}/libopus.a" CACHE FILEPATH "libopus static lib")
 if (NOT EXISTS "${OPUS_A}")
     message(FATAL_ERROR "libopus missing for ABI '${ANDROID_ABI}' at ${OPUS_A} — run cpp/tools/build_opus_android.sh")
 endif()
