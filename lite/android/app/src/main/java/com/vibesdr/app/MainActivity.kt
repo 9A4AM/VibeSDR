@@ -119,7 +119,16 @@ class MainActivity : Activity() {
                 val c = mgr.openDevice(dev) ?: throw IllegalStateException("openDevice returned null")
                 if (c.fileDescriptor < 0) { c.close(); throw IllegalStateException("bad file descriptor") }
                 conn = c
+                /* ★★★ LITE'S DEFAULTS ARE NOT THE MAIN APP'S — MEASURED ON THE FIRE 7, 2026-09-18.
+                 *  The first live run took the main default of 2.4 MS/s: vibe-dsp sat at 100 % of a
+                 *  core, the audio surged and the spectrum got 8-15 of its 20 fps. WFM stereo alone is
+                 *  88 % of a Cortex-A7 at 2.4 MS/s and 51 % at 1.024, and the spectrum FFT shares that
+                 *  thread. So: 1.024 MS/s, that as the listener's ceiling, 10 fps — and DAB allowed to
+                 *  raise the rate for itself, since it needs 2.048 and measured 0.62 of a core. */
                 val cfg = JSONObject().put("name", name)
+                    .put("sampleRate", 1_024_000.0).put("maxBandwidthHz", 1_024_000.0)
+                    .put("fftRate", 10.0).put("maxFftRate", 10.0)
+                    .put("dabRateBoost", true)
                 val p = VibeServerBoot.applyAndStart(cfg, c.fileDescriptor, dev.vendorId, dev.productId, filesDir)
                 if (p <= 0) { c.close(); conn = null; throw IllegalStateException("the engine did not start (see logcat)") }
                 port = p; servingName = name
