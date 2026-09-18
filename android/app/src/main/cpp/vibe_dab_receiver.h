@@ -18,8 +18,14 @@
 #pragma once
 #include <cstdlib>
 
+#include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -73,6 +79,20 @@ inline std::atomic<float>& dabEraseFrac() {
 }
 
 
+/** ★★★ THE MSC ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
+ *  Measured on a 2017 Fire 7 (4x Cortex-A7, 1.3 GHz) with the stage timers, per 96 ms frame:
+ *  sync + PRS + the 75 symbol FFTs + demapper + FIC = 53 ms, the MSC (time deinterleave, depuncture,
+ *  Viterbi, re-encode) ≈ 40 ms. 0.97 of a core on ONE thread is not real time; 0.56 + 0.42 on two of
+ *  four cores is. The hand-over is the frame's MSC soft bits, which is already a clean boundary.
+ *  ★★ It spreads the load, it does not reduce it — on a machine where DAB already fits one core
+ *     this buys headroom and nothing audible, which is why it is a switch and not the default.
+ *  ★ Seeded from VIBE_DAB_SPLIT=1; a host (the Lite APK) may store to it before the service starts. */
+inline std::atomic<bool>& dabSplitMsc() {
+    static std::atomic<bool> v{ std::getenv("VIBE_DAB_SPLIT") != nullptr
+                                && std::getenv("VIBE_DAB_SPLIT")[0] == '1' };
+    return v;
+}
+
 /** What the receiver can tell the DX panel right now. Every field is measured, never inferred. */
 struct DabStats {
     bool   locked        = false;
@@ -118,6 +138,38 @@ public:
           fft_(size_t(fftSizeFor(modeI(), sampleRateHz))) {
         fftp_ = std::make_unique<Fft>(fft_);
         prsSymbol(prs_.data());
+    }
+    ~DabReceiver() { setMscThread(false); }
+    DabReceiver(const DabReceiver&) = delete;
+    DabReceiver& operator=(const DabReceiver&) = delete;
+
+    /** ★ Run the MSC half on its own thread — see dabSplitMsc(). `init` runs first ON that thread
+     *  (name + priority; the receiver does not know the host's thread helper). Turning it off
+     *  drains what is queued and joins. Call from the thread that calls push(), or before it. */
+    void setMscThread(bool on, std::function<void()> init = {}) {
+        if (on == mscOn_) return;
+        if (on) {
+            for (auto& b : mscBuf_) b.assign(size_t(kCifBits) * size_t(kCifsPerFrameI), int8_t(0));
+            mscHead_ = mscCount_ = 0; mscBusy_ = false; mscStop_ = false;
+            mscVit_ = &viterbiMsc_;
+            mscOn_ = true;
+            mscThread_ = std::thread([this, init] { if (init) init(); mscLoop(); });
+        } else {
+            flushMsc();
+            { std::lock_guard<std::mutex> lk(mscQm_); mscStop_ = true; }
+            mscCv_.notify_all();
+            if (mscThread_.joinable()) mscThread_.join();
+            mscOn_ = false;
+            mscVit_ = &viterbi_;
+        }
+    }
+    bool mscThreaded() const { return mscOn_; }
+    /** Wait until every queued frame's MSC has been decoded. A no-op when the split is off. An
+     *  offline replay calls it before its last take; the live service never needs to. */
+    void flushMsc() {
+        if (!mscOn_) return;
+        std::unique_lock<std::mutex> lk(mscQm_);
+        mscIdleCv_.wait(lk, [this] { return mscCount_ == 0 && !mscBusy_; });
     }
 
     /** Feed a buffer of at least one frame. Returns true when a frame was decoded. */
@@ -510,9 +562,21 @@ public:
          *    24 ms, four to a Mode I frame. */
         if (frameBits.size() >= ficBits + size_t(kCifBits) * 4) {
             const int8_t* msc = frameBits.data() + ficBits;
-            for (int c = 0; c < kCifsPerFrameI; ++c) {
-                pumpService(msc + size_t(c) * size_t(kCifBits));
-                for (auto& sl : scan_) pumpSlot(sl, msc + size_t(c) * size_t(kCifBits));
+            if (mscOn_) {
+                /* ★ Hand the four CIFs over and return to the next frame's front end. The queue is
+                 *  bounded and the producer WAITS when it is full: dropping a frame here would be
+                 *  a hole in the time deinterleaver, which is sixteen frames of damage, and a
+                 *  receiver that cannot keep up is already late whichever thread is behind. */
+                std::unique_lock<std::mutex> lk(mscQm_);
+                mscIdleCv_.wait(lk, [this] { return mscCount_ < kMscQueue; });
+                std::memcpy(mscBuf_[(mscHead_ + mscCount_) % kMscQueue].data(), msc,
+                            size_t(kCifBits) * size_t(kCifsPerFrameI));
+                ++mscCount_;
+                lk.unlock();
+                mscCv_.notify_one();
+                stats_.mscBer = mscBerPub_.load(std::memory_order_relaxed);
+            } else {
+                pumpFrameMsc(msc);
             }
         }
 
@@ -578,6 +642,10 @@ public:
         SubChannel sel = sc->second;
         EepProfile prof; UepProfile uprof; int dataBits = 0, bitrate = 0, codedBits = 0;
         if (!profileFor(sel, prof, uprof, dataBits, bitrate, codedBits)) return false;
+        /* ★ With the MSC on its own thread: finish what was queued under the OLD selection first,
+         *  so a change lands between the same two frames it always did, then swap under the lock. */
+        flushMsc();
+        std::lock_guard<std::mutex> mlk(mscM_);
         sel_ = sel; selType_ = pick->scType; selSid_ = sid;
         prof_ = prof; uprof_ = uprof; dataBits_ = dataBits; bitrate_ = bitrate;
         deint_ = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
@@ -597,6 +665,8 @@ public:
     };
     /** Point slot `i` at service `sid` (or 0 to idle it). False if it cannot be decoded. */
     bool scanSelect(size_t i, uint32_t sid) {
+        flushMsc();
+        std::lock_guard<std::mutex> mlk(mscM_);
         if (scan_.size() <= i) scan_.resize(i + 1);
         ScanSlot& sl = scan_[i];
         sl = ScanSlot{};
@@ -620,6 +690,7 @@ public:
     int      scanType(size_t i) const { return i < scan_.size() ? scan_[i].type : 0; }
     std::vector<std::vector<uint8_t>> takeScanFrames(size_t i) {
         std::vector<std::vector<uint8_t>> out;
+        std::lock_guard<std::mutex> mlk(mscM_);
         if (i < scan_.size()) out.swap(scan_[i].frames);
         return out;
     }
@@ -633,13 +704,23 @@ public:
      *  anywhere. Moving them out makes that impossible to get wrong. */
     std::vector<std::vector<uint8_t>> takeAudioFrames() {
         std::vector<std::vector<uint8_t>> out;
+        std::lock_guard<std::mutex> mlk(mscM_);
         out.swap(audio_);
         return out;
+    }
+    /** ★ BOTH, IN ONE TAKE. The two vectors are parallel, and with the MSC on its own thread a
+     *  frame can land between two separate takes — the BERs would then be one short of the frames
+     *  and every later frame would be judged by its neighbour's error rate. */
+    void takeAudio(std::vector<std::vector<uint8_t>>& frames, std::vector<double>& bers) {
+        frames.clear(); bers.clear();
+        std::lock_guard<std::mutex> mlk(mscM_);
+        frames.swap(audio_); bers.swap(audioBer_);
     }
     /** The raw pre-Viterbi BER of each frame takeAudioFrames() hands over, same order and count.
      *  ★ Take it FIRST, before takeAudioFrames(), or after — but in the same pass. */
     std::vector<double> takeAudioBers() {
         std::vector<double> out;
+        std::lock_guard<std::mutex> mlk(mscM_);
         out.swap(audioBer_);
         return out;
     }
@@ -650,7 +731,16 @@ public:
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
-    void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; }   // ★ the PRS reference belongs to the old block
+    void reset() {
+        /* ★ Frames still queued for the MSC thread belong to the block being left: drop them
+         *  (the one in hand finishes), rather than decode the old multiplex into the new one. */
+        if (mscOn_) {
+            std::unique_lock<std::mutex> lk(mscQm_);
+            mscCount_ = mscBusy_ ? 1 : 0;
+            mscIdleCv_.wait(lk, [this] { return mscCount_ == 0 && !mscBusy_; });
+        }
+        { std::lock_guard<std::mutex> mlk(mscM_); mscBerEma_ = 0.0; mscBerPub_.store(0.0, std::memory_order_relaxed); }
+        sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); prsRef_ = 0.0f; untrustedRun_ = 0; }   // ★ the PRS reference belongs to the old block
     /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
      *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
     void setCentreHz(double hz) { if (hz > 1e6) centreHz_ = hz; }
@@ -696,7 +786,7 @@ private:
         std::vector<int8_t> mother(size_t(dataBits + 6) * 4, 0);
         if (uprof.valid) uepDepuncture(di.data(), coded, uprof, mother.data(), mother.size());
         else             eepDepuncture(di.data(), coded, prof,  mother.data(), mother.size());
-        std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits));
+        std::vector<uint8_t> bits = mscVit_->decode(mother.data(), size_t(dataBits));   // ★ the MSC thread's own decoder when split — the FIC keeps viterbi_
         if (err && tot) {
             const std::vector<uint8_t> enc = convEncode(bits.data(), bits.size());
             const size_t n = enc.size() < mother.size() ? enc.size() : mother.size();
@@ -743,6 +833,29 @@ private:
         }
         return bytes;
     }
+    /** One frame's four CIFs through the playing service and every scan slot. */
+    void pumpFrameMsc(const int8_t* msc) {
+        for (int c = 0; c < kCifsPerFrameI; ++c) {
+            pumpService(msc + size_t(c) * size_t(kCifBits));
+            for (auto& sl : scan_) pumpSlot(sl, msc + size_t(c) * size_t(kCifBits));
+        }
+    }
+    void mscLoop() {
+        std::unique_lock<std::mutex> lk(mscQm_);
+        for (;;) {
+            mscCv_.wait(lk, [this] { return mscCount_ > 0 || mscStop_; });
+            if (mscCount_ == 0) return;            // stopping, and nothing left
+            mscBusy_ = true;
+            const size_t at = mscHead_;            // the slot stays ours until the count drops
+            lk.unlock();
+            { std::lock_guard<std::mutex> mlk(mscM_); pumpFrameMsc(mscBuf_[at].data()); }
+            lk.lock();
+            mscHead_ = (mscHead_ + 1) % kMscQueue;
+            if (mscCount_ > 0) --mscCount_;        // reset() may already have dropped the rest
+            mscBusy_ = false;
+            mscIdleCv_.notify_all();
+        }
+    }
     void pumpSlot(ScanSlot& sl, const int8_t* cif) {
         if (!sl.sid || !sl.deint || (!sl.prof.valid && !sl.uprof.valid)) return;
         const size_t coded = size_t(sl.sel.sizeCu) * size_t(kCuBits);
@@ -767,7 +880,12 @@ private:
             /* ★ Raw bit error rate BEFORE the Viterbi, by re-encoding the decision — the margin
              *  figure: 0.1 % is comfortable, 5 % is the edge of the cliff. */
             ber = double(err) / double(tot);
-            stats_.mscBer = stats_.mscBer == 0.0 ? ber : stats_.mscBer * 0.9 + ber * 0.1;
+            /* ★ The running figure is kept HERE and published, because with the MSC on its own
+             *  thread stats_ belongs to the front end. Unsplit, it is written straight through
+             *  exactly as before. */
+            mscBerEma_ = mscBerEma_ == 0.0 ? ber : mscBerEma_ * 0.9 + ber * 0.1;
+            if (mscOn_) mscBerPub_.store(mscBerEma_, std::memory_order_relaxed);
+            else        stats_.mscBer = mscBerEma_;
         }
         audio_.push_back(std::move(bytes));
         /* ★★ THE FRAME'S OWN ERROR RATE TRAVELS WITH IT (2026-09-16). The running mscBer is a
@@ -787,6 +905,19 @@ private:
     size_t fft_;
     FreqInterleaveI fi_;
     Viterbi viterbi_;
+    // ── the optional MSC thread — see dabSplitMsc() ──
+    static constexpr size_t kMscQueue = 4;      ///< frames; ~0.4 s, 216 KB each
+    Viterbi  viterbiMsc_;                       ///< the decoder keeps state between calls: one per thread
+    Viterbi* mscVit_ = &viterbi_;
+    std::array<std::vector<int8_t>, kMscQueue> mscBuf_;
+    size_t mscHead_ = 0, mscCount_ = 0;
+    bool   mscBusy_ = false, mscStop_ = false, mscOn_ = false;
+    std::mutex mscQm_;                          ///< the queue
+    std::mutex mscM_;                           ///< the MSC's own state: selection, deinterleavers, frames out
+    std::condition_variable mscCv_, mscIdleCv_;
+    std::thread mscThread_;
+    double mscBerEma_ = 0.0;
+    std::atomic<double> mscBerPub_{0.0};
     TiiDetector tii_;
     std::vector<int8_t>  constel_;
     std::vector<uint8_t> ir_;

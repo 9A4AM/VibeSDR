@@ -15,6 +15,7 @@
 #include "vibe_dab_mp2.h"
 #include "vibe_dab_aac.h"
 #include "vibe_dab_pad.h"
+#include <chrono>
 #include "vibe_dab_aacdec.h"   // ★ the platform decoder — on a Mac, AudioToolbox — so a capture proves the whole DAB+ chain
 #include <deque>
 #include <cstdio>
@@ -39,6 +40,13 @@ int main(int argc, char** argv) {
     printf("capture: %.0f MS/s, centre %.3f MHz\n", rate, centre / 1e6);
 
     DabReceiver rx;
+    /* ★ VIBE_DAB_SPLIT=1 replays with the MSC on its own thread, as a Lite host runs it. Audio then
+     *  arrives a frame late and the last queued frames are not collected — right for TIMING.
+     *  VIBE_DAB_SPLIT_VERIFY=1 also waits for the MSC after every push, so the output must match
+     *  the unsplit run line for line: that is the proof the hand-over changes nothing. */
+    rx.setMscThread(dabSplitMsc().load());
+    const bool splitVerify = std::getenv("VIBE_DAB_SPLIT_VERIFY") != nullptr;
+    if (rx.mscThreaded()) printf("MSC on its own thread%s\n", splitVerify ? " (verify: waits each frame)" : "");
     Resample24to2048 rs;
     Mp2Decoder mp2;
     const bool needResample = (rate > 2.2e6);
@@ -79,7 +87,14 @@ int main(int argc, char** argv) {
     std::vector<int> sfBadFrame;             // DAB frame index of each failed super frame
     PadReader pad;
 
+    /* ★ VIBE_DAB_WHERE=1: where the HARNESS's time goes, so a replay is never again mistaken for
+     *  the receiver (2026-09-18: the MSC was assumed to be 40 ms a frame on a Fire 7 and is ~5). */
+    const bool where = std::getenv("VIBE_DAB_WHERE") != nullptr;
+    double tRead = 0, tResamp = 0, tPush = 0, tAudio = 0;
+    auto tNow = [] { return std::chrono::steady_clock::now(); };
+    auto tUs  = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) { return std::chrono::duration<double, std::micro>(b - a).count(); };
     while (true) {
+        const auto t0 = tNow();
         const size_t got = std::fread(raw.data(), sizeof(int16_t), raw.size(), fp);
         if (got < 2) break;
         fl.resize(got);
@@ -87,7 +102,9 @@ int main(int argc, char** argv) {
         const std::vector<float>* use = &fl;
         // ★ process() APPENDS — clear it, or the buffer grows quadratically and the harness
         //   measures a receiver fed the same samples over and over. (Cost me one run.)
+        const auto t1 = tNow(); tRead += tUs(t0, t1);
         if (needResample) { res.clear(); rs.process(fl.data(), got / 2, res); use = &res; }
+        tResamp += tUs(t1, tNow());
         acc.insert(acc.end(), use->begin(), use->end());
         /* ★ TWO frames in the window, ONE consumed — exactly as workerLoop does. The frame start
          *  may land anywhere in the first half and a whole frame must still follow it. */
@@ -96,7 +113,10 @@ int main(int argc, char** argv) {
         while (acc.size() / 2 >= need) {
             iq.resize(need);
             for (size_t i = 0; i < need; ++i) iq[i] = Cplx{ acc[2*i], acc[2*i+1] };
+            const auto tp = tNow();
             rx.push(iq.data(), need);
+            tPush += tUs(tp, tNow());
+            if (splitVerify) rx.flushMsc();
             frameStarts.push_back(rx.lastFrameStart());
             fibOkPer.push_back(rx.stats().fibsOk);
             fibTotPer.push_back(rx.stats().fibsTotal);
@@ -141,13 +161,15 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        const auto ta = tNow();
+        struct AudT { double& acc; std::chrono::steady_clock::time_point a; ~AudT() { acc += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - a).count(); } } audT{tAudio, ta};
         if (selected) {
             // ★ TAKE, do not index. audioFrames() is a VIEW of a bounded ring that is only
             //   cleared on service selection, so reading it after every push re-counts every
             //   frame still in it — 19056 "MP2 frames" out of 311 DAB frames (1244 CIFs). The
             //   live path calls takeAudioFrames(); a harness that does not is measuring itself.
-            const auto frameBers = rx.takeAudioBers();
-            const auto frameList = rx.takeAudioFrames();
+            std::vector<std::vector<uint8_t>> frameList; std::vector<double> frameBers;
+            rx.takeAudio(frameList, frameBers);
             for (size_t fi = 0; fi < frameList.size(); ++fi) {
                 const auto& f0 = frameList[fi];
                 const double thisBer = fi < frameBers.size() ? frameBers[fi] : 0.0;
@@ -254,6 +276,7 @@ int main(int argc, char** argv) {
         }
         if (csv) fclose(csv);
     }
+    if (where) printf("where (s): read+convert %.2f  resample %.2f  push %.2f  audio decode %.2f\n", tRead/1e6, tResamp/1e6, tPush/1e6, tAudio/1e6);
     printf("MP2: in %d  bad %d (%.1f%%)  out %d\n",
            mp2In, mp2Bad, mp2In ? 100.0 * mp2Bad / mp2In : 0.0, mp2Out);
     if (sfTried) {

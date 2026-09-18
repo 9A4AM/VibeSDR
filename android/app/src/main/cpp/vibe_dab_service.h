@@ -335,6 +335,9 @@ private:
          *    not: the helper was defined inside that .cpp and unreachable from this header. */
         vibeAudioThread("vibe-dab");
         std::unique_lock<std::mutex> lk(m_);
+        /* ★ Opt-in (VIBE_DAB_SPLIT=1, or the Lite host): the MSC half on a second thread, for a
+         *  machine whose single core cannot carry the whole receiver — see dabSplitMsc(). */
+        rx_.setMscThread(dabSplitMsc().load(), [] { vibeAudioThread("vibe-dab-msc"); });
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (!stop_) {
             if (iq_.size() < need) { cv_.wait(lk); continue; }
@@ -1340,8 +1343,8 @@ private:
     /** Turn whatever logical frames arrived into PCM. */
     void drainAudio() {
         // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
-        const auto bers   = rx_.takeAudioBers();
-        const auto frames = rx_.takeAudioFrames();
+        std::vector<std::vector<uint8_t>> frames; std::vector<double> bers;
+        rx_.takeAudio(frames, bers);      // ★ one take — the MSC may be on its own thread (dabSplitMsc)
         double frameBer = 0.0;                        // this MP2 frame's worst logical-frame BER
         for (size_t fi = 0; fi < frames.size(); ++fi) {
             const auto& fRaw = frames[fi];
