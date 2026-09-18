@@ -61,6 +61,7 @@ public:
         for (auto& t : taps_) t.reset();
         rx_.setCentreHz(double(kBandIII[idx].centreHz));
         iq_.clear();
+        { std::lock_guard<std::mutex> ik(inM_); inQ_.clear(); }   // ★ queued IQ is the OLD block
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
          *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
@@ -235,11 +236,60 @@ public:
 
     void feed(const float* interleaved, size_t nSamples) {
         dumpIq_(interleaved, nSamples);
-        {
+        /* ★★★ feed() NEVER TAKES THE DECODER'S MUTEX ANY MORE (2026-09-18, a Raspberry Pi 2).
+         *  The worker holds m_ for the whole of each frame's decode — tens of milliseconds on a
+         *  900 MHz Cortex-A7 — and feed() took m_ twice per block: once for the false-lock watchdog
+         *  and the retune settle, once to append. So the DSP thread sat blocked behind every frame,
+         *  the USB reader's buffers filled, and DAB lost IQ ("47 overruns") with vibe-dab only at
+         *  81 % — load average 4.15, threads queueing for each other, not for the CPU. On a fast
+         *  machine the decode is a few ms and nobody ever saw it.
+         *  ★ Now: IQ goes into inQ_ under inM_, a lock held only for the copy. The watchdog and the
+         *    settle moved INTO the worker (admitInput_), which already holds m_ and owns rx_. */
+        if (!started_.load()) {
             std::lock_guard<std::mutex> lk(m_);
-            if (!started_) { started_ = true; stop_ = false;
-                             worker_ = std::thread([this] { workerLoop(); }); }
-            samplesIn_ += nSamples;
+            if (!started_.load()) {
+                stop_ = false;
+                { std::lock_guard<std::mutex> ik(inM_); inStop_ = false; }
+                started_ = true;
+                worker_ = std::thread([this] { workerLoop(); });
+            }
+        }
+        /* ★★★ THE RATE CONVERTER RUNS OUTSIDE THE DECODER'S MUTEX. It was inside it — and it was
+         *  70 % of the receiver's CPU (see vibe_dab_resample.h), so for most of every block the
+         *  worker thread could not take IQ and the DSP thread could not hand it over: two
+         *  real-time threads serialised on the one lock, on the phone, for nothing. rs_ and
+         *  rsOut_ are only ever touched by the thread that calls feed() (the DSP loop; dab-offline's
+         *  main), so they need no lock at all. Only the append to iq_ does. */
+        const float* src = interleaved;
+        size_t       n   = nSamples;
+        if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
+            rsOut_.clear();
+            rs_.process(interleaved, nSamples, rsOut_);
+            src = rsOut_.data();
+            n   = rsOut_.size() / 2;
+        }
+        {
+            std::lock_guard<std::mutex> ik(inM_);
+            inSamples_ += nSamples;
+            const size_t base = inQ_.size();
+            inQ_.resize(base + n);
+            for (size_t i = 0; i < n; ++i)
+                inQ_[base + i] = { src[2 * i], src[2 * i + 1] };
+            // ★ The same bound as before, on the queue it now applies to: a worker that falls this far
+            //   behind loses the OLDEST samples, counted, rather than holding the DSP thread.
+            const size_t need = size_t(modeI().frameSamples) * 2;
+            if (inQ_.size() > need * 4) {
+                inDropped_ += uint32_t(inQ_.size() - need * 2);
+                inQ_.erase(inQ_.begin(), inQ_.end() - long(need * 2));
+            }
+        }
+        inCv_.notify_one();
+    }
+    /** The false-lock watchdog and the retune settle, on the worker with m_ held — moved here from
+     *  feed() unchanged apart from dropping from `in` instead of returning early. False: nothing
+     *  left of this input to decode. */
+    bool admitInput_(std::vector<Cplx>& in) {
+        const size_t nIn = in.size();
             /* ★★★ LOCKED BUT DECODING NO FIBs IS A FALSE LOCK — RE-ACQUIRE. 10D, 2026-09-16 00:37
              *     (entry trace): "locked" from second 2, every MSC frame erased, FIB rate 0.000
              *     for 42 s, then 0.47 → 0.99 in one step and audio 43 s after entry. A step from
@@ -266,7 +316,7 @@ public:
                 }
             }
             if (settleDrop_ > 0) {
-                const size_t drop = nSamples < settleDrop_ ? nSamples : settleDrop_;
+                const size_t drop = nIn < settleDrop_ ? nIn : settleDrop_;
                 settleDrop_ -= drop;
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
@@ -285,40 +335,15 @@ public:
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
                     pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
                 }
-                return;
+                return false;      // ★ as before: a block that meets the settle is discarded whole
             }
-        }
-        /* ★★★ THE RATE CONVERTER RUNS OUTSIDE THE DECODER'S MUTEX. It was inside it — and it was
-         *  70 % of the receiver's CPU (see vibe_dab_resample.h), so for most of every block the
-         *  worker thread could not take IQ and the DSP thread could not hand it over: two
-         *  real-time threads serialised on the one lock, on the phone, for nothing. rs_ and
-         *  rsOut_ are only ever touched by the thread that calls feed() (the DSP loop; dab-offline's
-         *  main), so they need no lock at all. Only the append to iq_ does. */
-        const float* src = interleaved;
-        size_t       n   = nSamples;
-        if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
-            rsOut_.clear();
-            rs_.process(interleaved, nSamples, rsOut_);
-            src = rsOut_.data();
-            n   = rsOut_.size() / 2;
-        }
-        {
-            std::lock_guard<std::mutex> lk(m_);
-            const size_t base = iq_.size();
-            iq_.resize(base + n);
-            for (size_t i = 0; i < n; ++i)
-                iq_[base + i] = { src[2 * i], src[2 * i + 1] };
-            const size_t need = size_t(modeI().frameSamples) * 2;
-            if (iq_.size() > need * 4) {
-                dropped_ += uint32_t(iq_.size() - need * 2);
-                iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
-            }
-        }
-        cv_.notify_one();
+        return true;
     }
     void stopWorker() {
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
+        { std::lock_guard<std::mutex> ik(inM_); inStop_ = true; }
         cv_.notify_all();
+        inCv_.notify_all();
         if (worker_.joinable()) worker_.join();
         started_ = false;
     }
@@ -340,7 +365,28 @@ private:
         rx_.setMscThread(dabSplitMsc().load(), [] { vibeAudioThread("vibe-dab-msc"); });
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (!stop_) {
-            if (iq_.size() < need) { cv_.wait(lk); continue; }
+            // ★ Wait for input WITHOUT holding m_ — see feed(). Everything queued is taken at once.
+            if (iq_.size() < need) {
+                lk.unlock();
+                uint64_t took = 0; uint32_t lost = 0;
+                {
+                    std::unique_lock<std::mutex> ik(inM_);
+                    inCv_.wait(ik, [this] { return !inQ_.empty() || inStop_; });
+                    inTake_.swap(inQ_); inQ_.clear();
+                    took = inSamples_; inSamples_ = 0;
+                    lost = inDropped_; inDropped_ = 0;
+                }
+                lk.lock();
+                if (stop_) break;
+                samplesIn_ += took; dropped_ += lost;
+                if (!admitInput_(inTake_)) continue;
+                iq_.insert(iq_.end(), inTake_.begin(), inTake_.end());
+                if (iq_.size() > need * 4) {
+                    dropped_ += uint32_t(iq_.size() - need * 2);
+                    iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+                }
+                continue;
+            }
         while (iq_.size() >= need) {
             ++pushCalls_;
             if (rx_.push(iq_.data(), need)) ++pushOk_;
@@ -2114,7 +2160,15 @@ private:
     std::vector<float>      rsOut_;
     std::thread             worker_;
     std::condition_variable cv_;
-    bool                    stop_ = false, started_ = false;
+    bool                    stop_ = false;
+    std::atomic<bool>       started_{false};
+    // ★ The input queue — see feed(). inM_ is held only to copy in or swap out.
+    std::mutex              inM_;
+    std::condition_variable inCv_;
+    std::vector<Cplx>       inQ_, inTake_;
+    uint64_t                inSamples_ = 0;
+    uint32_t                inDropped_ = 0;
+    bool                    inStop_ = false;
 
     mutable std::mutex m_;
     DabReceiver rx_{kRateHz};
