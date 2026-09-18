@@ -1032,9 +1032,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
         //    the phone has always done and is right for one person retuning the radio themselves.
         ...(advanced && radioUse === 'locked'
-          ? { lockedCentre: live.current.lockedCentre, zoomSpectrum: live.current.zoomSpec,
-              spectrogram: live.current.spectrogram }
+          ? { lockedCentre: live.current.lockedCentre, spectrogram: live.current.spectrogram }
           : {}),
+        // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
+        zoomSpectrum: live.current.zoomSpec,
         gainLimits, gainLocks, gainSplits, restGain, agcLock,
         /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
          *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
@@ -2419,11 +2420,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                       + 'listeners. What runs out is UPLINK.'}
                 </Text>
 
-                {/* ★★ LOCKED-RANGE ONLY, and it is the setting that DEFINES that mode: pinning the
-                    centre is what gives every listener their own VFO inside one captured window.
-                    An unlocked radio has no window to pin — it retunes — which is why the listener
-                    count above now sits outside this block and this does not. */}
-                {radioUse === 'locked' && (<>
+                {/* ★★★ EVERY MODE, NOT LOCKED ONLY (2026-09-18). The zoom FFT engages whenever a listener's view
+                    is finer than the wide FFT's bins — in single-user and shared-VFO modes as much as
+                    locked — but this switch only showed (and was only SENT) in locked mode, so the
+                    XCover's shared dial ran with it off and went blocky at depth (Stuart: "really
+                    blocky… like there isnt enough bins at the highest zoom rate"). */}
+                <>
                 {/* ★★★ REAL BINS AT DEEP ZOOM. Without it a shared receiver interpolates, and the
                     waterfall turns to blocks the moment anybody zooms in — which a listener reads
                     as a poor receiver rather than a setting. */}
@@ -2450,7 +2452,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
 
-                </>)}
+                </>
 
 
                 {/* ★★★ NOT IN LOCKED-RANGE MODE. The window IS the limit there, so an allow/block

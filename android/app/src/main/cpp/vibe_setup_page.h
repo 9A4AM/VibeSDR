@@ -501,6 +501,11 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <!-- moved out of the locked-only block: every radio has a sample rate -->
         </div>
         <div class="hint" id="coverage"></div>
+
+      </div>
+    </div><!-- /lockedOnly -->
+      <!-- ★ EVERY MODE, not locked only (2026-09-18): the zoom FFT engages in single-user and shared-VFO
+           modes too, and hiding the switch here left those radios blocky at depth. -->
         <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
           <input type="checkbox" id="zoomSpectrum" checked
                  style="width:16px;height:16px;accent-color:var(--amber)">
@@ -508,8 +513,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
           already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
           what makes a shared receiver worth zooming into.</div>
-      </div>
-    </div><!-- /lockedOnly -->
+
 
       <!-- ★★★ OUTSIDE #lockedOnly, AND THAT IS THE WHOLE FIX. This card sat INSIDE it, so the
            entire Radio section — the RF and DAB notches, and everything added to them — was
