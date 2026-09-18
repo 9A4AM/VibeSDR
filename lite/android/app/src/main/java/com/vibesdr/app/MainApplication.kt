@@ -36,6 +36,12 @@ class MainApplication : Application(), ReactApplication {
 
     override fun onCreate() {
         super.onCreate()
+        /* ★★★ LITE SPREADS THE RECEIVER OVER THE CORES (2026-09-18). A 2017 Fire 7 has four
+         *  Cortex-A7s, and WFM stereo pinned ONE of them — vibe-dsp at ~99 % — while two sat idle
+         *  and the audio surged. VIBE_DSP_THREADS=1 moves the spectrum FFT and the whole
+         *  demodulator (with the Opus encode) onto their own threads; see RxPipeline::setDemodThread.
+         *  Set before the engine starts: RxPipeline reads it in start(). The main app does not set it. */
+        try { android.system.Os.setenv("VIBE_DSP_THREADS", "1", true) } catch (_: Throwable) {}
         SoLoader.init(this, false)
     }
 }
