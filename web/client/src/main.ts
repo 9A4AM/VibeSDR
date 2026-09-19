@@ -1091,7 +1091,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const b = document.getElementById('sendToTab');
         if (b) b.onclick = () => {
           tabChan.postMessage({ type: 'share', search: location.search });
-          showRefusal('SENT', 'Opened in your other tab — switch to it to listen. This tab can be closed.');
+          /* ★ AND THIS TAB GOES (Stuart, 2026-09-19: "no point keeping a dead tab hogging ram"). A tab the listener
+           *  opened by pasting a link has no other history, which Chrome and Firefox let a script close; Safari may
+           *  still refuse — then the tab goes to about:blank, which discards the whole page (waterfall, sockets,
+           *  timers, animation loops) where emptying the DOM would leave its intervals running. */
+          try { window.close(); } catch { /* refused */ }
+          setTimeout(() => { try { spec?.close(); audio?.close(); } catch {} location.replace('about:blank'); }, 300);
         };
         return;
       }
