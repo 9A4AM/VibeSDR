@@ -848,7 +848,13 @@ private:
             mscBusy_ = true;
             const size_t at = mscHead_;            // the slot stays ours until the count drops
             lk.unlock();
-            { std::lock_guard<std::mutex> mlk(mscM_); pumpFrameMsc(mscBuf_[at].data()); }
+            /* ★★★ NOT UNDER mscM_ (2026-09-19). The decode ran with mscM_ held, and the front end needs
+             *  mscM_ every frame to take the finished audio — so the two halves took turns instead of
+             *  overlapping. `perf sched` on a Pi 2, live DAB: the front end asleep 3.5 s in 10, the MSC
+             *  thread 6.1 s, 22 % of the input dropped. The selection state this reads is only changed
+             *  by the front end AFTER flushMsc() has drained this thread, so it needs no lock here;
+             *  only the pushes of finished frames do (pumpService / pumpSlot). */
+            pumpFrameMsc(mscBuf_[at].data());
             lk.lock();
             mscHead_ = (mscHead_ + 1) % kMscQueue;
             if (mscCount_ > 0) --mscCount_;        // reset() may already have dropped the rest
@@ -861,7 +867,10 @@ private:
         const size_t coded = size_t(sl.sel.sizeCu) * size_t(kCuBits);
         const std::vector<int8_t>& di = sl.deint->push(cif + size_t(sl.sel.startCu) * size_t(kCuBits));
         if (!sl.deint->ready()) return;
-        sl.frames.push_back(decodeLogicalFrame(di, coded, sl.prof, sl.uprof, sl.dataBits, nullptr, nullptr));
+        std::vector<uint8_t> fr = decodeLogicalFrame(di, coded, sl.prof, sl.uprof, sl.dataBits, nullptr, nullptr);
+        std::unique_lock<std::mutex> ol(mscM_, std::defer_lock);   // ★ the output only — see mscLoop
+        if (mscOn_) ol.lock();
+        sl.frames.push_back(std::move(fr));
         if (sl.frames.size() > 64) sl.frames.erase(sl.frames.begin());
     }
 
@@ -887,6 +896,8 @@ private:
             if (mscOn_) mscBerPub_.store(mscBerEma_, std::memory_order_relaxed);
             else        stats_.mscBer = mscBerEma_;
         }
+        std::unique_lock<std::mutex> ol(mscM_, std::defer_lock);   // ★ the output only — see mscLoop
+        if (mscOn_) ol.lock();
         audio_.push_back(std::move(bytes));
         /* ★★ THE FRAME'S OWN ERROR RATE TRAVELS WITH IT (2026-09-16). The running mscBer is a
          *  display figure; the MP2 quality gate in DabService needs THIS frame's rate, because a
