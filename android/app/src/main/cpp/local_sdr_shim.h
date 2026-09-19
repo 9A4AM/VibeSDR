@@ -251,6 +251,8 @@ public:
     void setMaxRadiosPerIp(int cap);
     /** Minutes of asking for nothing before a listener is prompted, then released. 0 = off. */
     void setIdleKickMinutes(int minutes);
+    /** DAB whole-multiplex label scan: -1 = build default (off on 32-bit ARM), 0 off, 1 on. */
+    void setDabScanLabels(int mode);
     /** True when somebody is listening but is past their guarantee, so an arriving listener may
      *  take the radio. ★ For the PUBLIC card only — the admin views report the truth. */
     bool claimableNow() const;

@@ -20677,6 +20677,10 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setDabScanLabels(int mode) {
+    vibedab::dabScanLabels().store(mode < 0 ? -1 : (mode ? 1 : 0), std::memory_order_relaxed);
+    LOGI("[DAB] whole-multiplex label scan: %s", vibedab::dabScanLabelsOn() ? "on" : "off (the playing station keeps its own text)");
+}
 void LocalSdrShim::setIdleKickMinutes(int minutes) {
     // ★ Clamped to the floor rather than accepted as typed: 15 minutes is short enough already,
     //   and a 2-minute idle kick would interrupt ordinary listening on any band.
@@ -21764,6 +21768,14 @@ static std::string vsTunableJson() {
      *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this
      *  MACHINE do it". Only the second one has a fix the owner can apply from a button. */
     j += std::string(",\"dabDecoder\":") + (vsDabDecoderAvailable() ? "true" : "false");
+    /* ★ WHICH CLASS OF SERVER THIS IS: "lite" = a 32-bit ARM build (VibeServer Lite). The setup page
+     *  shows Lite-only choices — the whole-multiplex DAB label scan — only here; on every other server
+     *  that feature simply stays on (Stuart, 2026-09-19: "a cool feature to leave on"). */
+#if defined(__arm__) && !defined(__aarch64__)
+    j += ",\"lite\":true";
+#else
+    j += ",\"lite\":false";
+#endif
     // ★ The contract, for the directory to forward (BRIEF-v11 §4): a client greys a server out by
     //   these, never by its version string.
     j += ",\"proto\":" + std::to_string(VS_PROTO) + ",\"minProto\":" + std::to_string(VS_MIN_PROTO);

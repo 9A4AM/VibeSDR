@@ -526,6 +526,7 @@ struct RadioConfig {
      *    before the ad break (Stuart, 2026-08-19). Shared radios only; a one-listener receiver has
      *    nobody to reclaim it for. */
     int    idleKickMin = 0;
+    int    dabScanLabels = -1;   ///< whole-multiplex DAB label scan: -1 build default (off on 32-bit ARM), 0 off, 1 on
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */

@@ -41,6 +41,26 @@
 
 namespace vibedab {
 
+/** ★★★ THE WHOLE-MULTIPLEX LABEL SCAN, SWITCHABLE (Stuart, 2026-09-19). The PAD scanner decodes four
+ *  extra sub-channels continuously and rotates them every 4 s — on a Raspberry Pi 2 it swung the MSC
+ *  thread between 35 % and 82 %, and each rotation's scanSelect() makes the front end wait for the MSC
+ *  thread to drain. VibeServer Lite plays the station you are on with its own live text and scans the
+ *  rest only if the owner asks. -1 = the build's default (OFF on 32-bit ARM, the Lite class; ON
+ *  elsewhere), 0 = off, 1 = on. Env VIBE_DAB_SCAN=0/1 seeds it; the config sets it per radio. */
+inline std::atomic<int>& dabScanLabels() {
+    static std::atomic<int> v{ std::getenv("VIBE_DAB_SCAN") ? (std::getenv("VIBE_DAB_SCAN")[0] == '1' ? 1 : 0) : -1 };
+    return v;
+}
+inline bool dabScanLabelsOn() {
+    const int v = dabScanLabels().load(std::memory_order_relaxed);
+    if (v >= 0) return v != 0;
+#if defined(__arm__) && !defined(__aarch64__)
+    return false;
+#else
+    return true;
+#endif
+}
+
 class DabService {
 public:
         ~DabService() { stopWorker(); }
@@ -1209,6 +1229,7 @@ private:
      *  service keeps its own live label. Costs four small Viterbis — the Pi's DSP thread had
      *  three quarters of its time spare. */
     static constexpr size_t kScanSlots   = 4;
+    bool scanIdled_ = false;          ///< the slots have been idled because the scan is off
     static constexpr double kScanDwellS  = 4.0;    ///< the deinterleaver needs 0.4 s, a label ~2 s
     /* ★★★ LOGOS FOR THE WHOLE MULTIPLEX, OFF THE AIR. A data service with user application 0x007
      *  (SPI: "BBC Guide" on 12B, measured 2026-09-07) carries the SI document and every logo
@@ -1399,6 +1420,17 @@ public:
     }
 private:
     void pumpScan() {
+        /* ★ The owner may switch the whole-multiplex scan off — see dabScanLabelsOn(). Idle the slots
+         *  once (the SPI/logo slot is separate and untouched) and let the playing service keep its own
+         *  live label, which never came from the scanner. */
+        if (!dabScanLabelsOn()) {
+            if (!scanIdled_) {
+                for (size_t i = 0; i < kScanSlots && i < rx_.scanSlots(); ++i) rx_.scanSelect(i, 0);
+                scanIdled_ = true;
+            }
+            return;
+        }
+        scanIdled_ = false;
         const Ensemble& e = rx_.ensemble();
         if (e.services.empty()) return;
         const double now = nowSec();

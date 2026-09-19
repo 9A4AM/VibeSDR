@@ -2755,6 +2755,7 @@ int main(int argc, char** argv) {
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",
         //   which the two settings below already carry. See vsSharedDial() in the shim.
         LocalSdrShim::instance().setIdleKickMinutes(mine ? mine->idleKickMin : 0);
+        LocalSdrShim::instance().setDabScanLabels(mine ? mine->dabScanLabels : -1);   // ★ read from the radio record directly, like idleKickMin — no flatten hop to forget
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,

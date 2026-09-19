@@ -960,6 +960,22 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="note">DAB needs a 2.048 MHz span. Ticked, a listener who chooses DAB gets it even
          when the span above is narrower or locked; the radio goes back to this span when DAB ends.
          Worth it on a small machine run at 1.024 MS/s to keep FM light.</div>
+      <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
+           the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
+           (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
+           listening to. The playing station always has its own live text either way. -->
+      <div id="dabScanRow" class="hide">
+      <label class="row" style="gap:8px;margin-top:10px">
+        <span class="lbl" style="min-width:0">DAB: radio text for every station</span>
+        <select id="dabScanLabels">
+          <option value="-1">This machine's default</option>
+          <option value="1">On — scan the whole multiplex</option>
+          <option value="0">Off — only the station playing</option>
+        </select></label>
+      <div class="note">On, the receiver decodes a few extra stations in turn so the station list shows
+         what every station is playing. It costs processor time; the default is off on a small 32-bit
+         machine and on everywhere else. The station you are listening to always shows its own text.</div>
+      </div>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="biasT" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1572,6 +1588,8 @@ async function readDabDecoder() {
   try {
     const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
     if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
+    // ★ Lite-only choices appear only on a Lite server (a 32-bit ARM build) — see "lite" in the shim.
+    $("dabScanRow").classList.toggle("hide", j.lite !== true);
   } catch (e) { /* leave it optimistic */ }
 }
 
@@ -2004,6 +2022,7 @@ function renderGain() {
   $("gainSplitRow").classList.toggle("hide", !(isHrf && $("gainLock").checked));
   $("rateLock").checked = !!r.rateLock;
   $("dabRateBoost").checked = !!r.dabRateBoost;
+  $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
@@ -3157,6 +3176,7 @@ function fill() {
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
+  $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);
     $("gainSplitVal").textContent = v + "% LNA / " + (100 - v) + "% VGA";
