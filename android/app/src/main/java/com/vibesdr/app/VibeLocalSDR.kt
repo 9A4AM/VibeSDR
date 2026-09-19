@@ -120,6 +120,10 @@ object VibeLocalSDR {
     fun setServerSampleRate(rate: Double) { if (loaded) nativeSetServerSampleRate(rate) }
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
     fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
+    /** ★ The server benchmark — see VibeBenchmark, which stops the radio first and calls this off the main
+     *  thread. Blocks for a minute or two. */
+    fun runBenchmark(clipPath: String, uplinkKBps: Double): String =
+        if (loaded) nativeRunBenchmark(clipPath, uplinkKBps) else ""
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
 
     fun startSpyServer(host: String, port: Int, centerFreq: Double, sampleRate: Double,
@@ -397,4 +401,5 @@ object VibeLocalSDR {
     private external fun nativeSetServerSampleRate(rate: Double)
     private external fun nativeGetServerStatus(): String
     private external fun nativeGetVibeServerStatus(): String
+    private external fun nativeRunBenchmark(clipPath: String, uplinkKBps: Double): String
 }

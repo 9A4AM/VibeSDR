@@ -13,6 +13,7 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+#include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
 // ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
 #include "../../../../../vibeserver/geoip.h"
 #include "../../../../../vibeserver/asndb.h"
@@ -665,6 +666,22 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     j += ",\"droppedBytes\":" + std::to_string(s.droppedBytes);
     j += ",\"port\":"         + std::to_string(s.port);
     j += "}";
+    return env->NewStringUTF(j.c_str());
+}
+
+/* ★★★ THE SERVER BENCHMARK ON ANDROID (vibe_benchmark.h). What this box can carry, measured here rather than
+ *  guessed from a model name — VibeServer Lite runs it at first setup and switches red features off.
+ *  ★★ THE CALLER STOPS THE RADIO FIRST and does it off the main thread: this blocks for a minute or two, and
+ *     measuring while capturing measures the two fighting each other.
+ *  ★ `clipPath` is the DAB clip Kotlin downloaded (empty = no DAB rows, never a guessed figure) and `uplinkKBps`
+ *    is the upload speed Kotlin measured, because the C++ path shells out to curl, which Android does not have. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstring clipPath, jdouble uplinkKBps) {
+    const char* cp = clipPath ? env->GetStringUTFChars(clipPath, nullptr) : nullptr;
+    const std::string clip = cp ? cp : "";
+    if (cp) env->ReleaseStringUTFChars(clipPath, cp);
+    const std::string j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
+                                             [&] { return vibe::runDabRows(clip, 6.0); });
     return env->NewStringUTF(j.c_str());
 }
 

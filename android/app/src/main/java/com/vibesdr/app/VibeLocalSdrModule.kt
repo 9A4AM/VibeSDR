@@ -112,7 +112,32 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  and NOTHING stops — the server lives in its foreground service either way. */
     @ReactMethod
     fun minimise() {
-        try { currentActivity?.moveTaskToBack(true) } catch (_: Throwable) {}
+        // ★ reactContext.currentActivity, NOT the module's own: ReactContextBaseJavaModule no longer exposes it
+        //   on React Native 0.86, and this file would not compile at all — see the note in AGENTS.md about a
+        //   build that fails for a reason nothing in the diff caused.
+        try { reactContext.currentActivity?.moveTaskToBack(true) } catch (_: Throwable) {}
+    }
+
+    /** ★★★ THE SERVER BENCHMARK — what this box can carry (VibeBenchmark, vibe_benchmark.h). Lite runs it at
+     *  first setup; the main app offers it. Resolves the result as JSON.
+     *  ★★ IT TAKES A MINUTE OR TWO and the radio must be off the air, so: never on the main thread, and the
+     *     caller stops the server first — measuring while capturing measures the two fighting for the cores. */
+    @ReactMethod
+    fun runBenchmark(wantDab: Boolean, promise: Promise) {
+        Thread {
+            try {
+                val j = VibeBenchmark.run(reactContext, wantDab)
+                if (j == null) promise.reject("bench_failed", "the benchmark did not produce a result")
+                else promise.resolve(j.toString())
+            } catch (t: Throwable) { promise.reject("bench_failed", t.message ?: "$t") }
+        }.start()
+    }
+
+    /** The last benchmark result, or null if it has never run on this device. */
+    @ReactMethod
+    fun lastBenchmark(promise: Promise) {
+        try { promise.resolve(VibeBenchmark.last(reactContext)?.toString()) }
+        catch (t: Throwable) { promise.reject("bench_read_failed", t.message ?: "$t") }
     }
 
     /** List attached RTL-SDR dongles (filtered by the known VID/PID allowlist). */

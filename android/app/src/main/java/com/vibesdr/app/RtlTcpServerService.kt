@@ -97,13 +97,33 @@ class RtlTcpServerService : Service() {
                  *  reason is final and reported at once. */
                 var err = VibeServerRestore.restore(applicationContext)
                 var tries = 0
-                // ★ 30 tries x 2 s: at DEVICE BOOT (VibeBootReceiver) the USB bus is still coming up.
-                while (err == "no SDR attached" && tries < 30) {
+                /* ★ 30 tries x 2 s: at DEVICE BOOT (VibeBootReceiver) the USB bus is still coming up.
+                 * ★★ AND THE PERMISSION, for the same reason (Stuart, 2026-09-20: "I just hope android
+                 *    permissions dont cause issues on boot as that may scupper the entire plan"). A grant made
+                 *    with "use by default for this USB device" ticked survives a reboot, but it is not
+                 *    necessarily in place the instant the device appears — the USB service is still settling
+                 *    while we ask. Waiting costs nothing; giving up costs the whole unattended restart. */
+                while ((err == "no SDR attached" || err == "no USB permission") && tries < 30) {
                     Thread.sleep(2000); tries++
                     err = VibeServerRestore.restore(applicationContext)
                 }
-                if (err != null) Log.w(TAG, "could not rebuild VibeServer: $err")
-                else if (tries > 0) Log.i(TAG, "VibeServer rebuilt after waiting ${tries * 2} s for the dongle")
+                if (err != null) {
+                    Log.w(TAG, "could not rebuild VibeServer: $err")
+                    /* ★★★ AND SAY IT WHERE SOMEBODY CAN SEE IT. On a TV box nobody reads logcat, and a server
+                     *  that silently never came back after a power cut looks exactly like a broken app. The
+                     *  notification is the only surface this thing has when it is running headless. */
+                    restoreFailure = when (err) {
+                        "no USB permission" ->
+                            "Waiting for USB permission — open VibeServer Lite once and allow the radio"
+                        "no SDR attached" -> "No radio found — check the dongle is plugged in"
+                        "no stored config" -> "Nothing saved to restore — start the server once from the app"
+                        else -> "Could not restart after boot: $err"
+                    }
+                    handler.post { updateNotification() }
+                } else {
+                    restoreFailure = null
+                    if (tries > 0) Log.i(TAG, "VibeServer rebuilt after waiting ${tries * 2} s")
+                }
             }.start()
         }
         intent?.let {
@@ -170,7 +190,11 @@ class RtlTcpServerService : Service() {
                else String.format("%.0f KB/s", kb)
     }
 
+    /** ★ Why an unattended restart did not happen, shown in the notification until it does. */
+    @Volatile private var restoreFailure: String? = null
+
     private fun statusText(): String {
+        restoreFailure?.let { return it }
         if (mode == "vibeserver") {
             return try {
                 val j = JSONObject(VibeLocalSDR.getVibeServerStatus())

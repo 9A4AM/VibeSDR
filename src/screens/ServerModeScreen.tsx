@@ -284,6 +284,64 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★ LITE ONLY — start the server when the device boots (VibeBootReceiver). ON by default on a TV (the always-on
    *  box after a power cut), OFF elsewhere; the owner can turn it off if it disturbs the TV (Stuart, 2026-09-19). */
   const [startOnBoot, setStartOnBoot] = useState(!!(NativeModules as any).VibeLocalSDR?.isTv);
+  /* ★★★ THE BENCHMARK (VibeBenchmark / vibe_benchmark.h). Lite runs it at FIRST setup — that is the class of
+   *  box that needs it — and applies what it finds: red = off by default, with the reason shown, and the owner
+   *  may switch it back on. Everywhere else it is a button and nothing is changed without being asked.
+   *  ★ Never on an already-running server: it takes the radio off the air. */
+  const [benchRows, setBenchRows] = useState<any[]>([]);
+  const [benchBusy, setBenchBusy] = useState(false);
+  const [benchNote, setBenchNote] = useState('');
+
+  const applyBench = React.useCallback((j: any, firstSetup: boolean) => {
+    setBenchRows(Array.isArray(j?.rows) ? j.rows : []);
+    if (!j || !firstSetup) return;
+    const row = (id: string) => (j.rows || []).find((r: any) => r.id === id);
+    const notes: string[] = [];
+    const rdsx = row('rdsx_2048'), scan = row('dab_scan');
+    if (rdsx && rdsx.grade === 'red' && !/(^|,)rds(,|$)/.test(blockedModes)) {
+      const next = blockedModes ? blockedModes + ',rds' : 'rds';
+      setBlockedModes(next); AsyncStorage.setItem(K.blockedModes, next);
+      notes.push(`Advanced RDS is off — it measured ${Math.round(rdsx.pct)}% of a core here.`);
+    }
+    if (scan && scan.grade === 'red' && dabScanLabels === 1) {
+      setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');
+      notes.push(`The station-label scan is off — it measured ${Math.round(scan.pct)}% of a core here.`);
+    }
+    // ★ The honest ceiling is the SMALLER of what the cores can demodulate and what the link can carry.
+    const lu = j.lockedUsers || {};
+    const cpuUsers = Math.max(lu.nfm || 0, lu.wfm || 0);
+    const netUsers = (j.network && j.network.users) || 0;
+    const cap = Math.min(cpuUsers || 99, netUsers || 99);
+    if (cap > 0 && cap < 99 && Number(usersText || '1') > cap) {
+      setUsersText(String(cap));
+      notes.push(`Listener limit set to ${cap} — what this device and its link measured.`);
+    }
+    setBenchNote(notes.join(' '));
+  }, [blockedModes, dabScanLabels, usersText]);
+
+  const runBench = React.useCallback(async (manual: boolean) => {
+    const mod = (NativeModules as any).VibeLocalSDR;
+    if (!mod?.runBenchmark) { setBenchNote('This build cannot measure itself.'); return; }
+    setBenchBusy(true); setBenchNote('');
+    try {
+      const j = JSON.parse(await mod.runBenchmark(true));
+      applyBench(j, !manual || !benchRows.length);
+    } catch (e: any) {
+      setBenchNote('The measurement did not finish: ' + (e?.message || String(e)));
+    } finally { setBenchBusy(false); }
+  }, [applyBench, benchRows.length]);
+
+  useEffect(() => {
+    const mod = (NativeModules as any).VibeLocalSDR;
+    if (!mod?.lastBenchmark) return;
+    mod.lastBenchmark().then((s: string | null) => {
+      if (s) { try { applyBench(JSON.parse(s), false); return; } catch (_) {} }
+      // ★ Never measured, and this is a Lite box at first setup: do it now, before anything is chosen.
+      if (isLite) runBench(false);
+    }).catch(() => {});
+    // ★ Once, on mount: re-running it whenever a setting changes would take the radio off the air repeatedly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     if (!isLite) return;
     AsyncStorage.getItem(K.dabScanLabels).then(v => { if (v === '0' || v === '1') setDabScanLabels(Number(v)); });
@@ -1476,6 +1534,36 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
           {`Share this device's ${radio?.model ?? 'SDR'} over your network.`}
         </Text>
+
+        {/* ★★★ WHAT THIS BOX CAN CARRY — at the top, because every setting below is a promise about work this
+            device will have to do (Stuart, 2026-09-19). Lite measures ITSELF the first time; the main app
+            offers the button, since a phone big enough to run the app is assumed to cope.
+            ★★ It costs the radio about two minutes off the air, so the panel says so before it is pressed. */}
+        <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHAT THIS DEVICE CAN CARRY</Text>
+        {benchRows.length > 0 && (
+          <View style={{ marginBottom: 8 }}>
+            {benchRows.map((r: any) => (
+              <View key={r.id} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 }}>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, flex: 1, marginBottom: 0 }]}
+                      numberOfLines={1}>{r.label || r.id}</Text>
+                <Text style={[styles.hint, { fontFamily: F, marginBottom: 0,
+                              color: r.grade === 'red' ? '#ff8a7d' : r.grade === 'amber' ? '#ffcc66'
+                                   : r.grade === 'none' ? C.textDim : '#7bd88f' }]}>
+                  {r.grade === 'none' ? 'not measured' : `${Math.round(r.pct)}% of a core`}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+          {benchBusy
+            ? 'Measuring this device with the real receiver. About two minutes — leave it be.'
+            : benchNote || 'Measures this device with the real receiver, so the settings below match what it '
+              + 'can keep up with. The radio is off the air while it runs (about two minutes).'}
+        </Text>
+        <OptRow C={C} F={F} active={false}
+          label={benchBusy ? 'Measuring…' : (benchRows.length ? 'Measure again' : 'Measure this device')}
+          onPress={() => { if (!benchBusy) runBench(true); }} />
 
         {/* Protocol picker — absent in a VibeServer-only build (see vibeServerOnly) */}
         {vibeServerOnly ? null : (<>
