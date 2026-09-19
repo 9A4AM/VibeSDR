@@ -450,6 +450,7 @@ let srvAdminProtected = false;
  *  doing anything: nothing at all. See the restore in onConfig. */
 let srvSharedDial = false;
 let landingStepDone = false;   // ★ the first config's band step — see onConfig
+let firstConfigDone = false;   // ★ the landing (restore / adopt) runs once per connection — see onConfig
 /* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
 let srvRawIq: 'off' | 'local' | 'public' = 'off';
 let srvRawIqMax = 0, srvRawIqActive = 0;
@@ -578,6 +579,7 @@ async function loadAudioPolicy(httpBase: string) {
   srvLan = false;
   srvSharedDial = false;
   landingStepDone = false;
+  firstConfigDone = false;
   try {
     const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
     if (!r.ok) return;
@@ -969,7 +971,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
       lastWindow = { lo, hi };
 
-      if (!spec!.frequency) {
+      /* ★★★ THE FIRST CONFIG OF THE CONNECTION, not "while the frequency is zero". SpectrumClient adopts
+       *  cfg.serverVfo BEFORE calling us, so on every server that reports its dial this block never ran:
+       *  a returning visitor on their OWN radio was not put back where they left it. Stuart, 2026-09-19:
+       *  "single user or locked range independent VFOs can restore as these are individual radios where one
+       *  user's actions do not affect others. Shared VFO is all about etiquette — the radio is in control, it
+       *  reports its position, it remembers where it is left." Exactly the branches below; now they run. */
+      if (!firstConfigDone) {
+        firstConfigDone = true;
         // A shared link's frequency wins over the remembered dial.
         if (applyShareParams()) return;
         // First config. Resume where this server was left, if we've been here
