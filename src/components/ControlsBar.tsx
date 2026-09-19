@@ -484,9 +484,17 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
-  tight = false, fmStereo = false, wide = false,
+  tight = false, fmStereo = false, wide = false, sharedTuner = false,
 }: any) {
   const { theme: t } = useTheme();
+  /* ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19) — the web client's #mShared, here. A box of its
+   *  own above the frequency and mode boxes, spanning both; the text steps down ~20 % so the pill still fits the
+   *  meter frame. Shared-VFO radios only. */
+  if (sharedTuner) {
+    freqFontSize = Math.round(freqFontSize * 0.8); modeFontSize = Math.round(modeFontSize * 0.8);
+    unitFontSize = Math.round(unitFontSize * 0.85); pillPadV = Math.max(1, Math.round(pillPadV * 0.6));
+    modePadV = Math.max(1, Math.round(modePadV * 0.6));
+  }
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
   const m = useMeters(bus);
   // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
@@ -511,7 +519,16 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
     // widths overflow the frame; the freq text's adjustsFontSizeToFit
     // absorbs the squeeze (meter stays visible ≥13% each side).
-    <View style={[pm.row, { maxWidth: tight ? '66%' : '74%', alignSelf: 'center' }]}>
+    <View style={{ maxWidth: tight ? '66%' : '74%', alignSelf: 'center', alignItems: 'stretch' }}>
+    {sharedTuner && (
+      <View style={[pm.sharedBox, { backgroundColor: t.pillBg }]}
+            accessibilityRole="text" accessibilityLabel="Shared tuner. Ask before tuning.">
+        <Text style={[pm.sharedTxt, { fontFamily: t.font, color: t.snrColor }]} numberOfLines={1} adjustsFontSizeToFit>
+          SHARED TUNER · ASK BEFORE TUNING
+        </Text>
+      </View>
+    )}
+    <View style={pm.row}>
       <TouchableOpacity
         ref={tourRef('freqBox')}
         style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
@@ -571,11 +588,16 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         )}
       </TouchableOpacity>
     </View>
+    </View>
   );
 }
 
 const pm = StyleSheet.create({
   row:      { flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center' },
+  sharedBox:{ borderRadius: 5, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 3, alignItems: 'center',
+              borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)',
+              shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 3 },
+  sharedTxt:{ fontSize: 9, letterSpacing: 1.6, fontWeight: '700' },
   linkWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, alignSelf: 'center', flexShrink: 0 },
   linkBar:  { width: 3, borderRadius: 1 },
   linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -812,7 +834,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
           pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
-          tight={tight}
+          tight={tight} sharedTuner={!!sharedDial}
         />
       </View>
 
@@ -1082,6 +1104,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
             pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
             modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
+            sharedTuner={!!sharedDial}
           />
         </View>
       </View>
