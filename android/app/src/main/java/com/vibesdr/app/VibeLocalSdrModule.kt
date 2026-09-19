@@ -108,6 +108,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         return m
     }
 
+    /** ★ Lite: "run the server in the background — minimise app". Home, in effect: the task goes to the back
+     *  and NOTHING stops — the server lives in its foreground service either way. */
+    @ReactMethod
+    fun minimise() {
+        try { currentActivity?.moveTaskToBack(true) } catch (_: Throwable) {}
+    }
+
     /** List attached RTL-SDR dongles (filtered by the known VID/PID allowlist). */
     @ReactMethod
     fun listDevices(promise: Promise) {

@@ -20,7 +20,7 @@ const BLOCKABLE: { id: string; label: string }[] = [
 ];
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
-  StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules,
+  StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1439,6 +1439,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>■ Stop server & return to config</Text>
           </TouchableOpacity>
 
+          {/* ★★ LITE IS A SERVER AND NOTHING ELSE — there is no browser to return to, so its exits are the
+              server's own (Stuart, 2026-09-19): stop and close, or leave it running and get out of the way. */}
+          {isLite ? (<>
+            <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red, marginTop: 10 }]}
+                              onPress={() => { stopAdvertiseRtlTcp(); stopVibeServer(); runningRef.current = false; BackHandler.exitApp(); }}>
+              <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & close app</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.stopBtn, { borderColor: C.green, marginTop: 10 }]}
+                              onPress={() => { (NativeModules as any).VibeLocalSDR?.minimise?.(); }}>
+              <Text style={{ color: C.green, fontFamily: F, fontSize: 16 }}>▶ Run server in the background — minimise app</Text>
+            </TouchableOpacity>
+          </>) : (<>
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red, marginTop: 10 }]}
                             onPress={stopAndBack}>
             <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & return to browse</Text>
@@ -1448,6 +1460,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                             onPress={keepServingAndBrowse}>
             <Text style={{ color: C.green, fontFamily: F, fontSize: 16 }}>▶ Return to browse — server remains active</Text>
           </TouchableOpacity>
+          </>)}
         </ScrollView>
       </SafeAreaView>
     );
