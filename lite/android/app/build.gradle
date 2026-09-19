@@ -57,7 +57,10 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               'VibeTunnel.kt', 'VibeGeoData.kt', 'VibeHttp.kt', 'VibeWifiLock.kt',
               // ★ stage 2: the bridge modules ServerModeScreen talks to — the main app's own files.
               //   They import only React's classic bridge API, which 0.73 has.
-              'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt']
+              'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt',
+              // ★ Puts a running server back after an update (MY_PACKAGE_REPLACED). Missing from Lite, so a
+              //   reinstall left a TV box's server stopped until somebody walked to it (2026-09-19).
+              'VibeUpdateReceiver.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"

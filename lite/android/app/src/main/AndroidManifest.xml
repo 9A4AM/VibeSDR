@@ -34,5 +34,13 @@
     </activity>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice"
              android:exported="false"/>
+    <!-- ★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — the main app's VibeUpdateReceiver, synced. Without it
+         every Lite update left the server stopped until somebody pressed Start, which on a TV box means
+         walking to the TV. -->
+    <receiver android:name=".VibeUpdateReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>
