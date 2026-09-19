@@ -5643,6 +5643,19 @@ function dabUiOn() {
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
    *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
   if (activeDec === 'rds') { $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
+  /* ★★★ AND EVERYTHING ELSE THAT SHARES IT. The line above was written when Advanced RDS was the only
+   *  other tenant; with the FT8 spot list open, a DAB switch made by ANOTHER listener on the shared dial
+   *  drew the station list into the FT8 box — FT8's ALL/AGE/COLLAPSE buttons over DAB stations over the
+   *  old spots (Stuart, 2026-09-19, on the Sony). DAB takes the box whole: a running decoder is stopped
+   *  (it would only be decoding the DAB audio), and the spot list, its filters and any SSTV/WEFAX image
+   *  are put away. dabUiOff() brings the spot list back if it was on. */
+  if (activeDec) { decoders?.detach(); activeDec = null; syncDecButtons(); }
+  $('spotList').classList.remove('on');
+  $('spotFilters').classList.remove('show');
+  $('decImage').classList.remove('on');
+  $('decBox').classList.remove('wide');
+  $<HTMLButtonElement>('decPrev').style.display = 'none';
+  $<HTMLButtonElement>('decSave').style.display = 'none';
   dabLockControls(true);
   if (spec) spec.dabHeld = true;
   const mux = document.getElementById('dabMux');
@@ -5747,6 +5760,8 @@ function dabUiOff() {
     dabLastListHtml = ''; dabLastHeadHtml = '';
     const dt3 = document.getElementById('decTitle');
     if (dt3 && dt3.textContent === 'DAB') dt3.textContent = dabPrevDecTitle;
+    // ★ The spot list dabUiOn put away comes back if spots are still on — see dabUiOn.
+    if (decoders?.spotsEnabled) showDecBox('spots');
   }
 }
 
