@@ -9874,12 +9874,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ REPORTING MUST NOT DEPEND ON THE THING IT REPORTS ON, AND MUST NOT OBSTRUCT IT
              *    EITHER. Both halves of that sentence cost a build to learn. */
             const double tnow = Impl::nowSecs();
-            if (tnow - lastDabLearn_ >= 5.0) {
+            std::vector<vibedab::DabService::LearnRow> learnRows;
+            // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".
+            if (tnow - lastDabLearn_ >= 5.0 && g_dab.learnableTry(learnRows)) {
                 lastDabLearn_ = tnow;
-                /* ★ Every complete service of the multiplex we are on becomes a learnt bookmark
-                 *  (see bmLearnDab). Cheap: a snapshot under the decoder's lock, then map work. */
                 const double hz = double(g_dab.centreHz());
-                for (const auto& r : g_dab.learnable()) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
+                for (const auto& r : learnRows) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
             }
             std::string j;
             // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".

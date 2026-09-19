@@ -97,7 +97,7 @@ public:
      *         transfer and is paid once per multiplex change, not per frame. */
     void armRetune(double seconds = 0.25) {
         std::lock_guard<std::mutex> lk(m_);
-        const double rate = rfRate_ > 0 ? rfRate_ : 2400000.0;
+        const double rfr = rfRate_.load(std::memory_order_relaxed); const double rate = rfr > 0 ? rfr : 2400000.0;
         settleDrop_ = size_t(seconds * rate);
     }
 
@@ -159,10 +159,15 @@ public:
     }
     uint32_t service() const { return sid_; }
     /** The receiver tells us where the radio actually is, so the two can be compared. */
-    void setRfCentre(double hz) { std::lock_guard<std::mutex> lk(m_); rfCentre_ = hz; }
+    /* ★★★ CALLED ON vibe-dsp FOR EVERY BLOCK, so these never take m_ (2026-09-19, a Raspberry Pi 2).
+     *  They did — two lock/unlocks per IQ block just to store a number — and the worker holds m_
+     *  for each frame's whole decode, ~80 ms on a Cortex-A7. `perf sched timehist` of vibe-dsp:
+     *  off-CPU for 155-167 ms at a stretch with a scheduling delay of 0.1 ms — waiting on a lock,
+     *  not for a core — and the IQ queue (8 x 32 ms) overflowing every couple of seconds. */
+    void setRfCentre(double hz) { rfCentre_.store(hz, std::memory_order_relaxed); }
     /** The rate the shim is actually running at — so a mismatch with 2.048 MS/s is visible rather
      *  than inferred from a receiver that simply fails to lock. */
-    void setRfRate(double hz) { std::lock_guard<std::mutex> lk(m_); rfRate_ = hz; }
+    void setRfRate(double hz) { rfRate_.store(hz, std::memory_order_relaxed); }
 
     /** ★★★ FEED ONLY. THE DECODING HAPPENS ON ITS OWN THREAD — see workerLoop.
      *
@@ -201,7 +206,7 @@ public:
         static const double capSecs  = std::getenv("VIBE_IQ_SECS") ? atof(std::getenv("VIBE_IQ_SECS")) : 30.0;
         static bool done = false;
         if (done) return;
-        const double rate = rfRate_ > 0 ? rfRate_ : 2400000.0;
+        const double rfr = rfRate_.load(std::memory_order_relaxed); const double rate = rfr > 0 ? rfr : 2400000.0;
         static double firstAt = 0.0;
         const double now = double(std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
@@ -224,7 +229,7 @@ public:
         done = true;
         if (FILE* fp = std::fopen(path, "wb")) {
             const char magic[8] = { 'V','I','B','E','I','Q','1','6' };
-            const double rc = rfCentre_;
+            const double rc = rfCentre_.load(std::memory_order_relaxed);
             std::fwrite(magic, 1, 8, fp);
             std::fwrite(&rate, sizeof rate, 1, fp);
             std::fwrite(&rc,   sizeof rc,   1, fp);
@@ -263,7 +268,7 @@ public:
          *  main), so they need no lock at all. Only the append to iq_ does. */
         const float* src = interleaved;
         size_t       n   = nSamples;
-        if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
+        if (std::fabs(rfRate_.load(std::memory_order_relaxed) - 2400000.0) < 1000.0) {
             rsOut_.clear();
             rs_.process(interleaved, nSamples, rsOut_);
             src = rsOut_.data();
@@ -312,7 +317,7 @@ public:
                     std::fprintf(stderr, "[DAB] locked but no FIBs decoded for 4 s (%d of %d) — re-acquiring (%u)\n",
                                  s.fibsOk, s.fibsTotal, fibWatchdog_);
                     noFibSince_ = {};
-                    const double rate = rfRate_ > 0 ? rfRate_ : 2048000.0;
+                    const double rfr = rfRate_.load(std::memory_order_relaxed); const double rate = rfr > 0 ? rfr : 2048000.0;
                     settleDrop_ = size_t(0.25 * rate);
                 }
             }
@@ -537,8 +542,18 @@ public:
     /** ★ The services worth remembering: complete MCI (TS 103 176 6.3.3), audio, labelled. */
     struct LearnRow { uint32_t sid; std::string label; int ecc; int eid; };
     std::vector<LearnRow> learnable() {
-        std::vector<LearnRow> out;
         std::lock_guard<std::mutex> lk(m_);
+        return learnableLocked_();
+    }
+    /** ★ Non-blocking, for vibe-dsp: false if the decoder holds m_ right now — try again next block. */
+    bool learnableTry(std::vector<LearnRow>& out) {
+        std::unique_lock<std::mutex> lk(m_, std::try_to_lock);
+        if (!lk.owns_lock()) return false;
+        out = learnableLocked_();
+        return true;
+    }
+    std::vector<LearnRow> learnableLocked_() {
+        std::vector<LearnRow> out;
         const Ensemble& e = rx_.ensemble();
         if (!e.mciComplete() || e.eid == 0) return out;
         for (const auto& kv : e.services) {
@@ -706,7 +721,7 @@ public:
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         const int nb = snprintf(b, sizeof b,
                  ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"mp2BerGated\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_.load(std::memory_order_relaxed), rfRate_.load(std::memory_order_relaxed),
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         const int nb2 = snprintf(b, sizeof b,
@@ -2223,7 +2238,7 @@ private:
     /** ★ Guards pcm_ ONLY — never held while taking m_. See takePcm for why it exists. */
     mutable std::mutex pm_;
     int channel_ = -1;
-    double rfCentre_ = 0, rfRate_ = 0;
+    std::atomic<double> rfCentre_{0.0}, rfRate_{0.0};   // ★ atomics — see setRfCentre
     const DabTxDb* txdb_ = nullptr;
     double rxLat_ = NAN, rxLon_ = NAN;
     uint32_t sid_ = 0, want_ = 0;
