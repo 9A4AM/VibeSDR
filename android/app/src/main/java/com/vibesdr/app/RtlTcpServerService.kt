@@ -89,8 +89,20 @@ class RtlTcpServerService : Service() {
         // thing that survived, and it is the actual source of truth.
         if (intent == null || intent.getBooleanExtra(EXTRA_RESTORE, false)) {
             Thread {
-                val err = VibeServerRestore.restore(applicationContext)
+                /* ★★ RETRY A MISSING DONGLE FOR A WHILE, don't give up on the first look. Straight after a
+                 *  package update the USB service can list NO devices for the new package for a moment: on the
+                 *  Sony TV the restore ran 0.2 s after MY_PACKAGE_REPLACED, said "no SDR attached" with the
+                 *  V4 plugged in and its grant intact, and the server stayed down until somebody walked to the
+                 *  TV (2026-09-19). The same path had worked at 14:51 — timing, not the dongle. Every other
+                 *  reason is final and reported at once. */
+                var err = VibeServerRestore.restore(applicationContext)
+                var tries = 0
+                while (err == "no SDR attached" && tries < 15) {
+                    Thread.sleep(2000); tries++
+                    err = VibeServerRestore.restore(applicationContext)
+                }
                 if (err != null) Log.w(TAG, "could not rebuild VibeServer: $err")
+                else if (tries > 0) Log.i(TAG, "VibeServer rebuilt after waiting ${tries * 2} s for the dongle")
             }.start()
         }
         intent?.let {

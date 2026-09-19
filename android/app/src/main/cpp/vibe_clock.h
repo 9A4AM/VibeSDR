@@ -87,7 +87,7 @@ inline bool refreshClockOffset(std::string& report) {
     return true;
 }
 
-/** Start the hourly measurement once per process; `log` is told each result. Detached — it only ever
+/** Start the periodic measurement once per process; `log` is told each result. Detached — it only ever
  *  sleeps and sends a few UDP packets, and the process owns it for its whole life. */
 inline void startClockWatch(std::function<void(const std::string&)> log) {
     static std::once_flag once;
@@ -97,9 +97,10 @@ inline void startClockWatch(std::function<void(const std::string&)> log) {
                 std::string rep;
                 const bool ok = refreshClockOffset(rep);
                 if (log) log(rep);
-                // ★ Hourly once measured; every two minutes until the first answer (a box that booted
-                //   before its network came up should not wait an hour to get FT8 right).
-                std::this_thread::sleep_for(std::chrono::seconds(ok ? 3600 : 120));
+                // ★★ EVERY TEN MINUTES, not hourly: the Sony TV's clock DRIFTS about 0.7 s an hour (-2.66 s at
+                //    15:21, -5.26 s at 18:58, 2026-09-19), so an hourly offset let FT8 wander ~0.7 s — most of
+                //    its margin — between checks. One UDP exchange; every two minutes until the first answer.
+                std::this_thread::sleep_for(std::chrono::seconds(ok ? 600 : 120));
             }
         }).detach();
     });
