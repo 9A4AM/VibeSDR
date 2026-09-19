@@ -6536,8 +6536,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     st[i].l = pcm[i * ch];
                     st[i].r = ch == 2 ? pcm[i * ch + 1] : pcm[i * ch];
                 }
-                feedDecoder(st.data(), frames);
-                feedSpots(st.data(), frames);
+                enqueueDecode(st.data(), frames);      // ★ never inline — see enqueueDecode
                 decoderFedSamples.fetch_add((uint64_t)frames, std::memory_order_relaxed);
             }
         }
@@ -7472,7 +7471,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** The ONLY thread that ever writes to this client's socket. Blocking sends are fine HERE —
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
     void outboxWriter(std::shared_ptr<Outbox> ob) {
-        vibeThreadName("vibeTx");
+        vibeNetThread("vibeTx");            // ★ network first — see the priority order in vibe_thread.h
         for (;;) {
             std::pair<Out, std::vector<uint8_t>> msg;
             {
@@ -10277,8 +10276,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  handed a demodulated DAB service here — audio no analogue decoder can mean anything
          *  by, at a cost, with spurious spots as the failure mode. */
         if (!perClientDsp() && !g_dabMode.load(std::memory_order_relaxed)) {
-            feedDecoder(data, count);
-            feedSpots(data, count);
+            enqueueDecode(data, count);            // ★ never inline — see enqueueDecode
             decoderFedSamples.fetch_add((uint64_t)count, std::memory_order_relaxed);
         }
 
@@ -10484,6 +10482,59 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         delete ft8; ft8 = nullptr;
         delete ft4; ft4 = nullptr;
     }
+    /* ★★★ NO DECODER RUNS ON THE AUDIO THREAD (Stuart, 2026-09-19: "anything that can be split into
+     *  its own thread to preserve audio integrity — RTTY, WEFAX, FT8 etc — do it"; priority order
+     *  NETWORK > AUDIO > SPECTRUM > DECODERS). feedDecoder (RTTY, NAVTEX, WEFAX, SSTV, time signals)
+     *  and feedSpots (FT8/FT4) were called INLINE from onAudio / onClientAudio, so any decoder's
+     *  burst of work — FT8's whole slot decode every 15 s above all — stopped the audio with it.
+     *  Stuart saw exactly that in SDR++ Brown on a Moto G35; a Pi 2 or a Fire 7 would hitch on every
+     *  FT8 cycle. Now the audio thread copies the block into a bounded queue and returns; vibe-decode
+     *  (lowest priority) drains it. ★ A decoder that falls 4 s behind LOSES AUDIO, counted in
+     *  decQDropped_ — the listener never does. */
+    std::mutex decQM_;
+    std::condition_variable decQCv_;
+    std::deque<std::vector<stereo_t>> decQ_;
+    size_t decQFrames_ = 0;
+    bool   decQStop_ = false;
+    std::thread decQThread_;
+    std::atomic<uint64_t> decQDropped_{0};
+    static constexpr size_t kDecQMaxFrames = 48000 * 4;
+    void enqueueDecode(const stereo_t* data, int count) {
+        if (count <= 0) return;
+        std::vector<stereo_t> v(data, data + count);
+        {
+            std::lock_guard<std::mutex> lk(decQM_);
+            if (!decQThread_.joinable()) { decQStop_ = false; decQThread_ = std::thread([this] { decodeLoop_(); }); }
+            decQFrames_ += v.size();
+            decQ_.push_back(std::move(v));
+            while (decQFrames_ > kDecQMaxFrames && decQ_.size() > 1) {
+                decQFrames_ -= decQ_.front().size();
+                decQDropped_.fetch_add(decQ_.front().size(), std::memory_order_relaxed);
+                decQ_.pop_front();
+            }
+        }
+        decQCv_.notify_one();
+    }
+    void decodeLoop_() {
+        vibeDecoderThread("vibe-decode");
+        std::unique_lock<std::mutex> lk(decQM_);
+        for (;;) {
+            decQCv_.wait(lk, [this] { return !decQ_.empty() || decQStop_; });
+            if (decQStop_) return;
+            std::vector<stereo_t> v = std::move(decQ_.front());
+            decQ_.pop_front();
+            decQFrames_ -= v.size();
+            lk.unlock();
+            feedDecoder(v.data(), (int)v.size());
+            feedSpots(v.data(), (int)v.size());
+            lk.lock();
+        }
+    }
+    void stopDecodeQueue() {
+        { std::lock_guard<std::mutex> lk(decQM_); decQStop_ = true; decQ_.clear(); decQFrames_ = 0; }
+        decQCv_.notify_all();
+        if (decQThread_.joinable()) decQThread_.join();
+    }
     void feedSpots(stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(spotsMtx);
         if (!spotsActive) return;
@@ -10605,7 +10656,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.setRdsExtWantedFlag(&rdsxOn);       // ★ the eye + deviation block costs ~16 % of vibe-dsp on a Cortex-A7 — only while somebody has Advanced RDS open
         // ★ The pipeline's optional worker threads (spectrum, demod — VIBE_DSP_THREADS=1) are real-time
         //   work like vibe-dsp itself, so they get its name-and-priority treatment, not the default.
-        vibedsp::RxPipeline::workerInit() = [](const char* name) { vibeAudioThread(name); };
+        vibedsp::RxPipeline::workerInit() = [](const char* name) {
+            // ★ The priority order (vibe_thread.h): the spectrum worker is SPECTRUM, the demod worker AUDIO.
+            if (std::strcmp(name, "vibe-spec") == 0) vibeSpectrumThread(name); else vibeAudioThread(name);
+        };
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
@@ -23105,6 +23159,7 @@ void LocalSdrShim::stopLocked() {
     impl->teardownAudio();
     impl->rx.stop();
 
+    impl->stopDecodeQueue();   // ★ first: vibe-decode must not be inside a decoder that is about to be deleted
     impl->stopDecoder();
     impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
@@ -23201,8 +23256,7 @@ void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
         buf.push_back({ v, v });
     }
     if (buf.empty()) return;
-    p->feedDecoder(buf.data(), (int)buf.size());
-    p->feedSpots(buf.data(), (int)buf.size());
+    p->enqueueDecode(buf.data(), (int)buf.size());   // ★ never inline — see enqueueDecode
 }
 
 void LocalSdrShim::setDecoderFreq(double hz) {

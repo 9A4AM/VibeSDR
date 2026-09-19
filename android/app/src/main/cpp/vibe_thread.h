@@ -51,6 +51,18 @@
                   name, std::strerror(errno));
       }
   }
+  /* ★★★ THE PRIORITY ORDER (Stuart, 2026-09-19): NETWORK > AUDIO > SPECTRUM > DECODERS.
+   *  Audio that is decoded but never sent is silence, so the send threads sit one step ABOVE audio;
+   *  a spectrum frame late is a slower waterfall; a decoder behind loses text, never sound.
+   *  Raising a nice value needs no privilege, lowering one needs CAP_SYS_NICE (the unit grants it). */
+  inline void vibeNiceThread_(const char* name, int nice) {
+      prctl(PR_SET_NAME, name);
+      errno = 0;
+      (void)setpriority(PRIO_PROCESS, 0, nice);   // ★ best effort — vibeAudioThread warns for all
+  }
+  inline void vibeNetThread(const char* name)      { vibeNiceThread_(name, -20); }
+  inline void vibeSpectrumThread(const char* name) { vibeNiceThread_(name, -5); }
+  inline void vibeDecoderThread(const char* name)  { vibeNiceThread_(name, 10); }
 #elif defined(__APPLE__)
   #include <pthread.h>
   #include <pthread/qos.h>
@@ -70,7 +82,23 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
   }
+  // ★ macOS has no finer class above USER_INTERACTIVE; network shares it, the rest step down.
+  inline void vibeNetThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  }
+  inline void vibeSpectrumThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+  }
+  inline void vibeDecoderThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+  }
 #else
   inline void vibeThreadName(const char*) {}
   inline void vibeAudioThread(const char*) {}
+  inline void vibeNetThread(const char*) {}
+  inline void vibeSpectrumThread(const char*) {}
+  inline void vibeDecoderThread(const char*) {}
 #endif

@@ -17,10 +17,14 @@ namespace vibe {
 // across messages. A small global table is fine — call hashes are global.
 namespace {
 struct HashEntry { char callsign[12]; uint32_t hash; };
+// ★ The callsign hash table is shared by every decoder, and decodes now run on worker threads
+//   (FT8 and FT4 can overlap), so both callbacks take this.
+std::mutex g_htMtx;
 constexpr int HT_MAX = 512;
 HashEntry g_ht[HT_MAX] = {};
 
 bool ht_lookup(ftx_callsign_hash_type_t type, uint32_t hash, char* callsign) {
+    std::lock_guard<std::mutex> lk(g_htMtx);
     int shift = (type == FTX_CALLSIGN_HASH_10_BITS) ? 12
               : (type == FTX_CALLSIGN_HASH_12_BITS) ? 10 : 0;
     for (int i = 0; i < HT_MAX; i++) {
@@ -33,6 +37,7 @@ bool ht_lookup(ftx_callsign_hash_type_t type, uint32_t hash, char* callsign) {
     return false;
 }
 void ht_save(const char* callsign, uint32_t n22) {
+    std::lock_guard<std::mutex> lk(g_htMtx);
     uint16_t h10 = (n22 >> 12) & 0x3FF;
     int idx = (h10 * 23) % HT_MAX;
     for (int n = 0; n < HT_MAX; n++) {
@@ -70,12 +75,35 @@ Ft8Decoder::Ft8Decoder(int sampleRate, bool ft4_)
     cfg.time_osr = kTimeOsr;
     cfg.freq_osr = kFreqOsr;
     cfg.protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
-    monitor_init(&mon, &cfg);
+    monitor_init(&mon[0], &cfg);
+    monitor_init(&mon[1], &cfg);
+    cands.resize(kMaxCandidates);
     ok = true;
+    worker = std::thread([this] { workerLoop(); });
 }
 
 Ft8Decoder::~Ft8Decoder() {
-    if (ok) monitor_free(&mon);
+    // ★ Abort a decode in progress (checked between candidates) rather than wait seconds for it:
+    //   the caller — stopSpots — holds the lock the audio thread's feedSpots needs.
+    abortDecode = true;
+    { std::lock_guard<std::mutex> lk(wm); stop = true; }
+    wcv.notify_all();
+    if (worker.joinable()) worker.join();
+    if (ok) { monitor_free(&mon[0]); monitor_free(&mon[1]); }
+}
+
+void Ft8Decoder::workerLoop() {
+    std::unique_lock<std::mutex> lk(wm);
+    for (;;) {
+        wcv.wait(lk, [this] { return pending >= 0 || stop; });
+        if (stop) return;
+        const int idx = pending; pending = -1; busy = true;
+        lk.unlock();
+        runDecode(mon[idx]);
+        monitor_reset(&mon[idx]);
+        lk.lock();
+        busy = false;
+    }
 }
 
 void Ft8Decoder::process(const int16_t* in, int count) {
@@ -96,27 +124,36 @@ void Ft8Decoder::process(const int16_t* in, int count) {
     for (int i = 0; i < count && inPos < capSamples; i++)
         samples[inPos++] = (float)in[i] / 32768.0f;
 
-    int blk = mon.block_size;
+    int blk = mon[active].block_size;
     while (inPos >= framePos + blk && framePos < numSamples) {
-        monitor_process(&mon, samples.data() + framePos);
+        monitor_process(&mon[active], samples.data() + framePos);
         framePos += blk;
     }
     if (framePos < numSamples) return;
 
-    runDecode();
-    monitor_reset(&mon);
+    {
+        std::lock_guard<std::mutex> lk(wm);
+        if (!busy && pending < 0) {
+            pending = active;                 // ★ hand the finished slot over...
+            active = 1 - active;              // ...and fill the other one (reset by the worker)
+            wcv.notify_one();
+        } else {
+            slotsSkipped.fetch_add(1);        // ★ the previous decode is still running: skip, never wait
+            monitor_reset(&mon[active]);
+        }
+    }
     tsync = false;
 }
 
-void Ft8Decoder::runDecode() {
+void Ft8Decoder::runDecode(const monitor_t& mon) {
     const ftx_waterfall_t* wf = &mon.wf;
-    static ftx_candidate_t cands[kMaxCandidates];
-    int n = ftx_find_candidates(wf, kMaxCandidates, cands, kMinScore);
+    int n = ftx_find_candidates(wf, kMaxCandidates, cands.data(), kMinScore);
 
     ftx_message_t decoded[kMaxDecoded];
     ftx_message_t* table[kMaxDecoded] = {};
 
     for (int idx = 0; idx < n; idx++) {
+        if (abortDecode.load(std::memory_order_relaxed)) return;
         const ftx_candidate_t* c = &cands[idx];
         ftx_message_t msg; ftx_decode_status_t st;
         if (!ftx_decode_candidate(wf, c, kLdpcIters, &msg, &st)) continue;
