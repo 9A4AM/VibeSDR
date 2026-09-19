@@ -46,6 +46,16 @@ object VibeServerBoot {
     private var batteryReceiver: BroadcastReceiver? = null
     fun startBatteryMonitor(ctx: Context) {
         val app = ctx.applicationContext
+        /* ★★ A TELEVISION HAS NO BATTERY, WHATEVER ITS BATTERY SERVICE SAYS (Stuart, 2026-09-19). Android TV
+         *  reports a phone-shaped battery — the Sony KD-55XE8596 claims "present, Li-ion, 100 %, 45 V, 42 °C" —
+         *  so the directory showed a charging-battery badge on a mains TV, and the low power state could in
+         *  principle pause a receiver that never runs on a cell. The OS's own device type is the truth:
+         *  publish -1 (no battery, as a Pi does) and do not listen. */
+        val pm = app.packageManager
+        if (pm.hasSystemFeature("android.hardware.type.television") || pm.hasSystemFeature("android.software.leanback_only")) {
+            try { VibeLocalSDR.setBattery(-1, false) } catch (_: Throwable) {}
+            return
+        }
         if (batteryReceiver != null) {
             // Already listening: re-push the current sticky state into the (re)started server.
             try { app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let { i ->

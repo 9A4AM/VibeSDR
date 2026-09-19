@@ -43,8 +43,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     /** ★ isLite: the shared ServerModeScreen shows Lite-only options (the DAB label-scan switch) when the
      *  package is VibeServer Lite. Read synchronously as NativeModules.VibeLocalSDR.isLite. */
-    override fun getConstants(): Map<String, Any> =
-        mapOf("isLite" to reactContext.packageName.endsWith(".serverlite"))
+    override fun getConstants(): Map<String, Any> = mapOf(
+        "isLite" to reactContext.packageName.endsWith(".serverlite"),
+        // ★ A television (the OS's own device type — its battery service is not to be believed; see
+        //   VibeServerBoot.startBatteryMonitor). The server screen uses it for TV-appropriate defaults.
+        "isTv" to (reactContext.packageManager.hasSystemFeature("android.hardware.type.television")
+                   || reactContext.packageManager.hasSystemFeature("android.software.leanback_only")))
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         val key = (dev.vendorId shl 16) or dev.productId

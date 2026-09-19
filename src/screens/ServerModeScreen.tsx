@@ -205,7 +205,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [zoomSpec, setZoomSpec]     = useState(true);
   const [spectrogram, setSpectrogram] = useState(false);
   /** Power down the radio when nobody is listening. ON by default; it never releases the dongle. */
-  const [idleGrace, setIdleGrace]   = useState(300);
+  /* ★ OFF by default on a TELEVISION (Stuart, 2026-09-19): mains-powered, so parking saves nothing worth having,
+   *  and a Sony powers down a USB port that goes quiet in standby — a parked dongle may not be there for the
+   *  next listener. A saved choice still wins; this is only the starting value. */
+  const [idleGrace, setIdleGrace]   = useState((NativeModules as any).VibeLocalSDR?.isTv ? 0 : 300);
   const [antenna, setAntenna]       = useState('');
   const [antennaIcon, setAntennaIcon] = useState('');
   /**
