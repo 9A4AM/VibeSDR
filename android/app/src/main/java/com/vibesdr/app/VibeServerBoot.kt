@@ -190,6 +190,8 @@ object VibeServerBoot {
              *  sharing or management, which is what Advanced governs. An HF-only radio should
              *  not offer WFM whether or not its owner has opened the Advanced pane. */
             VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.s("blockedModes"))
+            // ★ Absent = -1 = the build's default, so the main app (which never sends it) is unchanged.
+            VibeLocalSDR.setDabScanLabels(cfg.i("dabScanLabels", -1))
             // ★ Raw IQ out — the owner's mode and cap, same source as every other setting here.
             VibeLocalSDR.setRawIq(cfg.s("rawIq").toIntOrNull() ?: 0, cfg.s("rawIqMax").toIntOrNull() ?: 0,
                                   cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)

@@ -228,6 +228,9 @@ object VibeLocalSDR {
     /** DAB may borrow 2.048 MS/s on a slower receiver, and the modes/decoders switched off. */
     fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
     private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+    /** ★ DAB whole-multiplex label scan: -1 build default (off on Lite), 0 off, 1 on. */
+    fun setDabScanLabels(mode: Int) { ensureLoaded(); nativeSetDabScanLabels(mode) }
+    private external fun nativeSetDabScanLabels(mode: Int)
     /** ★ Raw IQ out: 0 off, 1 local only, 2 local + public; max 0 = this phone's default (1). */
     fun setRawIq(mode: Int, max: Int, lanMaxHz: Int = 0) { ensureLoaded(); nativeSetRawIq(mode, max, lanMaxHz) }
     private external fun nativeSetRawIq(mode: Int, max: Int, lanMaxHz: Int)

@@ -135,6 +135,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
   dabRateBoost: 'vs_dabboost',
+  dabScanLabels: 'vs_dabscan',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
@@ -258,6 +259,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [blockedModes, setBlockedModes] = useState('');
   /** DAB may borrow the 2.048 MS/s it captures at, on a receiver configured slower. */
   const [dabRateBoost, setDabRateBoost] = useState(false);
+  /** ★ LITE ONLY — the DAB whole-multiplex label scan (every station's name/text, not just the one playing).
+   *  -1 = the server's default (OFF on VibeServer Lite: it costs a 32-bit box real CPU), 0 off, 1 on.
+   *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
+  const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
+  const [dabScanLabels, setDabScanLabels] = useState(-1);
+  useEffect(() => {
+    if (!isLite) return;
+    AsyncStorage.getItem(K.dabScanLabels).then(v => { if (v === '0' || v === '1') setDabScanLabels(Number(v)); });
+  }, [isLite]);
   const [gainLimits, setGainLimits]   = useState('');
   /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
    *  between LNA and VGA a fixed band's total sits. Per band, both of them: an owner can hold FM at
@@ -444,6 +454,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 that rate while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
                 back afterwards. Leave it off on a slower phone: if it cannot sustain the higher rate
                 the audio will break up, and the rate you picked is the one it can actually keep.
+              </Text>
+            </>)}
+            {isLite && (<>
+              <OptRow C={C} F={F} active={dabScanLabels === 1}
+                label="Read every station's name and text on the multiplex"
+                onPress={() => {
+                  const v = dabScanLabels === 1 ? 0 : 1;
+                  setDabScanLabels(v); AsyncStorage.setItem(K.dabScanLabels, String(v));
+                }} />
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+                Off: listeners see the name and text of the station they are playing. On: every station on
+                the multiplex is named and its text kept, at a real cost in processing on a small box.
+                Takes effect when the server next starts.
               </Text>
             </>)}
             {/* ★ There is no native-2.048 toggle: 2.048 IS the DAB capture rate now (see the shim's
@@ -1018,6 +1041,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
         //   like the resting gain, not of sharing — see the note in VibeServerBoot.
         blockedModes, dabRateBoost,
+        ...(isLite ? { dabScanLabels } : {}),
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
@@ -1087,7 +1111,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost,
+      blockedModes, dabRateBoost, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 

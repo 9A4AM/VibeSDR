@@ -1017,6 +1017,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
     if (b) env->ReleaseStringUTFChars(blockedCsv, b);
 }
 
+/* ★ DAB whole-multiplex label scan: -1 = the build's default (off on 32-bit ARM = VibeServer Lite, on
+ *  elsewhere), 0 off, 1 on. Only the Lite screen offers it (Stuart, 2026-09-19). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabScanLabels(JNIEnv*, jobject, jint mode) {
+    vibe::LocalSdrShim::instance().setDabScanLabels((int)mode);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
                                                       jstring csv, jint rest, jboolean agcLock) {
