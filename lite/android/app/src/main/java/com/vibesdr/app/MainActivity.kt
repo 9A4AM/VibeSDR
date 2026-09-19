@@ -23,6 +23,14 @@ class MainActivity : ReactActivity() {
         super.onNewIntent(intent)
         if (intent?.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) usbLaunchPending = true
     }
+    // ★ On a TV the remote drives rows + a highlight (TvNav.kt); elsewhere this stays null and nothing changes.
+    private var tvNav: TvNav? = null
+    override fun onPostCreate(savedInstanceState: android.os.Bundle?) {
+        super.onPostCreate(savedInstanceState)
+        if (TvTextInputManager.isTv(this)) tvNav = TvNav(this)
+    }
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        tvNav?.handle(event) == true || super.dispatchKeyEvent(event)
     override fun getMainComponentName(): String = "VibeServerLite"
     override fun createReactActivityDelegate(): ReactActivityDelegate =
         DefaultReactActivityDelegate(this, mainComponentName, false)
