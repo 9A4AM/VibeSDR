@@ -86,6 +86,11 @@ endforeach()
 #   hard-float ABI), and libatomic for the 64-bit atomics the pipeline's counters use.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv7")
   add_compile_options(-mfpu=neon-vfpv4)
+  # ★ And libatomic here too (2026-09-19): 8-byte atomics — std::atomic<double> in the DAB receiver
+  #   and service — are library calls (__atomic_load_8) on 32-bit ARM with GCC. The server happened
+  #   to get libatomic from elsewhere; the DAB test executables did not, and `make all` for the
+  #   first armhf .deb stopped at test-dab-receiver's link.
+  link_libraries(atomic)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
   add_compile_options(-marm -march=armv6 -mfpu=vfp)
   link_libraries(atomic)
