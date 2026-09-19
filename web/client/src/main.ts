@@ -602,6 +602,9 @@ async function loadAudioPolicy(httpBase: string) {
     srvSharedDial = j.tuneMode === 'open';
     // ★ No SHARE on a shared dial — a link cannot move a radio other people are hearing (see applyShareParams).
     const sb = document.getElementById('freqShare'); if (sb) sb.hidden = srvSharedDial;
+    // ★ And the standing reminder above the dial — see #mShared in index.html.
+    const ms = document.getElementById('mShared'); if (ms) ms.hidden = !srvSharedDial;
+    document.getElementById('mPillIn')?.classList.toggle('shared', srvSharedDial);
   } catch { /* leave the safe defaults */ }
 }
 

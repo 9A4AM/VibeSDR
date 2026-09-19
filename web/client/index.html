@@ -728,6 +728,13 @@ html #bar { display: none; }
   background: rgba(0, 0, 0, 0.62);
 }
 #mFreqBox { padding: 0.05em 0.5em; display: inline-flex; align-items: baseline; gap: 0.25em; }
+/* ★ The shared-tuner reminder: its own box on its own row above the three, the same border, backing and a
+   shadow; the frequency steps down a little to make the room. */
+#mPillIn.shared { flex-wrap: wrap; row-gap: 0.3em; justify-content: center; }
+#mShared { flex: 0 0 100%; box-sizing: border-box; text-align: center; font-size: 0.72em; letter-spacing: 0.16em;
+           color: #ffcc88; padding: 0.22em 0.5em; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.38);
+           background: rgba(0, 0, 0, 0.62); box-shadow: 0 1px 5px rgba(0, 0, 0, 0.6); white-space: nowrap; }
+#mPillIn.shared #mFreq { font-size: 1.5em; }
 #mMode    { padding: 0.15em 0.45em; }
 #mFreqBox:active, #mMode:active, #mSnr:active { background: rgba(255, 255, 255, 0.18); }
 /* ★ The SNR is a BUTTON now (it cycles the reading), so it gets the same boxed treatment as
@@ -3160,6 +3167,9 @@ select.btn { padding: 6px 8px; }
            off, so a meter with no gate stays clean. -->
       <div id="mSqlLine" hidden></div>
         <div id="mPillIn">
+          <!-- ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19): the connect message goes, this stays.
+               Its own box above the three, spanning frequency to SNR; shown only when the server's dial is shared. -->
+          <span id="mShared" hidden>SHARED TUNER · ASK BEFORE TUNING</span>
           <span id="mFreqBox"><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span></span>
           <span id="mMode">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
