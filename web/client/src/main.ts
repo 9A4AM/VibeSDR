@@ -600,6 +600,8 @@ async function loadAudioPolicy(httpBase: string) {
     //     they connected (Stuart, 2026-08-20). Read from the same probe that already tells us
     //     about audio and admin, so it costs nothing and cannot arrive late.
     srvSharedDial = j.tuneMode === 'open';
+    // ★ No SHARE on a shared dial — a link cannot move a radio other people are hearing (see applyShareParams).
+    const sb = document.getElementById('freqShare'); if (sb) sb.hidden = srvSharedDial;
   } catch { /* leave the safe defaults */ }
 }
 
@@ -11417,8 +11419,13 @@ function initFreqEntry() {
 function shareFrequency() {
   if (!spec) return;
   const base = `${httpBase(currentHost)}/`;
-  const url = `${base}?freq=${Math.round(spec.frequency)}&mode=${spec.mode}`
-    + `&bwl=${Math.round(spec.bandwidthLow)}&bwh=${Math.round(spec.bandwidthHigh)}`;
+  /* ★★ A SHARED LINK IS A BOOKMARK (Stuart, 2026-09-19): what a bookmark carries, opened by the path a bookmark
+   *  tap takes (tuneTo). In DAB that is the BLOCK and the STATION — the analogue dial underneath said
+   *  "213.36 MHz WFM", which opens as FM hiss. */
+  const url = dabOn && dabState && dabState.channel
+    ? `${base}?dab=${encodeURIComponent(dabState.channel)}${dabState.sid ? `&sid=${dabState.sid}` : ''}`
+    : `${base}?freq=${Math.round(spec.frequency)}&mode=${spec.mode}`
+      + `&bwl=${Math.round(spec.bandwidthLow)}&bwh=${Math.round(spec.bandwidthHigh)}`;
   const msg = $('freqMsg');
   msg.textContent = '';
   const done = () => showPill('Link copied — paste it into a message to share', 5000);
@@ -11456,7 +11463,23 @@ function applyShareParams() {
   if (!spec) return false;
   const q = new URLSearchParams(location.search);
   const f = Number(q.get('freq'));
-  if (!f) return false;
+  const dab = q.get('dab');
+  if (!f && !dab) return false;
+  /* ★★★ NEVER ON A SHARED DIAL (Stuart, 2026-09-19: "cant have a shared link Hi-Jacking the shared VFO radio and
+   *  blindly retuning"). Everybody here hears one radio; a link someone forwarded must not move it for all of
+   *  them. Join the dial as it stands (the caller's adopt path) and say why the link's station did not apply. */
+  if (srvSharedDial) {
+    showPill('Everyone on this receiver shares one dial — the link was not applied, you have joined what is playing', 8000);
+    return false;
+  }
+  // ★ DAB: the bookmark path, which already opens a block on a station — see tuneTo / dabGoTo.
+  if (dab) {
+    const blk = DAB_BLOCKS.find(b => b.name.toUpperCase() === dab.toUpperCase());
+    if (!blk) return false;
+    const sid = Number(q.get('sid'));
+    dabGoTo(blk.hz, sid > 0 ? sid : -1);
+    return true;
+  }
   const mode = (q.get('mode') || spec.mode) as SDRMode;
   const bwl = Number(q.get('bwl'));
   const bwh = Number(q.get('bwh'));
