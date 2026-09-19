@@ -69,19 +69,40 @@ inline std::string threadName(long tid) {
 }
 inline double threadSelfCpu() { timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
-/** A broadcast-FM station: stereo tones, 19 kHz pilot, 57 kHz RDS-like subcarrier — so every stage of the WFM
- *  chain (stereo, RDS, the eye, the CEQ) has real work to do. */
+/** A broadcast-FM station that DECODES: stereo, a 19 kHz pilot and REAL RDS — group 0A with proper checkwords,
+ *  differentially encoded, biphase on 57 kHz locked to the pilot (the encoder from vibedsp/test/test_rds_dsp.cpp).
+ *  ★★ It has to decode: the Advanced RDS scopes (the eye) only run once RDS locks, so a noise-like subcarrier made
+ *     that row read ~free on the Pi 2, where live it costs ~16 % of a core. */
 inline std::vector<cf32> fmStation(double fs, double seconds, double offset) {
+    using vibedsp::RdsDecoder;
+    auto enc = [](uint16_t data, int off) {
+        const uint16_t cw = RdsDecoder::checkword(data) ^ RdsDecoder::OFFSET[off];
+        return ((uint32_t)data << 10) | cw;
+    };
+    std::vector<int> bits;
+    const char* PS = "VIBESDR ";
+    for (int addr = 0; addr < 4; ++addr) {
+        const uint32_t blk[4] = { enc(0xC0DE, 0), enc((uint16_t)(addr & 3), 1), enc(0x1234, 2),
+                                  enc((uint16_t)(((uint8_t)PS[addr * 2] << 8) | (uint8_t)PS[addr * 2 + 1]), 4) };
+        for (int b = 0; b < 4; ++b) for (int k = 25; k >= 0; --k) bits.push_back((blk[b] >> k) & 1);
+    }
+    std::vector<int> m(bits.size()); int prev = 0;
+    for (size_t k = 0; k < bits.size(); ++k) { m[k] = prev ^ bits[k]; prev = m[k]; }
     const int n = (int)(fs * seconds);
     std::vector<cf32> iq(n);
     double ph = 0.0;
     for (int i = 0; i < n; ++i) {
         const double t = i / fs;
-        const double L = 0.3 * std::cos(2 * M_PI * 1000.0 * t), R = 0.3 * std::cos(2 * M_PI * 4000.0 * t);
-        const double mpx = (L + R) + 0.1 * std::sin(2 * M_PI * 19000.0 * t) + (L - R) * std::sin(2 * M_PI * 38000.0 * t)
-                         + 0.04 * std::sin(2 * M_PI * 57000.0 * t) * (std::sin(2 * M_PI * 1187.5 * t) > 0 ? 1 : -1);
-        ph += 2 * M_PI * (offset + 60000.0 * mpx) / fs;
-        if (ph > 2 * M_PI) ph -= 2 * M_PI;
+        const double L = 0.25 * std::cos(2 * M_PI * 1000.0 * t), R = 0.25 * std::cos(2 * M_PI * 4000.0 * t);
+        const double pilot = 0.1 * std::cos(2 * M_PI * 19000.0 * t);
+        const double stereo = (L - R) * std::cos(2 * M_PI * 38000.0 * t);
+        const long kb = (long)std::floor(t * 1187.5);
+        const double phInBit = (t * 1187.5 - kb) * 2 * M_PI;
+        const double manch = ((phInBit < M_PI) ? 1.0 : -1.0) * (m[(size_t)kb % m.size()] ? 1.0 : -1.0);
+        const double rds = 0.05 * manch * std::cos(2 * M_PI * 57000.0 * t);
+        const double mpx = (L + R) + pilot + stereo + rds;
+        ph += 2 * M_PI * (offset + 75000.0 * mpx) / fs;
+        if (ph > 2 * M_PI) ph -= 2 * M_PI; else if (ph < -2 * M_PI) ph += 2 * M_PI;
         iq[i] = cf32((float)(0.5 * std::cos(ph)), (float)(0.5 * std::sin(ph)));
     }
     return iq;
@@ -105,6 +126,9 @@ struct Result { std::string id, label; double rate = 0, pct = 0; std::string hot
 
 static void noAudio(void*, const float*, int, int, int) {}
 static void noSpec(void*, const float*, int) {}
+static void noPs(void*, uint16_t, const char*) {}
+static void noText(void*, const char*) {}
+static void noExt(void*, const vibedsp::RxPipeline::Callbacks::RdsExt&) {}
 
 /** Run one scenario: `seconds` of signal through a fresh RxPipeline, fed as fast as it will take it; the hottest
  *  thread's CPU over the signal's duration is the score. */
@@ -114,6 +138,10 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
     static std::atomic<bool> rdsOff{false}, rdsOn{true};
     RxPipeline pipe;
     RxPipeline::Callbacks cb; cb.audio = noAudio; cb.spectrum = noSpec;
+    // ★★ THE SERVER'S RDS CALLBACKS, ALWAYS. The pipeline skips RDS decoding entirely unless the host registers one
+    //    (pipeline.cpp: wantRds needs cb.rdsPs/rdsText/rdsPi/rdsSig/rdsExt) and the Advanced RDS scopes also need
+    //    rdsExt. A server always wires them, so without these every WFM row read LOW (no RDS decoder at all).
+    cb.rdsPs = noPs; cb.rdsText = noText; cb.rdsExt = noExt;
     pipe.setRdsExtWantedFlag(rdsExt ? &rdsOn : &rdsOff);
     const auto before = threadCpu();
     const double self0 = threadSelfCpu();
