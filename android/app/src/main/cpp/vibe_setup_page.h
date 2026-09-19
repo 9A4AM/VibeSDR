@@ -949,6 +949,17 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            still choose a narrower one for themselves. Ticked, everybody gets this span and the
            choice disappears from their screen &mdash; which is what you want on a shared dial,
            where one person narrowing the window narrows it for the room.</div></label>
+      <!-- ★★★ THE DAB OVERRIDE, WHICH THIS PAGE NEVER OFFERED (Stuart, 2026-09-19, setting up the first
+           VibeServer Lite: "I didnt see the override option for DAB"). The config has carried
+           dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
+           page did not, so a Linux receiver pinned below 2.048 MS/s — exactly what a slow box is
+           told to do — could not offer DAB at all. -->
+      <label class="row" style="gap:8px;margin-top:10px">
+        <input type="checkbox" id="dabRateBoost" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Let DAB borrow 2.048 MS/s while it plays</span></label>
+      <div class="note">DAB needs a 2.048 MHz span. Ticked, a listener who chooses DAB gets it even
+         when the span above is narrower or locked; the radio goes back to this span when DAB ends.
+         Worth it on a small machine run at 1.024 MS/s to keep FM light.</div>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="biasT" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1992,6 +2003,7 @@ function renderGain() {
   //    listener still chooses their own split, which is today's behaviour and stays.
   $("gainSplitRow").classList.toggle("hide", !(isHrf && $("gainLock").checked));
   $("rateLock").checked = !!r.rateLock;
+  $("dabRateBoost").checked = !!r.dabRateBoost;
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
@@ -3144,6 +3156,7 @@ function fill() {
       !((radio().driver || "") === "hackrf" && $("gainLock").checked));
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
+  $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);
     $("gainSplitVal").textContent = v + "% LNA / " + (100 - v) + "% VGA";
