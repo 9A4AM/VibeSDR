@@ -456,6 +456,11 @@ endforeach()
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
+# ★ vibeserver-bench: the server benchmark from a shell (vibe_benchmark.h) — to check it on a box.
+add_executable(vibeserver-bench "${CMAKE_CURRENT_SOURCE_DIR}/bench-server.cpp")
+target_include_directories(vibeserver-bench PRIVATE "${CPP_DIR}")
+target_compile_options(vibeserver-bench PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(vibeserver-bench PRIVATE vibedsp)
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O3 -ffp-contract=fast)   # ★ the SERVER's flags, so a replay measures what ships (was -O2, 2026-09-16)
