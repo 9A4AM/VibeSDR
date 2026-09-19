@@ -185,10 +185,30 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
 inline const char* grade(double pct) { return pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
 } // namespace benchdetail
 
+/** ★★ UPLINK, in kB/s — the other half of "how many listeners" (Stuart, 2026-09-19: a box in deepest Brazil may have
+ *  CPU to spare and no bandwidth). ~4 MB posted to the directory's /api/speedtest, which reads and discards it; curl
+ *  times it. -1 if it could not be measured. Desktop/Linux only — Android measures in Kotlin and passes it in. */
+inline double measureUplinkKBps() {
+#if defined(__ANDROID__)
+    return -1;
+#else
+    FILE* p = popen("head -c 4194304 /dev/urandom | curl -s --max-time 60 -X POST --data-binary @- "
+                    "-H 'Content-Type: application/octet-stream' -o /dev/null -w '%{speed_upload} %{http_code}' "
+                    "https://vibeserver.vibesdr.net/api/speedtest 2>/dev/null", "r");
+    if (!p) return -1;
+    char b[128] = {0}; const bool got = fgets(b, sizeof b, p) != nullptr; pclose(p);
+    double bps = 0; int code = 0;
+    if (!got || sscanf(b, "%lf %d", &bps, &code) != 2 || code != 200 || bps <= 0) return -1;
+    return bps / 1024.0;
+#endif
+}
+
 /** Run the benchmark. `progress(done, of, label)` is told as each scenario starts. Returns the result as JSON:
  *  {"v":1,"at":<epoch>,"rows":[{id,label,rate,pct,grade,thread}],"recommendRate":<Hz>,"lockedUsers":{nfm,am,ssb}}. */
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
-                                double secondsPerScenario = 4.0) {
+                                double secondsPerScenario = 4.0, double uplinkKBps = -2) {
+    // -2 = measure it here (desktop/Linux); an Android host passes its own figure, or -1 for "could not".
+    if (uplinkKBps == -2) { if (progress) progress(0, 1, "network uplink"); uplinkKBps = measureUplinkKBps(); }
     using namespace benchdetail;
     using M = RxPipeline::Mode;
     struct Sc { const char* id; const char* label; double fs; M mode; double bw; bool fm; bool rds; };
@@ -276,6 +296,12 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     }
     j += "],\"recommendRate\":" + std::to_string((long long)rec);
     j += ",\"cores\":" + std::to_string(cores);
+    // ★ Listeners the LINK carries at 100 kB/s each — Stuart's worst case, above the ~80-90 kB/s DAB+ peaks
+    //   (a jitter buffer catching up). The smaller of this and the CPU figures is the honest ceiling.
+    if (uplinkKBps > 0) {
+        char nb[96]; snprintf(nb, sizeof nb, ",\"network\":{\"uplinkKBps\":%.0f,\"users\":%d}", uplinkKBps, (int)std::floor(uplinkKBps / 100.0));
+        j += nb;
+    } else j += ",\"network\":null";
     j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
        + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}}";
     return j;

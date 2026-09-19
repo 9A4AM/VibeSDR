@@ -942,6 +942,15 @@ export default {
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
       if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);
       if (p === '/api/eibi' && request.method === 'GET') return await eibi(request);
+      // ★ The server benchmark's UPLINK test (vibe_benchmark / Stuart, 2026-09-19): the server posts a few MB, we read
+      //   and discard it, and it times the upload. Listeners it can carry = uplink / 100 kB/s (his worst case).
+      //   Read and dropped, never stored; capped so it cannot be used to push arbitrary volumes through us.
+      if (p === '/api/speedtest' && request.method === 'POST') {
+        const len = Number(request.headers.get('content-length') || 0);
+        if (len > 8 * 1024 * 1024) return json({ error: 'too large' }, 413);
+        const buf = await request.arrayBuffer();
+        return json({ bytes: buf.byteLength });
+      }
       if (p === '/api/iq' && request.method === 'POST') return await iqRegister(request, env);
       if (p === '/api/iq/off' && request.method === 'POST') return await iqOff(request, env);
       if (p.startsWith('/api/iq/') && request.method === 'GET') return await iqLookup(p.slice('/api/iq/'.length), env);
