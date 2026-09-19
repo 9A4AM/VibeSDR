@@ -1563,7 +1563,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         </Text>
         <OptRow C={C} F={F} active={false}
           label={benchBusy ? 'Measuring…' : (benchRows.length ? 'Measure again' : 'Measure this device')}
-          onPress={() => { if (!benchBusy) runBench(true); }} />
+          onPress={() => {
+            if (benchBusy) return;
+            /* ★★ NOT WHILE IT IS SERVING. The measurement needs the cores to itself — sharing them measures the
+             *  two fighting each other — and it would break every listener's audio for two minutes. */
+            if (running) {
+              Alert.alert('Stop the server first',
+                'Measuring needs the radio to itself. Stop the server, measure, then start it again.');
+              return;
+            }
+            runBench(true);
+          }} />
 
         {/* Protocol picker — absent in a VibeServer-only build (see vibeServerOnly) */}
         {vibeServerOnly ? null : (<>
