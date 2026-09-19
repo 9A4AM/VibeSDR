@@ -21055,7 +21055,9 @@ std::string LocalSdrShim::adminStatusJson() {
         // never disagree about what a moment looked like.
         vibeadmin::HistSample hs;
         hs.atEpoch   = vibeadmin::nowEpoch();
-        hs.load1     = (float)sys.load1;
+        // ★ -1 = NOT MEASURED. Android refuses an app /proc/loadavg (Permission denied, Sony TV
+        //   2026-09-19), and a 0 here was graphed as "CPU LOAD 0.00" beside a tile reading 75 %.
+        hs.load1     = sys.haveLoad ? (float)sys.load1 : -1.0f;
         hs.tempC     = (float)sys.tempC;
         hs.listeners = (uint16_t)listenerCount();
         hs.kbps      = (uint32_t)kbps;

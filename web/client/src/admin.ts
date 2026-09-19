@@ -207,9 +207,9 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
 
   // ★ ABSENT, not zero. A Mac and a container have no thermal zone, and "0 °C" would be a lie
   //   an owner might act on.
-  out.push(sys.tempStatus === 'unknown'
-    ? card('CPU TEMP', 'not available', 'no sensor on this machine', 'unknown')
-    : card('CPU TEMP', `${sys.tempC.toFixed(1)}°C`,
+  // ★★ And no tile at all where there is no sensor — every Android box (a TV, a phone) is one, and a tile
+  //    permanently reading "not available" is a control with nothing behind it (AGENTS.md; Sony TV, 2026-09-19).
+  if (sys.tempStatus !== 'unknown') out.push(card('CPU TEMP', `${sys.tempC.toFixed(1)}°C`,
            // ★ Say what the number MEANS, and never blame cooling for something else. A warm chip
            //   is not a fault: the machine throttles at 80 °C and that is where the advice starts.
            sys.tempStatus === 'ok' ? 'normal — throttles at 80°C'
@@ -452,10 +452,13 @@ function renderGraphs(h: any) {
   const rows: number[][] = h.rows ?? [];
   // fields: at, load1, tempC, listeners, kbps, mhz
   const parts = [
-    spark(rows, 1, 'CPU LOAD', (n) => n.toFixed(2)),
     spark(rows, 3, 'LISTENERS', (n) => String(Math.round(n))),
     spark(rows, 4, 'UPLINK kbps', (n) => n.toFixed(0)),
   ];
+  // ★★ ONLY WHERE THE LOAD WAS MEASURED. Android refuses an app /proc/loadavg; the server records -1 there
+  //    (older servers sent 0), and a flat "CPU LOAD 0.00" under a tile reading 75 % was a number never taken
+  //    (Sony TV, 2026-09-19). Same rule as the temperature below: an empty box is worse than no box.
+  if (rows.some((r) => r[1] > 0)) parts.unshift(spark(rows, 1, 'CPU LOAD', (n) => n.toFixed(2)));
   // Only draw temperature where there is one — an empty box is worse than no box.
   if (rows.some((r) => r[2] > 0)) parts.splice(1, 0, spark(rows, 2, 'CPU TEMP °C', (n) => n.toFixed(1)));
   // ★★ THE CLOCK IS WHERE A SAGGING SUPPLY BECOMES VISIBLE. Temperature stays fine and load looks
