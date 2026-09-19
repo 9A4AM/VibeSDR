@@ -34,6 +34,7 @@
 #endif
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
+#include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 
 #include <algorithm>
 #include <atomic>
@@ -19587,6 +19588,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void startHotplugWatch() {
         if (hotplugRun.exchange(true)) return;
+        // ★ Measure this machine's clock against UTC (once per process, then hourly) so FT8/FT4 slots line
+        //   up on a box whose clock is off by seconds — a Sony TV sat 2.6 s slow with Android refusing to fix
+        //   it. Here because every radio's start path comes through this watchdog. See vibe_clock.h.
+        vibe::startClockWatch([](const std::string& r) { LOGI("clock: %s", r.c_str()); });
         hotplugThread = std::thread([this]{
             vibeThreadName("vibe-hotplug");
             while (hotplugRun.load()) {

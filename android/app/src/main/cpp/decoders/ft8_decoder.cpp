@@ -1,5 +1,6 @@
 // VibeSDR V4 — FT8 / FT4 decoder wrapper around ft8_lib (MIT).
 #include "ft8_decoder.h"
+#include "../vibe_clock.h"
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -112,8 +113,8 @@ void Ft8Decoder::process(const int16_t* in, int count) {
     // Slot alignment: wait until ~start of a UTC FT8/FT4 slot before buffering.
     if (!tsync) {
         const double timeShift = 0.8;
-        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-        double now = (double)ts.tv_sec + ts.tv_nsec / 1e9;
+        // ★ Corrected UTC, not the system clock — see vibe_clock.h (a TV 2.6 s slow decoded ONE FT8 signal).
+        double now = vibe::vibeUtcNow();
         double within = std::fmod(now - timeShift, slotPeriod);
         if (within < 0) within += slotPeriod;
         if (within > slotPeriod / 4) return;   // not at a slot boundary yet
