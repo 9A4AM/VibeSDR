@@ -36,6 +36,9 @@ interface FreqModalProps {
   /** Share the current station (moved here from the controls bar). Hidden when
    *  sharing isn't available (undefined). */
   onShare?:  () => void;
+  /** ★ Set when this radio's dial is SHARED: Share is shown GREYED with this reason instead of working — a link
+   *  must never retune a radio other people are hearing (Stuart, 2026-09-19). */
+  shareOffReason?: string;
 
   /** OWRX profiles — MOVED HERE FROM THE MAIN MENU. On OWRX a profile IS a frequency
    *  choice (it's how you pick the band you want to be in), so it belongs with the
@@ -201,6 +204,7 @@ export default function FreqModal({
   unit: unitProp, onUnit, onDabTune, dabOnly, onAddServerBookmark, onImportToServer, onPickImportFileToServer,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
+  shareOffReason,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
   magicKey, onMagicKey,
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
@@ -696,7 +700,14 @@ export default function FreqModal({
                 CANCEL
               </Text>
             </TouchableOpacity>
-            {onShare && (
+            {onShare && shareOffReason ? (
+              <View style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY, opacity: 0.45 }]}
+                    accessibilityState={{ disabled: true }} accessibilityLabel={`Share. ${shareOffReason}`}>
+                <Text style={{ fontFamily: t.font, fontSize: isWhite ? 11 : 10, color: dimText, textAlign: 'center' }}>
+                  {shareOffReason}
+                </Text>
+              </View>
+            ) : onShare && (
               <TouchableOpacity
                 style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
                 onPress={() => {

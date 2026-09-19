@@ -9624,6 +9624,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         minHz={client.current?.caps.freqRange[0]}
         maxHz={client.current?.caps.freqRange[1]}
         onShare={isLocal ? undefined : onShareStation}
+        shareOffReason={sharedDialNow ? 'SHARING OFF · SHARED RADIO' : undefined}
         profiles={profiles}
         activeProfileId={activeProfileId}
         sdrUsage={sdrUsage}
