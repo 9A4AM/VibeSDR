@@ -11408,31 +11408,47 @@ function initFreqEntry() {
  * LAN IP, so it is undefined there. Fall back to the old execCommand path, and
  * if even that fails, show the URL so it can be copied by hand.
  */
-async function shareFrequency() {
+/** ★★★ SHARE COPIES, AND SAYS SO (Stuart, 2026-09-19). The link used to be printed under the buttons whenever
+ *  the copy failed — and in Safari it failed: navigator.clipboard.writeText was the first thing tried, and
+ *  Safari can refuse it. Selecting the printed link by hand ran the drag off the panel onto the waterfall and
+ *  RETUNED THE RADIO. Now the copy happens synchronously INSIDE the tap (execCommand on a hidden textarea,
+ *  which Safari honours), the clipboard API only as the backup, and a pill says it worked. If both ever fail,
+ *  the link goes in a read-only box inside the panel, already selected — nothing to drag across the radio. */
+function shareFrequency() {
   if (!spec) return;
   const base = `${httpBase(currentHost)}/`;
   const url = `${base}?freq=${Math.round(spec.frequency)}&mode=${spec.mode}`
     + `&bwl=${Math.round(spec.bandwidthLow)}&bwh=${Math.round(spec.bandwidthHigh)}`;
-
   const msg = $('freqMsg');
+  msg.textContent = '';
+  const done = () => showPill('Link copied — paste it into a message to share', 5000);
+  const fallback = () => {
+    msg.innerHTML = '';
+    const box = document.createElement('input');
+    box.readOnly = true; box.value = url; box.className = 'shareBox';
+    box.onfocus = () => box.select();
+    // ★ Keep every pointer inside the box, so a selection drag can never reach the waterfall.
+    for (const ev of ['pointerdown', 'pointermove', 'mousedown', 'touchstart'])
+      box.addEventListener(ev, (e) => e.stopPropagation());
+    msg.appendChild(box);
+    box.focus(); box.select();
+  };
+  let ok = false;
   try {
-    if (window.isSecureContext && navigator.clipboard) {
-      await navigator.clipboard.writeText(url);
-      msg.textContent = 'Link copied';
-      return;
-    }
     const ta = document.createElement('textarea');
-    ta.value = url;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
+    ta.value = url; ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.style.left = '-9999px';
     document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
+    ta.select(); ta.setSelectionRange(0, url.length);
+    ok = document.execCommand('copy');
     document.body.removeChild(ta);
-    msg.textContent = ok ? 'Link copied' : url;
-  } catch {
-    msg.textContent = url;
+  } catch { ok = false; }
+  if (ok) { done(); return; }
+  if (window.isSecureContext && navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(done, fallback);
+    return;
   }
+  fallback();
 }
 
 /** A shared link opens tuned to the same station. */
