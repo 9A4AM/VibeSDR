@@ -15,6 +15,9 @@
 //   switched off on a box it would overload.
 #pragma once
 #include "vibedsp/vibedsp.h"
+#if defined(VIBE_HAVE_OPUS)
+#include "opus_audio_encoder.h"   // ★ a listener's audio is encoded per listener — see runListener
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -182,6 +185,106 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
     r.pct = 100.0 * best;
     return r;
 }
+#if defined(VIBE_HAVE_OPUS)
+struct ListenerAudio { OpusAudioEncoder enc; std::vector<int16_t> i16; std::vector<std::vector<uint8_t>> pkts; long n = 0; };
+#endif
+
+/** One locked-range listener: the channel cut from the shared FFT, then that listener's demodulator — the two
+ *  things feedOneClient does on the listener's own thread. Scored as the SUM of its threads: they are all its
+ *  own, and on a real server they land on whichever core is free. */
+inline Result runListener(const std::string& id, const std::string& label, double fs, int fftSize, int chanBins,
+                          double chanRate, RxPipeline::Mode mode, double bw, const std::vector<cf32>& iq,
+                          double seconds) {
+    Result r; r.id = id; r.label = label; r.rate = chanRate;
+    /* ★★★ BEFORE THE PIPELINE IS BUILT. Taken after start(), its worker threads are already in `before` and are
+     *  skipped as "not ours" — which silently dropped the demodulator AND the Opus encode from every locked-range
+     *  row (they run on vibe-demod), leaving NFM at 3.8 % against 6.2 % live. */
+    const auto before = threadCpu();
+    static std::atomic<bool> rdsOff{false};
+    vibedsp::Channelizer chan(fftSize);
+    RxPipeline pipe;
+    /* ★ NO SPECTRUM CALLBACK. A locked-range listener's own pipeline draws a waterfall only when the owner
+     *  turned the private zoom view on (viewRx, config zoomSpectrum) — registering one here charged every
+     *  listener a 1024-point FFT ten times a second that most never run: NFM read 14.3 % against 6.2 % live. */
+    RxPipeline::Callbacks cb;
+    cb.rdsPs = noPs; cb.rdsText = noText; cb.rdsExt = noExt;
+    pipe.setRdsExtWantedFlag(&rdsOff);
+    /* ★★ AND THE OPUS ENCODE, because every listener pays it and it is not small: the server encodes each
+     *  listener's audio on that listener's own demod thread (see the note on setDemodThread). Without it this
+     *  row read 3.9 % for an NFM listener the live Pi 2 costs 6.2 %. Where there is no libopus (the Android
+     *  build) the server sends PCM and there is nothing to add. */
+#if defined(VIBE_HAVE_OPUS)
+    ListenerAudio la;
+    cb.ctx = &la;
+    const bool noEnc = std::getenv("VIBE_BENCH_NOENC") != nullptr;   // ★ temporary A/B: what does the encode cost?
+    if (noEnc) cb.audio = noAudio; else
+    cb.audio = [](void* ctx, const float* pcm, int frames, int ch, int) {
+        auto* a = (ListenerAudio*)ctx;
+        if (!a || frames <= 0) return;
+        a->i16.resize((size_t)frames * ch);
+        for (int i = 0; i < frames * ch; ++i) {
+            const float v = pcm[i] * 32767.0f;
+            a->i16[i] = (int16_t)(v > 32767.0f ? 32767.0f : (v < -32768.0f ? -32768.0f : v));
+        }
+        a->pkts.clear();
+        a->enc.encode(a->i16.data(), frames, ch, a->pkts);
+        a->n += (long)a->pkts.size();
+    };
+#else
+    cb.audio = noAudio;
+#endif
+    pipe.start(chanRate, 1024, 10.0, 48000, cb);
+    pipe.setTune(0.0, mode, bw);
+    std::vector<cf32> slice((size_t)chanBins);
+    vibedsp::Channelizer::ExtractCtx ectx;
+    const int centreBin = fftSize / 4;                  // a channel off centre, as a listener's would be
+    /* ★★★ TIME THE LISTENER'S OWN WORK, NOT THE SHARED FFT. chan.feed() runs the forward transform on THIS
+     *  thread, and charging that to a listener read 76 % for an NFM listener the live server costs ~6 %. The
+     *  server times exactly this span too, per listener, with the same clock (feedClientChannels ->
+     *  CLOCK_THREAD_CPUTIME_ID around feedOneClient), and for the same reason. */
+    double ownCpu = 0;
+    auto round_ = [&](const cf32* p, int n) {
+        chan.feed(p, n, [&](const cf32* bins, int nb) {
+            (void)nb;
+            const double t0 = threadSelfCpu();
+            const int got = chan.extract(bins, centreBin, chanBins, slice.data(), ectx, chan.blockIndex());
+            if (got > 0) pipe.feed(slice.data(), got);
+            ownCpu += threadSelfCpu() - t0;
+        });
+    };
+    const int blk = 65536, total = (int)iq.size();
+    for (int o = 0; o < std::min(total, (int)fs / 2); o += blk) round_(iq.data() + o, std::min(blk, total - o));
+    const auto mid = threadCpu();
+    const double selfMid = threadSelfCpu();
+    ownCpu = 0;                                            // ★ the warm-up's work is not the measurement's
+    double fed = 0;
+    while (fed < seconds * fs) {
+        for (int o = 0; o < total; o += blk) round_(iq.data() + o, std::min(blk, total - o));
+        fed += total;
+    }
+    const auto after = threadCpu();
+    const double selfEnd = threadSelfCpu();
+    std::map<long, std::string> names;
+    for (const auto& kv : after) if (!before.count(kv.first)) names[kv.first] = threadName(kv.first);
+    pipe.stop();
+    const double sigSecs = fed / fs;
+    (void)selfMid; (void)selfEnd;
+    double sum = 100.0 * ownCpu / sigSecs;                // the extract and this listener's feed, alone
+    r.threads.push_back({ "extract+demod", sum });
+    for (const auto& kv : after) {
+        if (before.count(kv.first)) continue;
+        auto m = mid.find(kv.first);
+        const double pct = 100.0 * (kv.second - (m != mid.end() ? m->second : 0.0)) / sigSecs;
+        r.threads.push_back({ names[kv.first], pct });
+        sum += pct;
+    }
+#if defined(VIBE_HAVE_OPUS)
+    if (std::getenv("VIBE_BENCH_DEBUG")) std::fprintf(stderr, "[%s] opus packets %ld\n", id.c_str(), la.n);
+#endif
+    r.pct = sum; r.hottest = "per listener";
+    return r;
+}
+
 inline const char* grade(double pct) { return pct < 0 ? "none" : pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
 } // namespace benchdetail
 
@@ -243,31 +346,41 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         res.push_back(runOne(sc[i].id, sc[i].label, sc[i].fs, sc[i].mode, sc[i].bw, cache[sc[i].fs],
                              secondsPerScenario, sc[i].rds));
     }
-    // ★★ LOCKED RANGE — ONE LISTENER'S DEMODULATOR AT CHANNEL RATE. There each listener runs their own demod on a
-    //    narrow channel cut from the shared capture, on their own thread; the shared front (the wide filtering) is
-    //    the vibe-dsp figure above and is paid once. So: time one demod at its channel rate (all its threads summed —
-    //    they are that listener's), and fit as many as the spare cores carry inside the green budget.
-    struct Lk { const char* id; const char* label; double fs; M mode; double bw; bool fm; };
+    /* ★★★ LOCKED RANGE — THE LISTENER'S WHOLE CHAIN, NOT JUST ITS DEMODULATOR (2026-09-19).
+     *  This timed a bare RxPipeline at channel rate, and on a Pi 2 read 3.4 % for an NFM listener the live
+     *  server cost ~7 %. The missing half is the CHANNEL EXTRACT: the listener's own inverse transform, cut
+     *  from the shared forward FFT (feedOneClient -> Channelizer::extract). Its cost barely changes with the
+     *  channel's width, so it is most of a narrow listener and a rounding error for WFM — which is exactly
+     *  why WFM already agreed with the live figure and NFM did not.
+     *  ★★ MEASURED, NOT SCALED. A fudge factor fitted on one box would be wrong on the next; running the same
+     *     two pieces the server runs is right everywhere. Live on the Pi 2, 6 NFM listeners: 4.0 % extract +
+     *     2.2 % demod + 0.8 % sending each.
+     *  ★ The shared forward FFT is NOT counted here — it is paid once, by vibe-dsp, however many listeners
+     *    there are, and it is already in the rows above. What this row is, is the part that SCALES. */
+    struct Lk { const char* id; const char* label; M mode; double bw; bool fm; };
     const Lk lk[] = {
-        // ★ The server's own channel rates (chanBinsFor: ~2.5x the bandwidth, whole FFT bins, 2.048 MS/s / 4096):
-        //   512 kHz for WFM, 32 kHz for the narrow modes.
-        // ★★ PROVISIONAL: this times the DEMOD only. A live locked-range listener also pays their own Opus encode,
-        //    their private zoom spectrum and their slice of the channelizer — live on the Pi 2 an NFM listener cost
-        //    ~27 % where this reads ~6 %. Calibrate against a live locked run before these numbers drive a limit.
-        { "lk_wfm", "Locked range, per WFM listener (demod only)", 512000, M::WFM,     200000, true  },
-        { "lk_nfm", "Locked range, per NFM listener (demod only)",  32000, M::NFM,      12500, false },
-        { "lk_am",  "Locked range, per AM listener (demod only)",   32000, M::AM,       10000, false },
-        { "lk_ssb", "Locked range, per SSB listener (demod only)",  32000, M::SSB_USB,   2700, false },
+        { "lk_wfm", "Locked range, per WFM listener", M::WFM,     200000, true  },
+        { "lk_nfm", "Locked range, per NFM listener", M::NFM,      12500, false },
+        { "lk_am",  "Locked range, per AM listener",  M::AM,       10000, false },
+        { "lk_ssb", "Locked range, per SSB listener", M::SSB_USB,   2700, false },
     };
     std::map<std::string, double> perListener;
-    for (const auto& l : lk) {
-        if (progress) progress(N, N, l.label);
-        const auto sig = l.fm ? fmStation(l.fs, 1.0, 0.0) : nbSignal(l.fs, 1.0, 0.0);
-        Result one = runOne(l.id, l.label, l.fs, l.mode, l.bw, sig, secondsPerScenario, false);
-        double sum = 0; for (const auto& t : one.threads) sum += t.second;
-        one.pct = sum;                              // ★ a listener's whole cost: all of its threads
-        perListener[l.id] = sum;
-        res.push_back(one);
+    {
+        // The server's own geometry: fftSizeForRate (rate/75, at least 4096) and chanBinsFor (2.5x the
+        // bandwidth, at least 24 kHz, a power of two dividing the FFT).
+        const double fs = 2048000.0;
+        int fftSize = 4096; while (fftSize < (int)(fs / 75.0) && fftSize < 32768) fftSize *= 2;
+        const auto wide = fmStation(fs, 1.0, 200000.0);
+        for (const auto& l : lk) {
+            if (progress) progress(N, N, l.label);
+            int chanBins = 64;
+            const double need = std::max(l.bw * 2.5, 24000.0);
+            while (chanBins < fftSize && fs * chanBins / fftSize < need) chanBins <<= 1;
+            const double chanRate = fs * chanBins / fftSize;
+            res.push_back(runListener(l.id, l.label, fs, fftSize, chanBins, chanRate, l.mode, l.bw,
+                                      wide, secondsPerScenario));
+            perListener[l.id] = res.back().pct;
+        }
     }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");
