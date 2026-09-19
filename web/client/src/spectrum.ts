@@ -1353,6 +1353,8 @@ export class SpectrumClient {
   /** ★ Advanced RDS: ask for the eye diagrams in every 2nd message (~2/s at the ~3.9/s rdsx rate) — they are ~8 of each ~9 kB and
    *  build slowly; the last picture is kept in between (see 'rdsx'). The server only does this for a socket
    *  that asks, so installed apps keep the full stream. Off when the panel closes. */
+  // ★★ AND IT READS BETTER: at ~2/s each eye picture stays up long enough to see it open or close — Stuart,
+  //    2026-09-19: "slowing down the scopes actually makes the changes more visible". Do not raise it for smoothness.
   rdsxLight(on: boolean) { this._send({ type: 'rdsx', on: on ? 1 : 0, eyeEvery: 2 }); }
   private lastEye = { P: '', S: '', R: '' };
   /** ★ Raw IQ out for THIS session — see the audio panel's row. */
