@@ -1010,6 +1010,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //   (Not on a shared dial: there the server has already placed the radio, and this client
         //   has just adopted it.)
         else if (cfg.serverVfo) spec!.tune(clampTune(cfg.serverVfo), initialMode, { recenter: true });
+        applyBandStep(spec!.frequency);   // ★ a step that suits where we landed — see applyBandStep
       }
     },
     onSummon: () => onSummoned(),
@@ -7025,15 +7026,20 @@ function initSearch() {
  * the audio breaks up, and the span (sized from the AM bandwidth) is far too
  * narrow. The band knows what it wants; use it.
  */
-function applyBandDefaults(hz: number) {
-  if (!spec) return;
+/** ★★★ A STEP THAT SUITS THE BAND YOU JUMPED TO (Stuart, 2026-09-19: "Every time I load my server which is
+ *  default to FM broadcast I end up with a tiny step rate that is no good"). The band plan has always carried
+ *  the right step — LW 9 kHz, MW 9 or 10 kHz by ITU region, SSB 500 Hz, broadcast SW 1 kHz, FM 100 kHz — and
+ *  a function applying it (with the mode) sat here WRITTEN AND NEVER CALLED. Now called on the jumps: typed
+ *  frequency, bookmarks / search / VTS (tuneTo), and the first landing on connect. STEP ONLY: a bookmark
+ *  carries its own mode, and a typed frequency keeps yours. The listener can change the step after — only
+ *  the jump sets it; ordinary tuning never does. A frequency in no band leaves the step alone. */
+function applyBandStep(hz: number) {
+  if (!spec || !hz) return;
   const d = bandTuneDefaults(hz, ituRegion());
-  if (d.mode && d.mode !== spec.mode) setMode(d.mode as SDRMode, true);
-  if (d.step) {
-    step = d.step;
-    savePref('step', step);
-  }
+  if (d.step) { step = d.step; savePref('step', step); }
   syncStep();
+  const m = document.getElementById('mStep');
+  if (m) m.textContent = formatStep(step);
 }
 
 function tuneTo(r: SearchResult) {
@@ -7054,7 +7060,7 @@ function tuneTo(r: SearchResult) {
     syncBw();
   }
   renderFreq();
-  syncStep();
+  applyBandStep(r.frequency);
 }
 
 function initBookmarks() {
@@ -11371,7 +11377,7 @@ function initFreqEntry() {
     }
     spec!.tune(got, undefined, { recenter: true, retarget: true });
     renderFreq();
-    syncStep();
+    applyBandStep(got);
     closePanels();
   };
   $('freqGo').onclick = go;
