@@ -19448,6 +19448,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Re-find our dongle after a replug. Prefer the SERIAL — indices renumber when a different
      *  dongle is unplugged, and reopening by index can hand the listener a different receiver. */
     int findOurDevice() const {
+#ifdef __ANDROID__
+        /* ★★★ ANDROID CANNOT ENUMERATE — ask the descriptor we already hold (Sony XE85, 2026-09-19).
+         *  An app may not list USB devices itself (the UsbManager grant is per device, handed to us as
+         *  an fd), so rtlsdr_get_device_count() is always 0 here. Every stall therefore read as an
+         *  UNPLUG: "RTL-SDR gone", deviceLost, and the watchdog's reopen — which requires "back" —
+         *  never ran. A DAB switch that stalled the stream left the radio dead until the app was
+         *  restarted, with listeners still being admitted to silence.
+         *  usbfs answers read() with the device descriptor while the device is attached and
+         *  -ENODEV once it has gone: that is the presence test. */
+        if (usbFd >= 0) {
+            uint8_t d[18];
+            return ::pread(usbFd, d, sizeof d, 0) == (ssize_t)sizeof d ? 0 : -1;
+        }
+#endif
         const uint32_t n = rtlsdr_get_device_count();
         if (n == 0) return -1;
         if (!usbSerial.empty()) {
@@ -19462,7 +19476,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /**
-     * Reopen and restart capture. ★ NOT CALLED — kept as the skeleton of the real fix.
+     * Reopen and restart capture. Called by the capture watchdog now that every rtlsdr_* call site takes
+     * the device lock (see "AND NOW WE CAN ACTUALLY REOPEN IT" there). The note below is the history.
      *
      * Calling this from the watchdog thread CRASHED the server on replug: it closes and reopens
      * `dev` while the HTTP/control threads are still calling rtlsdr_set_gain / tuneHw / setFftRate
@@ -19477,6 +19492,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         joinOnce(rtlThread, "capture");     // the old capture thread has exited
         if (dev) { rtlsdr_close(dev); dev = nullptr; }
 
+#ifdef __ANDROID__
+        // ★ The same fd we opened with: rtlsdr_close() does not close it (libusb_wrap_sys_device does
+        //   not own it), and Android will not hand us the device by index.
+        if (usbFd >= 0) {
+            if (rtlsdr_open_sys_dev(&dev, (intptr_t)usbFd) != 0 || !dev) { dev = nullptr; return false; }
+        } else
+#endif
         if (rtlsdr_open(&dev, (uint32_t)idx) != 0 || !dev) { dev = nullptr; return false; }
 
         // Re-apply everything the device forgot by being unplugged. Same order as start().
