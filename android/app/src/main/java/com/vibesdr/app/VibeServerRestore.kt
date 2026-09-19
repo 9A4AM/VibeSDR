@@ -57,6 +57,16 @@ object VibeServerRestore {
     /** ★ Was this phone serving when it stopped? The update path asks before it acts — see
      *  VibeUpdateReceiver. Read-only; arming stays the business of the JS that started the server. */
     fun isArmed(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ARMED, false)
+    /** ★ Start this server when the DEVICE boots? The owner's switch (config `startOnBoot`), and only if the server
+     *  was running when the device went down — stopped on purpose stays stopped. See VibeBootReceiver. */
+    fun bootWanted(ctx: Context): Boolean {
+        if (!isArmed(ctx)) return false
+        // ★ A config saved before the switch existed has no key: take the switch's own default — ON for a TV.
+        val pm = ctx.packageManager
+        val tv = pm.hasSystemFeature("android.hardware.type.television") || pm.hasSystemFeature("android.software.leanback_only")
+        return try { org.json.JSONObject(prefs(ctx).getString(K_CONFIG, "{}") ?: "{}").optBoolean("startOnBoot", tv) }
+               catch (_: Throwable) { false }
+    }
 
     fun disarm(ctx: Context) {
         prefs(ctx).edit().putBoolean(K_ARMED, false).apply()

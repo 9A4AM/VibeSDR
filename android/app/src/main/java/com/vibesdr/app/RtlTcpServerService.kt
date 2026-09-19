@@ -97,7 +97,8 @@ class RtlTcpServerService : Service() {
                  *  reason is final and reported at once. */
                 var err = VibeServerRestore.restore(applicationContext)
                 var tries = 0
-                while (err == "no SDR attached" && tries < 15) {
+                // ★ 30 tries x 2 s: at DEVICE BOOT (VibeBootReceiver) the USB bus is still coming up.
+                while (err == "no SDR attached" && tries < 30) {
                     Thread.sleep(2000); tries++
                     err = VibeServerRestore.restore(applicationContext)
                 }

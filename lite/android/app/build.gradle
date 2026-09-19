@@ -60,7 +60,9 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt',
               // ★ Puts a running server back after an update (MY_PACKAGE_REPLACED). Missing from Lite, so a
               //   reinstall left a TV box's server stopped until somebody walked to it (2026-09-19).
-              'VibeUpdateReceiver.kt']
+              'VibeUpdateReceiver.kt',
+              // ★ Start on boot — the owner's switch, TV boxes especially.
+              'VibeBootReceiver.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"

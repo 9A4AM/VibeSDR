@@ -147,6 +147,7 @@ const K = {
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
   dabRateBoost: 'vs_dabboost',
   dabScanLabels: 'vs_dabscan',
+  startOnBoot: 'vs_startonboot',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
@@ -278,9 +279,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
   const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
   const [dabScanLabels, setDabScanLabels] = useState(-1);
+  /** ★ LITE ONLY — start the server when the device boots (VibeBootReceiver). ON by default on a TV (the always-on
+   *  box after a power cut), OFF elsewhere; the owner can turn it off if it disturbs the TV (Stuart, 2026-09-19). */
+  const [startOnBoot, setStartOnBoot] = useState(!!(NativeModules as any).VibeLocalSDR?.isTv);
   useEffect(() => {
     if (!isLite) return;
     AsyncStorage.getItem(K.dabScanLabels).then(v => { if (v === '0' || v === '1') setDabScanLabels(Number(v)); });
+    AsyncStorage.getItem(K.startOnBoot).then(v => { if (v === '0' || v === '1') setStartOnBoot(v === '1'); });
   }, [isLite]);
   const [gainLimits, setGainLimits]   = useState('');
   /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
@@ -1055,7 +1060,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
         //   like the resting gain, not of sharing — see the note in VibeServerBoot.
         blockedModes, dabRateBoost,
-        ...(isLite ? { dabScanLabels } : {}),
+        ...(isLite ? { dabScanLabels, startOnBoot } : {}),
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
@@ -1125,7 +1130,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost, dabScanLabels, isLite,
+      blockedModes, dabRateBoost, dabScanLabels, isLite, startOnBoot,
       gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 
@@ -2233,6 +2238,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ★★ NOT the Linux "release when idle", which hands the dongle to another program:
                    Android's permission model means nothing else can pick it up anyway, so
                    releasing would cost the restart and buy nothing (Stuart, 2026-08-19). */}
+            {isLite && (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN THIS DEVICE STARTS</Text>
+              <View style={[styles.card, { borderColor: C.border }]}>
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                    Start the server automatically
+                  </Text>
+                  <Switch value={startOnBoot}
+                    onValueChange={(v) => { setStartOnBoot(v); AsyncStorage.setItem(K.startOnBoot, v ? '1' : '0'); }}
+                    trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  {startOnBoot
+                    ? 'After a power cut or a restart the server comes back on its own, if it was running before. '
+                      + 'Turn this off if it gets in the way of using the TV. Takes effect from the next Start.'
+                    : 'The server waits for you to open this app and press Start after a restart.'}
+                </Text>
+              </View>
+            </>)}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN NOBODY IS LISTENING</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
