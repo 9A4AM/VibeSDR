@@ -7105,6 +7105,8 @@ function syncDialTips() {
   const t = (id: string, s: string) => { const e = document.getElementById(id); if (e) e.title = s; };
   t('mVfoDown', `Tune down ${st}`);
   t('mVfoUp',   `Tune up ${st}`);
+  // ★ And ON the arrows, where a phone can see it too — a tooltip is desktop-only.
+  for (const id of ['mStepCapD', 'mStepCapU']) { const e = document.getElementById(id); if (e) e.textContent = st; }
   t('mStep',    `Tuning step (now ${st}) — tap to change`);
   t('mZoomOut', 'Zoom out — show more of the band');
   t('mZoomIn',  'Zoom in — show less of the band, in more detail');

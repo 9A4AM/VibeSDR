@@ -119,6 +119,29 @@ inline benchdetail::Result runDabRow(const std::string& id, const std::string& l
     return r;
 }
 
+/** ★★ FETCHED ONCE, KEPT (Stuart, 2026-09-19): the clip is 18 MB gzipped, too big to ship in an APK or a .deb and
+ *  needed only when the benchmark runs. Desktop/Linux fetches it here with curl; Android hands in a path its own
+ *  Kotlin downloaded. Returns the clip's path, or empty if it could not be had — the DAB rows are then simply
+ *  absent, never a guessed figure.
+ *  ★ A part-downloaded file is worse than none (it would grade a row "none" and look like a broken decoder), so the
+ *    download lands on a temporary name and is only moved into place once it opens as a clip. */
+inline std::string ensureDabClip(const std::string& cacheDir,
+                                 const std::string& url = "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v1/dab-bench.vbu8.gz") {
+#if defined(__ANDROID__)
+    (void)cacheDir; (void)url; return "";
+#else
+    const std::string path = cacheDir + "/dab-bench.vbu8";
+    DabClip probe;
+    if (loadDabClip(path, probe)) return path;                 // already here and whole
+    const std::string tmp = path + ".part";
+    const std::string cmd = "curl -sSL --max-time 900 '" + url + "' | gzip -dc > '" + tmp + "' 2>/dev/null";
+    if (std::system(cmd.c_str()) != 0) { std::remove(tmp.c_str()); return ""; }
+    if (!loadDabClip(tmp, probe)) { std::remove(tmp.c_str()); return ""; }
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return ""; }
+    return path;
+#endif
+}
+
 /** Both DAB rows — the station alone, and with the whole-multiplex label scan — or none if no clip. */
 inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, double seconds) {
     std::vector<benchdetail::Result> out;

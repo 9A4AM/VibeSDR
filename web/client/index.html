@@ -712,6 +712,11 @@ html #bar { display: none; }
   display: flex; align-items: center; justify-content: center;
   min-width: 2.6em; opacity: 0.6; color: var(--btn-text);
 }
+/* ★★ THE STEP, ON THE ARROW THAT TAKES IT (Stuart, 2026-09-19). A tooltip answers "how far does this tune me?"
+   only on a desktop, with a mouse, after a wait — and that is the one question a first-time visitor has. Dim and
+   small, above the chevron, so the arrow still reads as an arrow; the step BUTTON is still how you change it. */
+.mVfoBtn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.04em; }
+.mStepCap { font-size: 0.42em; line-height: 1; opacity: 0.62; letter-spacing: 0.02em; font-weight: 400; }
 
 /* ── Mode picker (tap the MODE on the pill, as the app does) ──────────────────── */
 /* ★ The mode needs to LOOK tappable. Sitting inside a pill whose other half opens a
@@ -3139,9 +3144,9 @@ select.btn { padding: 6px 8px; }
            changes the SPAN (a quantity). The glyph between each pair names it, so no button
            needs a text label and both stay wide enough for a thumb. -->
       <div class="mDial" id="mVfoDial">
-        <button class="mBtn" id="mVfoDown" aria-label="Tune down">&lsaquo;</button>
+        <button class="mBtn mVfoBtn" id="mVfoDown" aria-label="Tune down"><span class="mStepCap" id="mStepCapD" aria-hidden="true"></span>&lsaquo;</button>
         <span class="mDialGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
-        <button class="mBtn" id="mVfoUp" aria-label="Tune up">&rsaquo;</button>
+        <button class="mBtn mVfoBtn" id="mVfoUp" aria-label="Tune up"><span class="mStepCap" id="mStepCapU" aria-hidden="true"></span>&rsaquo;</button>
       </div>
 
       <!-- The pill. The signal meter IS the background — red at the noise floor through to
