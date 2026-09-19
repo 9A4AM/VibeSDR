@@ -8,8 +8,12 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-feature android:name="android.hardware.usb.host" android:required="true"/>
+  <!-- ★ Android TV (Stuart 2026-09-19: retired TV boxes are the Lite audience). A TV has no touchscreen
+       and runs the leanback launcher; neither may be REQUIRED or the phone/tablet install breaks. -->
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+  <uses-feature android:name="android.software.leanback" android:required="false"/>
 
-  <application android:name=".MainApplication" android:label="VibeServer Lite" android:icon="@mipmap/ic_launcher"
+  <application android:name=".MainApplication" android:label="VibeServer Lite" android:icon="@mipmap/ic_launcher" android:banner="@mipmap/ic_launcher"
                android:allowBackup="false" android:extractNativeLibs="true"
                android:usesCleartextTraffic="true"
                android:theme="@style/AppTheme">
@@ -19,6 +23,8 @@
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
+        <!-- ★ Without this the app never appears on an Android TV home screen. -->
+        <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
       </intent-filter>
       <!-- Plugging a supported radio in offers this app, and grants it the device. Same filter
            as the main app (synced from its res/xml at build time). -->
