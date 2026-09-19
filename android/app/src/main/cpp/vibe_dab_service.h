@@ -154,7 +154,7 @@ public:
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         requestMp2Reset_();   // ★ vibe-mp2 owns the decoder — see mp2Loop_
-        aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
+        aac_.reset(); aacDry_ = 0;   // ★ a new service is a new codec configuration — see setChannel
         /* ★★★ AND THE SUPER-FRAME WINDOW. sf_ holds the last five logical frames — of the OLD
          *  service. The first super frame after a switch could be four old frames and one new,
          *  pass its firecode on the OLD service's header, and be decoded under the OLD format: on
@@ -1944,7 +1944,19 @@ private:
                  *  (Stuart, from Saber's box, 2026-09-07). From the first output onwards each
                  *  write yields one unit's worth, so the count starts there. */
                 if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
-                if (aac_.decode(pkt.data(), pkt.size(), dec)) {
+                const bool aacGot = aac_.decode(pkt.data(), pkt.size(), dec);
+                /* ★★★ A DECODER THAT STOPS ANSWERING IS REBUILT, NOT WAITED ON (Sony TV, 2026-09-19). After a
+                 *  multiplex change Android's AAC decoder (OMX SoftAAC2) took units for a few seconds and then
+                 *  returned nothing — no error, frames 258 of 261 good, the multiplex locked — and the audio simply
+                 *  stopped until a page refresh re-entered DAB. kAacDryMax units (~2 s of programme) in with nothing
+                 *  out is a stuck decoder, not priming (which is a handful); rebuild it as a fresh service would. */
+                if (aacGot && !dec.interleaved.empty()) aacDry_ = 0;
+                else if (++aacDry_ >= kAacDryMax) {
+                    std::fprintf(stderr, "[DAB] AAC decoder returned no audio for %u units — rebuilding it (%u so far)\n",
+                                 aacDry_, ++aacRebuilds_);
+                    aac_.reset(); aacPrimed_ = false; aacDry_ = 0;
+                }
+                if (aacGot) {
                     if (!dec.interleaved.empty()) {
                         /* ★★★ THE FIRST BURST IS EXCLUDED, NOT COUNTED. It pays out the units ffmpeg
                          *  buffered while priming — samples with no counted unit against them — and
@@ -2099,6 +2111,9 @@ private:
     AudioFormat afmt_{};
     double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
     bool aacPrimed_ = false;   // the decoder has returned its first sample — counting starts AFTER it
+    uint32_t aacDry_ = 0;         // units fed since the decoder last returned audio — see the watchdog at the decode
+    uint32_t aacRebuilds_ = 0;    // how often it had to be rebuilt, for the log
+    static constexpr uint32_t kAacDryMax = 60;   // ~2-3 s of DAB+ (2-6 units per 120 ms super frame)
     bool aacPrimeBurst_ = false;   // this output is the priming burst: excluded from the count
     bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;
     int aacCfgSeen_ = 0, aacCfgUnits_ = 0;   // ★ which geometry is being measured, and for how long
