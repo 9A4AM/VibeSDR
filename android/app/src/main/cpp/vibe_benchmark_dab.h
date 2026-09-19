@@ -2,9 +2,10 @@
 //
 // ★★★ A REAL MULTIPLEX, NOT A SYNTHETIC ONE. A DAB receiver's cost is sync, FIC, Viterbi and the audio
 //     decoder working on a real ensemble; a made-up OFDM signal would decode nothing and measure the idle path.
-//     So the input is 1.92 s of 10D (Northampton, 26 services) captured off the air, as 8-bit IQ the way an RTL
-//     delivers it — dab-10D.vbu8, fetched from GitHub on the first run so the APK and the .deb stay small.
-// ★★ 20 frames, exactly: a whole number of 96 ms frames AND of 5-CIF DAB+ superframes, so the loop is seamless in
+//     So the input is a real multiplex built from generated audio and made-up labels (vibeserver/bench-clip/ —
+//     nothing broadcast, nothing anyone else owns), damaged like a weak signal, as 8-bit IQ the way an RTL delivers
+//     it — dab-bench.vbu8, fetched from GitHub on the first run so the APK and the .deb stay small.
+// ★★ 60 frames (5.76 s — station text and slides need seconds to complete), exactly: a whole number of 96 ms frames AND of 5-CIF DAB+ superframes, so the loop is seamless in
 //    timing and the superframe count does not break at the seam.
 // ★★ FED IN REAL TIME, not as fast as it will take it. DabService drops the OLDEST IQ when its worker falls behind
 //    (feed(): inDropped_) — flooded, a slow box would throw most of the signal away and read CHEAPER than it is.
@@ -48,7 +49,7 @@ inline bool loadDabClip(const std::string& path, DabClip& c) {
  *  lock, find the service and start its audio. Scored like the others — the hottest thread vs one core — and
  *  -1 if the chain never decoded a superframe (a row that decoded nothing measured nothing). */
 inline benchdetail::Result runDabRow(const std::string& id, const std::string& label, const DabClip& clip,
-                                     bool scanLabels, double seconds, double warm = 3.0) {
+                                     bool scanLabels, double seconds, double warm = 6.0) {
     using namespace benchdetail;
     Result r; r.id = id; r.label = label; r.rate = clip.rate;
     auto& scan = vibedab::dabScanLabels();
@@ -67,10 +68,12 @@ inline benchdetail::Result runDabRow(const std::string& id, const std::string& l
     size_t pos = 0;
     std::vector<float> pcm(48000);
     std::map<long, double> mid; double selfMid = 0; bool measuring = false;
+    std::string droppedAtMid;
     const auto t0 = std::chrono::steady_clock::now();
     double fedSecs = 0;
     for (;;) {
-        if (!measuring && fedSecs >= warm) { mid = threadCpu(); selfMid = threadSelfCpu(); measuring = true; }
+        if (!measuring && fedSecs >= warm) { mid = threadCpu(); selfMid = threadSelfCpu(); measuring = true;
+            droppedAtMid = svc->json(); }
         if (fedSecs >= warm + seconds) break;
         const size_t n = std::min(blk, total - pos);
         svc->feed(clip.iq.data() + pos, n / 2);
@@ -100,6 +103,19 @@ inline benchdetail::Result runDabRow(const std::string& id, const std::string& l
         if (used > best) { best = used; r.hottest = names[kv.first]; }
     }
     r.pct = sfOk > 0 ? 100.0 * best : -1.0;
+    // ★ VIBE_BENCH_DEBUG=1: the decoder's own counters — how the clip's damage is checked (RS must be fixing).
+    if (std::getenv("VIBE_BENCH_DEBUG")) {
+        auto num = [&](const char* k) { const std::string key = std::string("\"") + k + "\":";
+            const char* p = std::strstr(js.c_str(), key.c_str()); return p ? std::strtoul(p + key.size(), nullptr, 10) : 0UL; };
+        // ★★ DROPPED IN THE MEASURED WINDOW, not since the start: IQ thrown away is work not done, and a row that
+        //    dropped is a row that read cheap. The warm-up's own drops (cold caches, first allocations) are not the
+        //    measurement's, so the figure at the start of the window is subtracted.
+        unsigned long dropWarm = 0;
+        if (const char* p = std::strstr(droppedAtMid.c_str(), "\"dropped\":")) dropWarm = std::strtoul(p + 10, nullptr, 10);
+        std::fprintf(stderr, "[%s] sfTried %lu sfOk %lu rsFixed %lu rsLost %lu aacDecoded %lu aus %lu dropped %lu (warm-up %lu)\n",
+                     id.c_str(), num("sfTried"), num("sfOk"), num("rsFixed"), num("rsLost"), num("aacDecoded"),
+                     num("aus"), num("dropped") - dropWarm, dropWarm);
+    }
     return r;
 }
 
