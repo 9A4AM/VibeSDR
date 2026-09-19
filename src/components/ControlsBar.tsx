@@ -306,7 +306,7 @@ export interface ControlsBarProps {
    *  you know if its safe to tune without asking the chat."*
    *  ★★ ALONE IS THE LOAD-BEARING STATE, so it gets words rather than a number: "Only you" is
    *     instantly readable as permission, where "1 listening" makes you count. */
-  sharedDial?: { listeners: number; alone: boolean; tuning: string } | null;
+  sharedDial?: { listeners: number; max: number; alone: boolean; tuning: string } | null;
   /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
    *  asked; the number rides in the accessibility label, as the web's tooltip. */
@@ -484,7 +484,7 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
-  tight = false, fmStereo = false, wide = false, sharedTuner = false,
+  tight = false, fmStereo = false, wide = false, sharedTuner = null,
 }: any) {
   const { theme: t } = useTheme();
   /* ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19) — the web client's #mShared, here. A box of its
@@ -521,10 +521,16 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
     // absorbs the squeeze (meter stays visible ≥13% each side).
     <View style={{ maxWidth: tight ? '66%' : '74%', alignSelf: 'center', alignItems: 'stretch' }}>
     {sharedTuner && (
+      /* ★★ CONTEXT-AWARE (noobish via Stuart, 2026-09-19): alone, you may just tune; with company, ask — and
+       *    the room's count lives HERE, where the question is asked, not in a corner badge. */
       <View style={[pm.sharedBox, { backgroundColor: t.pillBg }]}
-            accessibilityRole="text" accessibilityLabel="Shared tuner. Ask before tuning.">
-        <Text style={[pm.sharedTxt, { fontFamily: t.font, color: t.snrColor }]} numberOfLines={1} adjustsFontSizeToFit>
-          SHARED TUNER · ASK BEFORE TUNING
+            accessibilityRole="text"
+            accessibilityLabel={sharedTuner.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
+              : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
+        <Text style={[pm.sharedTxt, { fontFamily: t.font, color: sharedTuner.alone ? '#7bd88f' : t.snrColor }]}
+              numberOfLines={1} adjustsFontSizeToFit>
+          {sharedTuner.alone ? 'SHARED TUNER · FREE TO TUNE'
+            : `SHARED TUNER · ASK TO TUNE · ${sharedTuner.listeners}${sharedTuner.max > 1 ? `/${sharedTuner.max}` : ''} 👤`}
         </Text>
       </View>
     )}
@@ -834,7 +840,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
           pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
-          tight={tight} sharedTuner={!!sharedDial}
+          tight={tight} sharedTuner={sharedDial ?? null}
         />
       </View>
 
@@ -953,15 +959,11 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           {/* The room, beside the clock — the same kind of fact as "how long have I got", and read
               at the same moment. ★ Green when you are alone: a colour you can take in without
               reading, because the point is to answer "may I just tune?" at a glance. */}
-          {!!sharedDial && (
-            <Text style={{ color: sharedDial.alone ? '#7bd88f' : t.clockColor,
-                           fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
-                  numberOfLines={1}
-                  accessibilityLabel={sharedDial.alone
-                    ? 'You are the only listener — free to tune'
-                    : `${sharedDial.listeners} listening on this shared dial`}>
-              {sharedDial.alone ? '👤 Only you' : `👥 ${sharedDial.listeners}`}
-              {sharedDial.tuning ? ` · ${sharedDial.tuning}` : ''}
+          {/* ★ Who is moving the dial. The room's COUNT moved to the shared-tuner banner (2026-09-19). */}
+          {!!sharedDial?.tuning && (
+            <Text style={{ color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
+                  numberOfLines={1}>
+              {sharedDial.tuning}
             </Text>
           )}
           {!!storms && (
@@ -1104,7 +1106,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
             pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
             modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
-            sharedTuner={!!sharedDial}
+            sharedTuner={sharedDial ?? null}
           />
         </View>
       </View>

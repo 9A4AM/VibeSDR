@@ -607,9 +607,29 @@ async function loadAudioPolicy(httpBase: string) {
     // ★ No SHARE on a shared dial — a link cannot move a radio other people are hearing (see applyShareParams).
     const sb = document.getElementById('freqShare'); if (sb) sb.hidden = srvSharedDial;
     // ★ And the standing reminder above the dial — see #mShared in index.html.
-    const ms = document.getElementById('mShared'); if (ms) ms.hidden = !srvSharedDial;
+    updateSharedBanner();
     document.getElementById('mPillIn')?.classList.toggle('shared', srvSharedDial);
   } catch { /* leave the safe defaults */ }
+}
+
+/** ★★ THE SHARED-TUNER BANNER SAYS WHAT TO DO NOW (noobish via Stuart, 2026-09-19). Alone: free to tune. With
+ *  company: ask — and how many are here, where the question is asked, instead of in the corner badge.
+ *  listenerCount includes you. */
+function updateSharedBanner() {
+  const ms = document.getElementById('mShared');
+  if (!ms) return;
+  ms.hidden = !srvSharedDial;
+  if (!srvSharedDial) return;
+  // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
+  if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
+  const alone = listenerCount <= 1;
+  ms.classList.toggle('alone', alone);
+  ms.innerHTML = alone ? 'SHARED TUNER · FREE TO TUNE'
+    : `SHARED TUNER · ASK TO TUNE · ${listenerCount}${listenerMax > 1 ? `/${listenerMax}` : ''} `
+      + `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
+      + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`;
+  ms.title = alone ? 'Nobody else is listening — free to tune'
+    : `${listenerCount} listening on this shared dial — ask in chat before tuning`;
 }
 
 /** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
@@ -1127,10 +1147,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   owner wanted at a glance. `busy` was a yes/no built for a one-at-a-time receiver.
     onUsers: (n, max) => {
       listenerCount = n; listenerMax = max;
+      // ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT ON A SHARED DIAL (noobish via Stuart, 2026-09-19): "1 listening
+      //    of 5" with you alone reads as one OTHER person, and a shared dial's banner now carries the count.
       const el = document.getElementById('rxUsers');
-      if (el) el.textContent = n > 0
+      if (el) el.textContent = n > 1 && !srvSharedDial
         ? `${n} listening${max > 1 ? ` of ${max}` : ''}`
         : '';
+      updateSharedBanner();
     },
     // ── ★★ THE SHARED DIAL. Only a receiver running open or spectator tuning sends these; on an
     //    ordinary one this never fires, and the buttons stay in the disabled state they start in.
@@ -6374,7 +6397,7 @@ async function loadOwnerNotice() {
     if (softLimit && Number(j?.limitMin) > 0 && !softLimitTold) {
       softLimitTold = true;
       const mins = Number(j.limitMin);
-      showPill(`This receiver is shared. It is yours for ${mins} minutes — after that you keep it `
+      showPill(`This receiver is shared. Your place is guaranteed for ${mins} minutes — after that you keep it `
              + `until somebody else wants it.`, 11000);
     }
     showLandingMessage(j?.landingMessage, j?.landingLinkUrl, j?.landingLinkLabel);
@@ -7636,7 +7659,7 @@ function paintTimeLeft() {
   //    you", and on a soft server nothing is: the number running out changes what MAY happen, not
   //    what WILL. Dressing a guarantee as an alarm is how a listener learns to distrust it.
   el.textContent = softLimit
-    ? `Yours for ${mm}:${String(ss).padStart(2, '0')}`
+    ? `Guaranteed time ${mm}:${String(ss).padStart(2, '0')}`   // ★ not "Yours for": it read as exclusive (2026-09-19)
     : `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
   el.className = softLimit ? '' : (left <= 30 ? 'crit' : left <= 120 ? 'warn' : '');
   el.hidden = false;

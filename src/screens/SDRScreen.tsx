@@ -5092,7 +5092,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const vfo = sharedDialRef.current ? SHARED_VFO_LINE : '';
           if (vfo) vfoToldRef.current = true;
           setDialHint((o.limitSoft
-            ? `This receiver is shared. It is yours for ${mins} minutes — after that you keep it `
+            ? `This receiver is shared. Your place is guaranteed for ${mins} minutes — after that you keep it `
               + `until somebody else wants it.`
             : `This receiver is shared. You have ${mins} minutes, then it passes to whoever is `
               + `waiting.`) + vfo);
@@ -7660,13 +7660,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   count is trivia, not permission.
   const sharedDialProp = useMemo(() => sharedDial && dialState ? {
     listeners: dialState.listeners,
+    max: occMaxUsers,
     alone: dialState.listeners <= 1,
     // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
     //    is not news to you, and putting it here would make the badge cry wolf.
     tuning: (dialState.tuner && !dialState.mine)
       ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
       : '',
-  } : null, [sharedDial, dialState?.listeners, dialState?.tuner, dialState?.mine, dialState?.decoding]);
+  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -8896,7 +8897,10 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  ★ I had reported OWRX as "not tracked" in the audit. It is; my grep looked for
          *    users/listeners/rx_chans and OWRX calls it `clients`. */
         const n = dialState?.listeners ?? ((occListeners ?? 0) > 0 ? occListeners : clientCount);
-        if (n == null || n <= 0) return null;
+        /* ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT AT ALL ON A SHARED DIAL (noobish via Stuart, 2026-09-19).
+         *    "1 listening of 5" with you alone reads as ONE OTHER person; and a shared dial's banner above the
+         *    frequency now carries the count where it matters ("ASK TO TUNE · 3/5"). */
+        if (n == null || n <= 1 || sharedDialProp) return null;
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
             top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0)
