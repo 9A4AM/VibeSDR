@@ -449,6 +449,7 @@ let srvAdminProtected = false;
  *  What changes here is not what you may do — anybody may tune — but what happens WITHOUT you
  *  doing anything: nothing at all. See the restore in onConfig. */
 let srvSharedDial = false;
+let landingStepDone = false;   // ★ the first config's band step — see onConfig
 /* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
 let srvRawIq: 'off' | 'local' | 'public' = 'off';
 let srvRawIqMax = 0, srvRawIqActive = 0;
@@ -576,6 +577,7 @@ async function loadAudioPolicy(httpBase: string) {
   srvLocal = false;
   srvLan = false;
   srvSharedDial = false;
+  landingStepDone = false;
   try {
     const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
     if (!r.ok) return;
@@ -1015,8 +1017,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //   (Not on a shared dial: there the server has already placed the radio, and this client
         //   has just adopted it.)
         else if (cfg.serverVfo) spec!.tune(clampTune(cfg.serverVfo), initialMode, { recenter: true });
-        applyBandStep(spec!.frequency);   // ★ a step that suits where we landed — see applyBandStep
       }
+      /* ★★ THE LANDING'S STEP, ON THE FIRST CONFIG WHATEVER PATH IT TOOK. This sat inside the block above, which
+       *  does not run when the server sends serverVfo: SpectrumClient adopts that frequency BEFORE calling us,
+       *  so spec.frequency is already set — and the step stayed at a leftover 500 Hz on FM (Stuart, 2026-09-19,
+       *  the Sony TV). One flag, so later configs (every echo of a tune) never touch the step. */
+      if (!landingStepDone && spec!.frequency) { landingStepDone = true; applyBandStep(spec!.frequency); }
     },
     onSummon: () => onSummoned(),
     onBusy: (q) => showBusy(q),
