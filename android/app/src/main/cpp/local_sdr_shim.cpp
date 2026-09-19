@@ -19479,8 +19479,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
           if (bw_ > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw_); }
         tuneHw(rtlCenter.load());
-        if (lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(dev, 0);
-        else { rtlsdr_set_tuner_gain_mode(dev, 1); rtlsdr_set_tuner_gain(dev, lastGainTenthDb); }
+        /* ★★★ NEVER THE TUNER'S OWN AGC (2026-09-19). This re-apply path still handed an AUTO radio to
+         *  rtlsdr_set_tuner_gain_mode(dev, 0) — the hardware loop the setGain path stopped using long
+         *  ago ("unreliable across tuners and KNOWN BROKEN on the v4"). AUTO is VibeAGC, and VibeAGC
+         *  only ever writes the gain, trusting that "the tuner has been in manual mode since start and
+         *  nothing ever takes it out" — so after a replug every one of its steps was ignored. Manual
+         *  mode always; the owner's gain, or VibeAGC's own current step. */
+        rtlsdr_set_tuner_gain_mode(dev, 1);
+        { const int g = lastGainTenthDb >= 0 ? lastGainTenthDb : hwGainNow;
+          if (g >= 0) rtlsdr_set_tuner_gain(dev, g); }
         // ★ The digital AGC is one of the things the device forgot, and it was missing from this
         //   list — so a replug silently handed control back to the dongle. See g_rtlDigitalAgc.
         rtlsdr_set_agc_mode(dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
@@ -25088,9 +25095,10 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
               if (bw_ > 0) rtlsdr_set_tuner_bandwidth(impl->dev, (uint32_t)bw_); }
             impl->tuneHw(impl->rtlCenter.load());
-            if (impl->lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
-            else { rtlsdr_set_tuner_gain_mode(impl->dev, 1);
-                   rtlsdr_set_tuner_gain(impl->dev, impl->lastGainTenthDb); }
+            // ★★★ Manual mode ALWAYS — see the replug handler: AUTO is VibeAGC, never the tuner's own loop.
+            rtlsdr_set_tuner_gain_mode(impl->dev, 1);
+            { const int g = impl->lastGainTenthDb >= 0 ? impl->lastGainTenthDb : impl->hwGainNow;
+              if (g >= 0) rtlsdr_set_tuner_gain(impl->dev, g); }
             rtlsdr_reset_buffer(impl->dev);
             ok = true;
         }
