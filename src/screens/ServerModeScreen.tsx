@@ -278,6 +278,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  -1 = the server's default (OFF on VibeServer Lite: it costs a 32-bit box real CPU), 0 off, 1 on.
    *  Stuart, 2026-09-19: off on Lite "but with a toggle in the options"; the main app keeps it on, no switch. */
   const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
+  /** ★ A television: no battery (its battery service is invented — see VibeServerBoot), mains power. */
+  const isTv = !!(NativeModules as any).VibeLocalSDR?.isTv;
   const [dabScanLabels, setDabScanLabels] = useState(-1);
   /** ★ LITE ONLY — start the server when the device boots (VibeBootReceiver). ON by default on a TV (the always-on
    *  box after a power cut), OFF elsewhere; the owner can turn it off if it disturbs the TV (Stuart, 2026-09-19). */
@@ -427,7 +429,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
               {rate === 0
                 ? `Listeners choose their own span, up to ${topRateLabel}.`
-                : 'Pinned — listeners cannot change it. Lower it to save processing on a slow phone.'}
+                : 'Pinned — listeners cannot change it. Lower it to save processing on a slow device.'}
             </Text>
             {rateOptions.map(o => (
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
@@ -471,7 +473,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
                 DAB needs 2.048 MS/s (2.4 on a dongle that cannot do 2.048). With this on it takes
                 that rate while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
-                back afterwards. Leave it off on a slower phone: if it cannot sustain the higher rate
+                back afterwards. Leave it off on a slower device: if it cannot sustain the higher rate
                 the audio will break up, and the rate you picked is the one it can actually keep.
               </Text>
             </>)}
@@ -900,7 +902,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       if (list.length) Local?.setStationsJson?.(JSON.stringify(list));
       setEibiMsg(list.length
         ? `${list.length} stations loaded — clients will see these names.`
-        : 'Nothing came back. Check the phone has a connection and try again.');
+        : 'Nothing came back. Check the device has a connection and try again.');
     } catch (e: any) {
       setEibiMsg(e?.message ?? 'Could not download the schedule');
     } finally {
@@ -948,10 +950,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     return new Promise<boolean>(resolve => {
       Alert.alert(
         'Allow background usage',
-        "This phone restricts VibeSDR when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
+        "This device restricts VibeSDR when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
         "To fix it:\n" +
         "1. Tap “Open Settings”.\n" +
-        "2. Open “App battery usage” (or “Battery”) and turn ON “Allow background usage” (some phones call it “Unrestricted” / “Don't optimise”).\n" +
+        "2. Open “App battery usage” (or “Battery”) and turn ON “Allow background usage” (some devices call it “Unrestricted” / “Don't optimise”).\n" +
         "3. Come back and start the server.",
         [
           { text: 'Open Settings', onPress: () => { Local?.openAppSettings?.(); resolve(false); } },
@@ -1214,7 +1216,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
           <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-            {`Serving this phone's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
+            {`Serving this device's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
             stops the server and frees the dongle — except with "Return to browse", which leaves it
             running so you can listen to it yourself over loopback.
           </Text>
@@ -1472,7 +1474,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>Server mode</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          {`Share this phone's ${radio?.model ?? 'SDR'} over your network.`}
+          {`Share this device's ${radio?.model ?? 'SDR'} over your network.`}
         </Text>
 
         {/* Protocol picker — absent in a VibeServer-only build (see vibeServerOnly) */}
@@ -1523,7 +1525,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
             {advertise
               ? 'This server appears automatically on other VibeSDR devices on the network.'
-              : "Hidden — clients must enter this phone's address by hand. Good on a public hotspot" +
+              : "Hidden — clients must enter this device's address by hand. Good on a public hotspot" +
                 (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
@@ -1641,7 +1643,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               {locMode === 'off'
                 ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
                 : locMode === 'device'
-                ? "This phone's coarse position (~1 km) is published to every client that connects."
+                ? "This device's coarse position (~1 km) is published to every client that connects."
                 : 'A town or city needs an internet connection when you press Start (looked up once, then stored). A Maidenhead locator works OFFLINE — use it if this server has no internet. Published to every client; set it if the receiver lives somewhere other than where you are.'}
             </Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
@@ -1661,7 +1663,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               autoCapitalize="none" autoCorrect={false}
               style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              Only if you reach this phone through a tunnel (Cloudflare, nginx, Tailscale). List the
+              Only if you reach this device through a tunnel (Cloudflare, nginx, Tailscale). List the
               addresses you trust. Empty otherwise — without it everyone behind the tunnel looks
               like you, so the time limit and the ban list stop working.
             </Text>
@@ -1756,10 +1758,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               its usage terms. Your own network, and direct connections to a port you forward
               yourself, follow this setting.
             </Text>
+            {/* ★ Not in Lite: Lite does not play audio, so there is no "listening on this device". */}
+            {!isLite && (
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              This phone always gets uncompressed audio from its own server — the setting rations
+              This device always gets uncompressed audio from its own server — the setting rations
               your UPLINK, and listening on the same device never touches it.
             </Text>
+            )}
 
             {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
                 controls, because that is the only half of this screen it affects. It used to lead
@@ -2189,7 +2194,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               with an explanation. Their address is then held off for two minutes — otherwise
               their client would simply reconnect and carry on, and the limit would achieve
               nothing.{'\n\n'}
-              You are not affected: listening on this phone is exempt, and so is any session
+              You are not affected: listening on this device is exempt, and so is any session
               unlocked with the admin password. Leave it Unlimited for a private receiver.
             </Text>
 
@@ -2285,7 +2290,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   ? 'After five minutes with nobody connected the radio stops capturing and draws '
                     + 'much less power. It is never unplugged or handed away, so the next listener '
                     + 'starts it again immediately.'
-                  : 'The radio keeps capturing whether or not anybody is listening — warmer phone, '
+                  : 'The radio keeps capturing whether or not anybody is listening — warmer device, '
                     + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
               </Text>
             </View>
@@ -2352,6 +2357,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     back without a hand on it. At the floor the server warns listeners (VTS at
                     +10, +5 and at the floor), suspends every connection, releases the radio, and
                     comes back 20 points higher (Stuart, 2026-09-17). */}
+                {/* ★ Not on a TV: it has no battery, whatever its battery service claims — a floor there could never fire. */}
+                {!isTv && (<>
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BATTERY</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
@@ -2367,14 +2374,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     ))}
                   </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                    Suspend the server when the phone's battery falls to this level, to stop it
+                    Suspend the server when the device's battery falls to this level, to stop it
                     shutting down flat. Listeners are warned 10 and 5 points before, and told at
                     the floor; every connection is then suspended and the radio released. The
                     server comes back on its own once the battery is {batteryPauseAt > 0 ? `${batteryPauseAt + 20}%` : '20 points higher'}.
                     The level is shown on the admin page and beside this server in the directory.
                   </Text>
                 </View>
+                </>)}
 
+                {/* ★ Not in Lite: an rtl_tcp stream for external decoders — Lite is a VibeServer only (Stuart, 2026-09-18),
+                    and the extra IQ stream is weight a small box should not carry. */}
+                {!isLite && (<>
                 {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
                     channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
                     250 kHz on the local network — for a decoder the browser cannot run (DSD, a
@@ -2434,13 +2445,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     decoder that does not run in a browser. Always 48 kHz through the tunnel, paired
                     by a six-character code in the VibeIQ bridge — that is the rate that stays
                     reliable end to end. On your own network the ceiling is yours: 250 kHz suits any
-                    phone and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
+                    device and any Wi-Fi; the full span is about 40 Mb/s at 2.4 MHz and wants a wired
                     link. The port only opens while somebody has it on, and closes with their session.
                     {maxUsers > 1 && radioUse !== 'locked'
                       ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
                       : ''}
                   </Text>
                 </View>
+                </>)}
                 {/* ★★★ HOW MANY — ON EITHER KIND OF RECEIVER, and on an unlocked one this is the
                     control that turns it into an FM-DX receiver. It used to live inside the
                     locked-range block, so an unlocked radio was stuck at one listener and the
@@ -2492,8 +2504,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     : radioUse === 'locked'
                     ? `Up to ${maxUsers} listeners share the radio, each with their own tuning inside `
                       + 'what the radio is receiving.\n\nThe extra DSP is close to nothing — they '
-                      + 'share one FFT. What actually runs out is UPLINK, so on a phone this is a '
-                      + 'question about your connection, not about the handset.'
+                      + 'share one FFT. What actually runs out is UPLINK, so on a small device this is a '
+                      + 'question about your connection, not about the hardware.'
                     : `ONE DIAL, SHARED. Up to ${maxUsers} listeners hear the same frequency and `
                       + 'anybody may move it — the way FM-DX receivers work. They get a small set '
                       + 'of fixed messages ("Can I tune?", "Please hold — chasing DX") to agree who '
