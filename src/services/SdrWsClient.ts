@@ -498,6 +498,8 @@ const REOPENS_BEFORE_RECHECK = 2;
 // ── Client class ──────────────────────────────────────────────────────────────
 
 export abstract class SdrWsClient {
+  /** The last eye grids — kept between the rdsx messages that omit them (eyeEvery). */
+  private lastEye = { P: '', S: '', R: '' };
   /* ── THE FOUR PLACES THE TWO PROTOCOLS GENUINELY DIVERGE ────────────────────────────────
    *  Every one of these used to be `this.isVibeServer ? … : …` evaluated at a moment when the
    *  answer was not yet known. A subclass answers them by existing. */
@@ -1095,7 +1097,8 @@ export abstract class SdrWsClient {
   setAdvRds(on: boolean) {
     this.advRds = on;
     if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      this.spectrumWs.send(JSON.stringify({ type: 'rdsx', on: on ? 1 : 0 }));
+      // ★ eyeEvery: the eye grids in every 2nd message (~2/s at the ~3.9/s rdsx rate) — see the 'rdsx' parse, which keeps the last ones.
+      this.spectrumWs.send(JSON.stringify({ type: 'rdsx', on: on ? 1 : 0, eyeEvery: 2 }));
     }
   }
   private advRds = false;
@@ -1540,7 +1543,7 @@ export abstract class SdrWsClient {
       // ★ The server forgets the analyser on a new socket. If the panel is open, say so again
       // — otherwise a reconnect the user never noticed leaves it frozen on its last frame,
       // which reads as "the decoder died" rather than "the link blipped".
-      if (this.advRds) ws.send(JSON.stringify({ type: 'rdsx', on: 1 }));
+      if (this.advRds) ws.send(JSON.stringify({ type: 'rdsx', on: 1, eyeEvery: 2 }));
     };
 
     ws.onmessage = (e) => {
@@ -2280,9 +2283,11 @@ export abstract class SdrWsClient {
         grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
         // ★ NAMED EXPLICITLY, like every other field here — this object literal is built by
         //   hand, so a field left out arrives undefined rather than failing to compile.
-        eyeP: typeof msg.eyeP === 'string' ? msg.eyeP : '',
-        eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
-        eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
+        // ★ ABSENT = UNCHANGED, not empty: with eyeEvery the server sends the grids in every 3rd message only
+        //   (Stuart, 2026-09-19 — Advanced RDS took a server from 18 to 80-90 kB/s).
+        eyeP: typeof msg.eyeP === 'string' ? (this.lastEye.P = msg.eyeP) : this.lastEye.P,
+        eyeS: typeof msg.eyeS === 'string' ? (this.lastEye.S = msg.eyeS) : this.lastEye.S,
+        eyeR: typeof msg.eyeR === 'string' ? (this.lastEye.R = msg.eyeR) : this.lastEye.R,
         eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
         eyeAmp: Array.isArray(msg.eyeAmp) ? (msg.eyeAmp as unknown[]).map((v) => num(v, 0)) : [0, 0, 0],
         mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),

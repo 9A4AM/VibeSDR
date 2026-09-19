@@ -5839,6 +5839,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `rds`, or any control socket that asked. Leaf mutex; recompute outside clientMtx or in. */
     std::mutex rdsxMtx;
     std::set<const net::Socket*> rdsxSocks;
+    /** ★★ EYE GRIDS EVERY Nth MESSAGE, for clients that ASK (Stuart, 2026-09-19: Advanced RDS took a server
+     *  from 18 to 80-90 kB/s). The three eye diagrams are ~8.4 of the ~9 kB in each rdsx, sent up to 6x a
+     *  second, and they are persistence displays that build slowly. A client that sends eyeEvery:N on its
+     *  rdsx subscription keeps its last eye picture when a message has none; one that does not (every app
+     *  already installed maps a missing eye to EMPTY) gets them in every message exactly as before.
+     *  socket -> {every, sent}. rdsxMtx. */
+    std::map<const net::Socket*, std::pair<int, unsigned>> rdsxEyeEvery;
     bool rdsxDecoder = false;
     void rdsxRecompute() {
         bool on;
@@ -12844,7 +12851,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (vsModeBlocked("rds")) return;
             const bool on = jsonNum(msg, "on", v) && v != 0.0;
             { std::lock_guard<std::mutex> lk(rdsxMtx);
-              if (on) rdsxSocks.insert(sock.get()); else rdsxSocks.erase(sock.get()); }
+              if (on) rdsxSocks.insert(sock.get()); else rdsxSocks.erase(sock.get());
+              double ev = 0;
+              if (on && jsonNum(msg, "eyeEvery", ev) && ev >= 2 && ev <= 12) rdsxEyeEvery[sock.get()] = { (int)ev, 0u };
+              else rdsxEyeEvery.erase(sock.get()); }
             rdsxRecompute();                // see rdsxSocks: one listener's "off" is not everybody's
             return;
         }
@@ -16413,7 +16423,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           sockSince.erase(sock.get());
           sockWarned.erase(sock.get());
           sockHandover.erase(sock.get());
-          { std::lock_guard<std::mutex> rl(rdsxMtx); rdsxSocks.erase(sock.get()); }
+          { std::lock_guard<std::mutex> rl(rdsxMtx); rdsxSocks.erase(sock.get()); rdsxEyeEvery.erase(sock.get()); }
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
@@ -18939,7 +18949,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *   escaping and no ambiguity: '.' then one alphabet character giving 1..64 zeros. A run
          *   longer than 64 simply emits another pair. Everything else is a literal cell. */
         static const char* kEyeKeys[3] = { "eyeP", "eyeS", "eyeR" };
-        for (int b = 0; b < 3; ++b) {
+        // ★ Every Nth message only, for a client that asked — see rdsxEyeEvery. The first always carries them.
+        bool withEyes = true;
+        { std::lock_guard<std::mutex> rl(rdsxMtx);
+          auto it = rdsxEyeEvery.find(sock.get());
+          if (it != rdsxEyeEvery.end()) withEyes = (it->second.second++ % (unsigned)it->second.first) == 0; }
+        for (int b = 0; b < 3 && withEyes; ++b) {
             j += std::string(",\"") + kEyeKeys[b] + "\":\"";
             const auto& gsrc = eye[b];
             for (size_t i = 0; i < gsrc.size(); ) {

@@ -5680,7 +5680,7 @@ function dabUiOn() {
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
    *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
-  if (activeDec === 'rds') { $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
+  if (activeDec === 'rds') { spec?.rdsxLight(false); $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
   /* ★★★ AND EVERYTHING ELSE THAT SHARES IT. The line above was written when Advanced RDS was the only
    *  other tenant; with the FT8 spot list open, a DAB switch made by ANOTHER listener on the shared dial
    *  drew the station list into the FT8 box — FT8's ALL/AGE/COLLAPSE buttons over DAB stations over the
@@ -7849,6 +7849,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
       decoders!.attach(mode, decParams(mode));
+      if (mode === 'rds') spec?.rdsxLight(true);   // ★ the lighter eye stream — see SpectrumClient.rdsxLight
       showDecBox(mode);
       syncDecButtons();
     };
@@ -7990,6 +7991,7 @@ function reattachIf(mode: string) {
 }
 
 function stopDecoder() {
+  if (activeDec === 'rds') spec?.rdsxLight(false);
   decoders?.detach();
   activeDec = null;
   syncDecButtons();

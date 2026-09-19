@@ -1105,9 +1105,10 @@ export class SpectrumClient {
           ceqWhy: Number(msg.ceqWhy ?? 3),
           xy: Array.isArray(msg.xy) ? msg.xy : [],
           mpx: Array.isArray(msg.mpx) ? msg.mpx : [],
-          eyeP: typeof msg.eyeP === 'string' ? msg.eyeP : '',
-          eyeS: typeof msg.eyeS === 'string' ? msg.eyeS : '',
-          eyeR: typeof msg.eyeR === 'string' ? msg.eyeR : '',
+          // ★ ABSENT = UNCHANGED, not empty: with eyeEvery the server sends the grids in every 3rd message only.
+          eyeP: typeof msg.eyeP === 'string' ? (this.lastEye.P = msg.eyeP) : this.lastEye.P,
+          eyeS: typeof msg.eyeS === 'string' ? (this.lastEye.S = msg.eyeS) : this.lastEye.S,
+          eyeR: typeof msg.eyeR === 'string' ? (this.lastEye.R = msg.eyeR) : this.lastEye.R,
           eyeW: Number(msg.eyeW ?? 0),
           eyeH: Number(msg.eyeH ?? 0),
           eyeDev: Number(msg.eyeDev ?? 0),
@@ -1349,6 +1350,11 @@ export class SpectrumClient {
     this._send(m);
   }
   dabService(sid: number) { this._send({ type: 'dab_service', sid }); }
+  /** ★ Advanced RDS: ask for the eye diagrams in every 2nd message (~2/s at the ~3.9/s rdsx rate) — they are ~8 of each ~9 kB and
+   *  build slowly; the last picture is kept in between (see 'rdsx'). The server only does this for a socket
+   *  that asks, so installed apps keep the full stream. Off when the panel closes. */
+  rdsxLight(on: boolean) { this._send({ type: 'rdsx', on: on ? 1 : 0, eyeEvery: 2 }); }
+  private lastEye = { P: '', S: '', R: '' };
   /** ★ Raw IQ out for THIS session — see the audio panel's row. */
   iqOut(on: boolean, rate = 48000) { this._send({ type: 'iqout', on: on ? 1 : 0, rate }); }
   /** The VibeIQ bridge's tune, relayed through the session (an rtl_tcp SET_FREQUENCY). */
