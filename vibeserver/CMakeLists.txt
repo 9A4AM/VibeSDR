@@ -460,7 +460,7 @@ endforeach()
 add_executable(vibeserver-bench "${CMAKE_CURRENT_SOURCE_DIR}/bench-server.cpp")
 target_include_directories(vibeserver-bench PRIVATE "${CPP_DIR}")
 target_compile_options(vibeserver-bench PRIVATE -O3 -ffp-contract=fast)
-target_link_libraries(vibeserver-bench PRIVATE vibedsp)
+target_link_libraries(vibeserver-bench PRIVATE vibeserver_core)   # ★ the DAB rows need the DAB service and its AAC decoder
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O3 -ffp-contract=fast)   # ★ the SERVER's flags, so a replay measures what ships (was -O2, 2026-09-16)

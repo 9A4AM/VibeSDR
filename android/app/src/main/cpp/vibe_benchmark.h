@@ -182,7 +182,7 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
     r.pct = 100.0 * best;
     return r;
 }
-inline const char* grade(double pct) { return pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
+inline const char* grade(double pct) { return pct < 0 ? "none" : pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
 } // namespace benchdetail
 
 /** ★★ UPLINK, in kB/s — the other half of "how many listeners" (Stuart, 2026-09-19: a box in deepest Brazil may have
@@ -206,7 +206,10 @@ inline double measureUplinkKBps() {
 /** Run the benchmark. `progress(done, of, label)` is told as each scenario starts. Returns the result as JSON:
  *  {"v":1,"at":<epoch>,"rows":[{id,label,rate,pct,grade,thread}],"recommendRate":<Hz>,"lockedUsers":{nfm,am,ssb}}. */
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
-                                double secondsPerScenario = 4.0, double uplinkKBps = -2) {
+                                double secondsPerScenario = 4.0, double uplinkKBps = -2,
+                                const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr) {
+    // ★ moreRows: rows a host adds that need more than vibedsp — DAB (vibe_benchmark_dab.h: runDabRows), which
+    //   pulls in the DAB service and its audio decoder. A row graded "none" (pct -1) could not be measured.
     // -2 = measure it here (desktop/Linux); an Android host passes its own figure, or -1 for "could not".
     if (uplinkKBps == -2) { if (progress) progress(0, 1, "network uplink"); uplinkKBps = measureUplinkKBps(); }
     using namespace benchdetail;
@@ -266,6 +269,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         perListener[l.id] = sum;
         res.push_back(one);
     }
+    if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");
     // ★ The recommended rate: the highest WFM rate that grades green, never below 1.024 MS/s.
     double rec = 1024000;

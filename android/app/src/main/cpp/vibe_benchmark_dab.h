@@ -1,0 +1,116 @@
+// VibeSDR — the benchmark's DAB rows (Stuart, 2026-09-19). See vibe_benchmark.h for the method.
+//
+// ★★★ A REAL MULTIPLEX, NOT A SYNTHETIC ONE. A DAB receiver's cost is sync, FIC, Viterbi and the audio
+//     decoder working on a real ensemble; a made-up OFDM signal would decode nothing and measure the idle path.
+//     So the input is 1.92 s of 10D (Northampton, 26 services) captured off the air, as 8-bit IQ the way an RTL
+//     delivers it — dab-10D.vbu8, fetched from GitHub on the first run so the APK and the .deb stay small.
+// ★★ 20 frames, exactly: a whole number of 96 ms frames AND of 5-CIF DAB+ superframes, so the loop is seamless in
+//    timing and the superframe count does not break at the seam.
+// ★★ FED IN REAL TIME, not as fast as it will take it. DabService drops the OLDEST IQ when its worker falls behind
+//    (feed(): inDropped_) — flooded, a slow box would throw most of the signal away and read CHEAPER than it is.
+// ★★ DabService, not DabReceiver: the service is what the server runs — the MSC split, vibe-mp2, the PAD label
+//    scanner — and the scanner is exactly the cost the two rows separate.
+// ★ Linux decodes DAB+ AAC in an ffmpeg CHILD process, which /proc/self/task does not see. It is a small cost next
+//   to the receiver; the rows say "receiver" for that reason.
+//
+// File: magic "VIBEBU81", double rate, double centreHz, uint32 sid (a DAB+ service in the clip), then u8 I/Q pairs.
+#pragma once
+#include "vibe_benchmark.h"
+#include "vibe_dab_service.h"
+#include <memory>
+#include <thread>
+
+namespace vibe {
+
+struct DabClip { double rate = 0, centre = 0; uint32_t sid = 0; std::vector<float> iq; };
+
+/** Load a VIBEBU81 clip as interleaved floats, as the server hands DabService its IQ. False if unreadable. */
+inline bool loadDabClip(const std::string& path, DabClip& c) {
+    FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    char magic[8] = {0};
+    bool ok = std::fread(magic, 1, 8, fp) == 8 && std::memcmp(magic, "VIBEBU81", 8) == 0
+           && std::fread(&c.rate, sizeof c.rate, 1, fp) == 1 && std::fread(&c.centre, sizeof c.centre, 1, fp) == 1
+           && std::fread(&c.sid, sizeof c.sid, 1, fp) == 1;
+    std::vector<uint8_t> u;
+    if (ok) {
+        uint8_t b[65536]; size_t n;
+        while ((n = std::fread(b, 1, sizeof b, fp)) > 0) u.insert(u.end(), b, b + n);
+    }
+    std::fclose(fp);
+    if (!ok || u.size() < size_t(c.rate)) return false;          // ★ under a second: a truncated download
+    c.iq.resize(u.size());
+    for (size_t i = 0; i < u.size(); ++i) c.iq[i] = (float(u[i]) - 127.5f) / 127.5f;
+    return true;
+}
+
+/** One DAB row: the clip looped through a fresh DabService for `seconds` of real time after `warm` seconds to
+ *  lock, find the service and start its audio. Scored like the others — the hottest thread vs one core — and
+ *  -1 if the chain never decoded a superframe (a row that decoded nothing measured nothing). */
+inline benchdetail::Result runDabRow(const std::string& id, const std::string& label, const DabClip& clip,
+                                     bool scanLabels, double seconds, double warm = 3.0) {
+    using namespace benchdetail;
+    Result r; r.id = id; r.label = label; r.rate = clip.rate;
+    auto& scan = vibedab::dabScanLabels();
+    const int scanWas = scan.load();
+    scan.store(scanLabels ? 1 : 0);
+    const auto before = threadCpu();
+    const double selfBefore = threadSelfCpu();
+    auto svc = std::make_unique<vibedab::DabService>();
+    svc->setRfRate(clip.rate);
+    svc->setRfCentre(clip.centre);
+    for (int i = 0; i < int(vibedab::kBandIIICount); ++i)
+        if (std::fabs(double(vibedab::kBandIII[i].centreHz) - clip.centre) < 1000.0) { svc->setChannel(i); break; }
+    svc->setService(clip.sid);
+    const size_t blk = size_t(clip.rate / 20) * 2;                 // 50 ms of interleaved I/Q per feed
+    const size_t total = clip.iq.size();
+    size_t pos = 0;
+    std::vector<float> pcm(48000);
+    std::map<long, double> mid; double selfMid = 0; bool measuring = false;
+    const auto t0 = std::chrono::steady_clock::now();
+    double fedSecs = 0;
+    for (;;) {
+        if (!measuring && fedSecs >= warm) { mid = threadCpu(); selfMid = threadSelfCpu(); measuring = true; }
+        if (fedSecs >= warm + seconds) break;
+        const size_t n = std::min(blk, total - pos);
+        svc->feed(clip.iq.data() + pos, n / 2);
+        pos = (pos + n) % total;
+        fedSecs += double(n / 2) / clip.rate;
+        while (svc->takePcm(pcm.data(), pcm.size() / 2) > 0) {}    // ★ a listener drains it; so do we
+        std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)(fedSecs * 1e6)));
+    }
+    const auto after = threadCpu();
+    const double selfEnd = threadSelfCpu();
+    std::map<long, std::string> names;
+    for (const auto& kv : after) if (!before.count(kv.first)) names[kv.first] = threadName(kv.first);
+    const std::string js = svc->json();
+    svc.reset();                                                   // ★ AFTER the reads — see runOne
+    scan.store(scanWas);
+    unsigned sfOk = 0;
+    if (const char* p = std::strstr(js.c_str(), "\"sfOk\":")) sfOk = unsigned(std::strtoul(p + 7, nullptr, 10));
+    // The feeding thread plays vibe-dsp: it runs the 2.4 → 2.048 converter when the rate asks for it.
+    double best = (selfEnd - selfMid) / seconds; r.hottest = "vibe-dsp";
+    r.threads.push_back({ "vibe-dsp", 100.0 * best });
+    (void)selfBefore;
+    for (const auto& kv : after) {
+        if (before.count(kv.first)) continue;
+        auto m = mid.find(kv.first);
+        const double used = (kv.second - (m != mid.end() ? m->second : 0.0)) / seconds;
+        r.threads.push_back({ names[kv.first], 100.0 * used });
+        if (used > best) { best = used; r.hottest = names[kv.first]; }
+    }
+    r.pct = sfOk > 0 ? 100.0 * best : -1.0;
+    return r;
+}
+
+/** Both DAB rows — the station alone, and with the whole-multiplex label scan — or none if no clip. */
+inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, double seconds) {
+    std::vector<benchdetail::Result> out;
+    DabClip clip;
+    if (clipPath.empty() || !loadDabClip(clipPath, clip)) return out;
+    out.push_back(runDabRow("dab",      "DAB+ @ 2.048 MS/s",                   clip, false, seconds));
+    out.push_back(runDabRow("dab_scan", "DAB+ + station label scan @ 2.048 MS/s", clip, true,  seconds));
+    return out;
+}
+
+} // namespace vibe
