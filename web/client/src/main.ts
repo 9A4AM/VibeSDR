@@ -1081,10 +1081,25 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     // ★ Named, and phrased as a choice rather than a refusal — the visitor already has a radio,
     //   and closing it frees this one immediately. No countdown: there is nothing to wait for.
-    onElsewhere: (radio: string) => showRefusal('ALREADY LISTENING',
-      `You are already listening on <b>${radio}</b> from this browser.<br><br>`
-      + 'This receiver serves one listener per browser, so that nobody takes every slot. '
-      + 'Close the other one and this will let you straight in.'),
+    onElsewhere: (radio: string) => {
+      // ★ A share link that landed in a second tab: hand it to the tab already listening — see tabChan.
+      if (radio === 'this radio, in another tab' && tabChan && !srvSharedDial && /[?&](freq|dab)=/.test(location.search)) {
+        // ★ ASKED, not done (Stuart, 2026-09-19): the other tab may be in the middle of something.
+        showRefusal('ALREADY LISTENING',
+          'We have detected you are already listening to this radio. Do you want to open this link in that session?'
+          + '<br><br><button class="btn" id="sendToTab">OPEN IN THAT SESSION</button>');
+        const b = document.getElementById('sendToTab');
+        if (b) b.onclick = () => {
+          tabChan.postMessage({ type: 'share', search: location.search });
+          showRefusal('SENT', 'Opened in your other tab — switch to it to listen. This tab can be closed.');
+        };
+        return;
+      }
+      showRefusal('ALREADY LISTENING',
+        `You are already listening on <b>${radio}</b> from this browser.<br><br>`
+        + 'This receiver serves one listener per browser, so that nobody takes every slot. '
+        + 'Close the other one and this will let you straight in.');
+    },
     // ★★ THE SOFT LIMIT'S ONE WARNING. A pill, not an overlay: the listener has not been refused
     //    anything and is still hearing the radio — putting a modal over it would take away the
     //    seconds the notice exists to give them.
@@ -11479,9 +11494,21 @@ function shareFrequency() {
 }
 
 /** A shared link opens tuned to the same station. */
-function applyShareParams() {
+/* ★★ A SHARE LINK OPENED IN A SECOND TAB goes to the tab already listening (Stuart, 2026-09-19). One listener per
+ *  browser refuses the second tab — right — but pasting a link into a new tab is the natural thing to do, and a
+ *  bare refusal is a dead end. The refused tab hands the link to the live one over BroadcastChannel (same site
+ *  only, never over the network), which tunes by the ordinary share path. Not on a shared dial: a link never
+ *  moves a radio other people are hearing, whichever tab it arrives in. */
+const tabChan: BroadcastChannel | null = (() => { try { return new BroadcastChannel('vibesdr-tabs'); } catch { return null; } })();
+tabChan?.addEventListener('message', (e: MessageEvent) => {
+  const m = e.data;
+  if (!m || m.type !== 'share' || typeof m.search !== 'string' || !spec || !firstConfigDone || srvSharedDial) return;
+  if (applyShareParams(m.search)) showPill('Tuned from a link opened in another tab', 6000);
+});
+
+function applyShareParams(search?: string) {
   if (!spec) return false;
-  const q = new URLSearchParams(location.search);
+  const q = new URLSearchParams(search ?? location.search);
   const f = Number(q.get('freq'));
   const dab = q.get('dab');
   if (!f && !dab) return false;
