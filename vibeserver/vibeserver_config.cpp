@@ -535,6 +535,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.gainLock = one.gainLock; r.gainLocks = one.gainLocks;
     r.ifGrLimits = one.ifGrLimits; r.gainSplits = one.gainSplits;
     r.rateLock = one.rateLock;
+    r.dabRateBoost = one.dabRateBoost;   // ★ and the other direction — see the note in the flatten
+    r.rtlAgc = one.rtlAgc; r.tunerBwAuto = one.tunerBwAuto;   // ★ the same holes on migration
     r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax; r.nbWide = one.nbWide;
     r.rawIqLanMaxHz = one.rawIqLanMaxHz;
     r.blockedModes = one.blockedModes;
@@ -845,6 +847,13 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.gainLock = r.gainLock; c.gainLocks = r.gainLocks;
     c.ifGrLimits = r.ifGrLimits; c.gainSplits = r.gainSplits;
     c.rateLock = r.rateLock;
+    /* ★★★ AND dabRateBoost — THE SAME HOLE AGAIN (2026-09-19). Saved per radio, parsed back by
+     *     radioFromJson, read by main() into the shim — and never copied HERE, so a Full-mode radio
+     *     process always ran with it off. The DAB override "worked" only through the phone app's
+     *     live message; from the config it never had. Found on the first VibeServer Lite: DAB button
+     *     absent on a radio pinned to 1.024 MS/s with the override set. vibeserver.json said
+     *     "dabBoost":false beside "dabBoostUseful":true. */
+    c.dabRateBoost = r.dabRateBoost;
     c.rawIq = r.rawIq; c.rawIqMax = r.rawIqMax;   // ★ raw IQ out — the last link, as the note below says
     c.rawIqLanMaxHz = r.rawIqLanMaxHz;
     c.nbWide = r.nbWide;
