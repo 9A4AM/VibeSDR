@@ -1307,6 +1307,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
+    onDsActive: (on) => { hwDsActive = on; },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak, rateNow) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
@@ -1333,7 +1334,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const chip = $('ovlChip');
         const dB = (hwGainNow / 10).toFixed(1);
         const pk = pkText();
-        if (agc && hwGainNow >= 0) {
+        if (hwDsActive) {
+          chip.textContent = `${DS_PAUSED}${pk}`;
+          chip.classList.add('set', 'easing');
+        } else if (agc && hwGainNow >= 0) {
           chip.textContent = `AGC ${dB} dB${ifText()}${pk}`;
           chip.classList.add('set', 'easing');
         } else if ((ovlSteps ?? 0) > 0 && hwGainNow >= 0) {
@@ -1454,6 +1458,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //    and it must not read as a second alarm.
     onOverload: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
                  adcPeak?: number) => {
+      if (hwDsActive) return;   // ★ no gain to move in direct sampling — the server has stood the loop down
       const chip = $('ovlChip');
       const dB = (gainTenthDb / 10).toFixed(1);
       const pk = pkText();
@@ -1728,7 +1733,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!hwAgcOn || hwGainNow < 0) return;
       const chip = $('ovlChip');
       if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
-      chip.textContent = `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`;
+      chip.textContent = hwDsActive ? `${DS_PAUSED}${pkText()}`
+                                    : `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`;
       chip.classList.toggle('fault', adcClipPct >= 0.01);
     },
     onSigStat: (chan, floor) => {
@@ -2082,6 +2088,10 @@ let hwGains: number[] = [];
 let hwGainCap = -1;
 /** ★ The radio's ACTUAL gain, from hwinfo. -1 = auto, or a server too old to send it. */
 let hwGainNow = -1;
+/** ★ Direct sampling in force (from hwinfo dsActive): no tuner gain exists, VibeAGC has stood down, and
+ *  the chip says so — Stuart, 2026-09-19, 648 kHz: "this needs to say AGC Paused due to Direct Sampling". */
+let hwDsActive = false;
+const DS_PAUSED = 'AGC paused — direct sampling';
 /* ★★★ WHETHER THE AGC IS ON, READ LIVE — NOT CAPTURED. onOverload takes `agc` as a PARAMETER and
  *     then reads it inside a setTimeout, so switching VibeAGC off between the event and the timer
  *     left the chip writing "AGC 8.7 dB" over a gain the listener had set by hand. Stuart, on

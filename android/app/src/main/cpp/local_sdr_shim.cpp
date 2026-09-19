@@ -10423,6 +10423,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                : "Switching back to quadrature sampling \xe2\x80\x94 gain control is restored.")
             + "\"}";
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
+        // ★ And the state itself, so the AGC chip turns to "paused — direct sampling" (or back) now,
+        //   not at the next hwinfo. See dsActive.
+        LocalSdrShim::instance().broadcastHwInfo();
     }
 
     void sendDecoderState(int st) {
@@ -13003,6 +13006,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       //    gain; the slider follows it.
                       + ",\"gainNow\":" + std::to_string(
                             LocalSdrShim::instance().currentGainTenthDb())
+                      // ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner
+                      //   gain is bypassed and VibeAGC stands down — see overloadTick.
+                      + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) == 2 ? "true" : "false")
                       // ★★★ THE AGC'S STATE BELONGS IN THE STATE MESSAGE. The chip was driven only
                       //     by the `ovl` EVENT, so a listener who arrived after the gain had settled
                       //     — or who simply reloaded — saw nothing at all, however hard the loop was
@@ -23716,6 +23722,13 @@ void LocalSdrShim::overloadTick() {
     // ★★★ AGC OR NOTHING. A gain the owner typed is a decision, and the loop does not second-guess
     //     it — see the note by g_rtlAgc for what this used to do and what it cost.
     if (!g_rtlAgc.load(std::memory_order_relaxed)) return;
+    /* ★★★ NO GAIN TO STEER IN DIRECT SAMPLING (Stuart, 2026-09-19, 648 kHz on the Pi 2: "its trying to work
+     *  thinking its overloaded" — the chip read OVERLOAD: GAIN ↓ 28.0 dB). On the Q branch the tuner and
+     *  its gain are bypassed, so every step this loop takes is a no-op and every "overload" it reports
+     *  is a verdict on a control it does not have. It stands down: no steps, no ovl events. The ADC's
+     *  own clip figure still reaches the client — that is a measurement, and an attenuator is the cure.
+     *  The client learns it from dsActive in hwinfo and says "AGC paused — direct sampling". */
+    if (g_dsNow.load(std::memory_order_relaxed) == 2) return;
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     if (target < 0) return;            // nothing set — no ceiling to work against
 

@@ -394,6 +394,10 @@ export interface SpectrumCallbacks {
    *  ★ Its own callback for the reason onTunerBw has one — onHwInfo's positional list is already
    *    past the length where a wrong argument goes unnoticed. */
   onDigitalAgc?: (on: boolean) => void;
+  /** ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner gain is bypassed
+   *  and VibeAGC stands down. Its own callback, like onTunerBw — onHwInfo's list is long enough.
+   *  Called BEFORE onHwInfo so the chip paints right on the same message. */
+  onDsActive?: (on: boolean) => void;
   /* ★★★ AND THE WHOLE MESSAGE, because rspstat has GROWN and a positional list cannot grow with
    *     it. The server sends agcSet, rfNotch, dabNotch, autoNotch, userNotch and rfAgc; this
    *     boundary forwarded five positional numbers and DROPPED every one of them, so the handler
@@ -896,6 +900,7 @@ export class SpectrumClient {
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
                               msg.tunerBwAuto === true);
+        this.cb.onDsActive?.(msg.dsActive === true);
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null,
