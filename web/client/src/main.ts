@@ -7096,6 +7096,20 @@ function initSearch() {
  *  frequency, bookmarks / search / VTS (tuneTo), and the first landing on connect. STEP ONLY: a bookmark
  *  carries its own mode, and a typed frequency keeps yours. The listener can change the step after — only
  *  the jump sets it; ordinary tuning never does. A frequency in no band leaves the step alone. */
+/** ★★ TOOLTIPS FOR A FIRST-TIME DESKTOP VISITOR (Stuart, via Claude on the web, 2026-09-19). The arrows say what
+ *  they DO and by how much, which also answers what the step button is for — the least obvious control on the
+ *  card. Touch clients never see a title; this costs them nothing. The glyphs between the arrows stay bare and
+ *  dimmed (.mDialGlyph, opacity .6) so they read as labels, not a third button. */
+function syncDialTips() {
+  const st = formatStep(step);
+  const t = (id: string, s: string) => { const e = document.getElementById(id); if (e) e.title = s; };
+  t('mVfoDown', `Tune down ${st}`);
+  t('mVfoUp',   `Tune up ${st}`);
+  t('mStep',    `Tuning step (now ${st}) — tap to change`);
+  t('mZoomOut', 'Zoom out — show more of the band');
+  t('mZoomIn',  'Zoom in — show less of the band, in more detail');
+}
+
 function applyBandStep(hz: number) {
   if (!spec || !hz) return;
   const d = bandTuneDefaults(hz, ituRegion());
@@ -7103,6 +7117,7 @@ function applyBandStep(hz: number) {
   syncStep();
   const m = document.getElementById('mStep');
   if (m) m.textContent = formatStep(step);
+  syncDialTips();
 }
 
 function tuneTo(r: SearchResult) {
@@ -11055,6 +11070,7 @@ function setStep(v: number) {
   //   the mobile button showing the previous step after every change.
   const m = document.getElementById('mStep');
   if (m) m.textContent = formatStep(step);
+  syncDialTips();
   savePref('step', step);
 }
 
@@ -11122,6 +11138,7 @@ function syncStep() {
     step = steps.reduce((a, s) => Math.abs(s - step) < Math.abs(a - step) ? s : a, steps[0]);
   }
   $('stepBtn').textContent = formatStep(step);
+  syncDialTips();   // ★ the ladder can change the step under us — the tooltips must not go stale
 }
 
 // Tuner limits. These are the RADIO's range, NOT the current view — an earlier
