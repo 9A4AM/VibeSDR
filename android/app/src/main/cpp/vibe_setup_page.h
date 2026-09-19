@@ -327,22 +327,24 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            boolean could give, and neither suits a comparison site: a V4 and a V4L on the same
            aerial exist so a visitor can hear one against the other, which needs TWO — while still
            not letting one address take every radio (Stuart, 2026-08-26). -->
-      <label><span class="lbl">Connections from one address</span>
+      <label><span class="lbl">Connections from one browser</span>
         <select id="maxRadiosPerIp">
           <option value="1">1 — refuse a second connection (recommended)</option>
           <option value="2">2 — allow a pair, for comparing two radios</option>
           <option value="3">3</option>
           <option value="4">4</option>
-          <option value="0">No limit — one address may hold every radio</option>
+          <option value="0">No limit — one browser may hold every radio</option>
         </select>
-        <div class="hint">How many of this machine's radios one address may listen to at the same
-          time. Beyond the number you set, the next connection is refused and told which radio it is
-          already on. It exists because a single visitor took <em>both</em> radios of a public
+        <div class="hint">How many connections one <em>browser</em> may hold at the same time — radios on
+          this machine, or tabs on one radio (on a locked range, each tab is another VFO). Beyond the
+          number you set, the next connection is refused and told which radio it is already on. Counted
+          per browser, not per address, so a household or a mobile network sharing one address still
+          gets in (the phone apps are still counted by address until they send a browser id). It exists because a single visitor took <em>both</em> radios of a public
           receiver at once by opening a tab on each.
           <br><b>2 is the setting for a comparison site</b> — two radios on one aerial, so a visitor
           can hear one against the other in two tabs, and still cannot occupy the rest.
-          <br>Raising it also suits a household: a phone and its watch, or two people on one
-          broadband line, leave by the same address and would otherwise count as one visitor.
+          <br>A household no longer needs it raised for the web client: two people on one broadband
+          line are two browsers. The phone apps still count by address for now.
           <br><b>No limit is reasonable on a private server and unwise on a public one</b> —
           one person could occupy every radio you own.
           <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's

@@ -1677,7 +1677,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   restart and a crash-restore by construction. */}
             <View style={[styles.rowBetween, { marginTop: 14 }]}>
               <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                Allow several connections from one address
+                Allow several connections from one browser
               </Text>
               <Switch value={!oneRadioPerIp}
                 onValueChange={(v) => { setOneRadioPerIp(!v);
@@ -1686,13 +1686,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {oneRadioPerIp
-                ? 'Off — a second connection from an address that is already listening is refused, '
-                  + 'and told so. Right for a public receiver, where it stops one visitor holding '
-                  + 'more than their share.'
-                : 'On — one address may hold several connections at once. What a household needs: '
-                  + 'a phone and its watch, or two people on one broadband line, leave by the same '
-                  + 'address and would otherwise count as one greedy visitor. Unwise on a public '
-                  + 'receiver, where one person could occupy every slot you have.'}
+                ? 'Off — a second tab from a browser that is already listening is refused, and told '
+                  + 'so. Counted per browser, not per address, so a household or a mobile network '
+                  + 'sharing one address still gets in. Right for a public receiver: one person cannot '
+                  + 'open a tab per slot.'
+                : 'On — one browser may hold several connections at once (several tabs, several '
+                  + 'VFOs). Unwise on a public receiver, where one person could occupy every slot you '
+                  + 'have.'}
             </Text>
 
             {/* Bookmarks. The server LEARNS stations from RDS as clients tune, so the

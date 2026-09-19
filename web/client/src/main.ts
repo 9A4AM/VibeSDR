@@ -740,6 +740,22 @@ function visitSessionId(): string {
   } catch { return uuid(); }
 }
 
+/** ★★★ ONE ID PER BROWSER, shared by every tab (localStorage) — where visitSessionId() is per TAB.
+ *  The server counts listeners by THIS for its one-per-listener rules, not by address: an address is
+ *  a whole household, and on a CGNAT mobile network a crowd of strangers, while one person opening
+ *  ten tabs is still one browser (Stuart, 2026-09-19). It grants nothing; it only groups tabs.
+ *  ★ Falls back to the tab's id where storage is unavailable, so the rule still applies per tab. */
+function browserId(): string {
+  try {
+    const k = 'vsBrowserId';
+    const had = localStorage.getItem(k);
+    if (had) return had;
+    const made = uuid();
+    localStorage.setItem(k, made);
+    return made;
+  } catch { return visitSessionId(); }
+}
+
 function refreshRawAudioRow() {
   const show = srvUncompressed === 'choice' && !srvLocal;
   const row = document.getElementById('rawAudioRow');
@@ -837,7 +853,7 @@ async function connect(host: string, pin: string) {
   //    per frame on someone else's uplink plus the FFT work on the serving device. The app is
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&mode=binary8&bins=1024&proto=1', auth)}`;
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -856,7 +872,7 @@ async function connect(host: string, pin: string) {
   const forceOpus = new URLSearchParams(location.search).has('opus');
   const wantRaw = !forceOpus && (srvLocal || (srvUncompressed === 'choice' && prefersRawAudio()));
   const wantOpus = !wantRaw && await AudioPlayer.supportsOpus();
-  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&proto=1' + (wantOpus ? '&codec=opus' : ''), auth)}`;
+  const audioUrl = `${wsBaseUrl}${withAuth('/ws/audio?user_session_id=' + sid + '&bid=' + browserId() + '&proto=1' + (wantOpus ? '&codec=opus' : ''), auth)}`;
   // ★★★ WE CAN ALWAYS TAKE OPUS NOW, so this only ever says no when RAW was ASKED for. The old
   // gate answered "no Opus" on every plain-http LAN origin (WebCodecs is [SecureContext]) and the
   // server then refused the uncompressed socket it had just been asked for — silence, on the only
@@ -1028,8 +1044,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Named, and phrased as a choice rather than a refusal — the visitor already has a radio,
     //   and closing it frees this one immediately. No countdown: there is nothing to wait for.
     onElsewhere: (radio: string) => showRefusal('ALREADY LISTENING',
-      `You are already listening on <b>${radio}</b> from this address.<br><br>`
-      + 'This receiver serves one radio per listener, so that nobody takes them all. '
+      `You are already listening on <b>${radio}</b> from this browser.<br><br>`
+      + 'This receiver serves one listener per browser, so that nobody takes every slot. '
       + 'Close the other one and this will let you straight in.'),
     // ★★ THE SOFT LIMIT'S ONE WARNING. A pill, not an overlay: the listener has not been refused
     //    anything and is still hearing the radio — putting a modal over it would take away the

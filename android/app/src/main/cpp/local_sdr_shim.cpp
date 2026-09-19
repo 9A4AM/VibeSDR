@@ -2763,6 +2763,13 @@ static std::string         g_occDir, g_occSerial, g_occLabel, g_occHeldIp;
 /** Defined below, beside the registry it reads — declared here because the ADMISSION check needs
  *  it thousands of lines earlier. */
 static std::string occHeldElsewhere(const std::string& ip);
+/** ★★★ WHO holds a radio, for the machine-wide one-radio rule: the BROWSER when the client names one
+ *  ("b:<id>"), else the address as before. By browser, a household or a CGNAT network sharing one
+ *  address is several listeners, and a tunnel with no trusted proxy (everybody 127.0.0.1) still
+ *  tells visitors apart. Same key written by occWrite and read by occHeldElsewhere. */
+static std::string occKeyFor(const std::string& browser, const std::string& addr) {
+    return browser.empty() ? addr : "b:" + browser;
+}
 static void        occWrite(const std::string& ip);
 static std::atomic<double> g_adcPeakDbfs{-99.0};
 
@@ -5777,6 +5784,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the landing bug were written against paths that never ran on the radio reporting it
      *  (2026-08-16). This one is populated at the handshake, for all of them. */
     std::map<net::Socket*, std::string> sockSession;
+    /** ★★★ THE BROWSER each socket came from — `bid`, one id shared by every tab of one browser
+     *  (localStorage), where the session id is per TAB. The one-per-listener rules count THIS, not the
+     *  address: an address is shared by a whole household, and on a CGNAT mobile or broadband network
+     *  by strangers, so "one per address" refused genuine listeners; one person opening ten tabs is
+     *  still one browser (Stuart, 2026-09-19). Empty for clients that do not send one yet (the apps). */
+    std::map<net::Socket*, std::string> sockBrowser;
     /* ★★★ DEAD-SESSION RELEASE (BRIEF-v11-compatibility §9). A WebSocket PONG proves a kernel and a
      *  process, not a listener: a Jr that watchOS left half-alive kept ponging and held the radio
      *  "in use" (xavxx, Discord, 2026-09-17), and the same phantom held single-occupant slots
@@ -13861,7 +13874,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      //   the override decision in acceptWs. Absent means yes, so nothing that
                      //   predates the flag changes behaviour.
                      queryParam(reqLine, "vs_takeover") != "0",
-                     protoOf(reqLine));
+                     protoOf(reqLine),
+                     // ★ The per-browser id (sockBrowser). The client's own word, like the session id —
+                     //   it groups tabs, it grants nothing. Kept to a short token of safe characters.
+                     [&]{ std::string b = queryParam(reqLine, "bid");
+                          if (b.size() > 64) b.clear();
+                          for (char c : b) if (!isalnum((unsigned char)c) && c != '-') { b.clear(); break; }
+                          return b; }());
         // ★★ MATCHED ON A PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE. This was
         //    `reqLine.find("/connection") != npos`, which quietly claimed every later route whose
         //    path merely CONTAINS that word — /vibeserver/admin/connections was answered by the
@@ -15227,7 +15246,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   //    unaffected.
                   bool mayEvict = true,
                   // ★ The client's declared protocol (0 = legacy) — decides the liveness rule below.
-                  int proto = 0) {
+                  int proto = 0,
+                  // ★ Per-BROWSER id (see sockBrowser). "" = a client that does not send one.
+                  const std::string& browser = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -15236,6 +15257,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto[sock.get()] = proto; }
         if (!session.empty())
             { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session;
+              if (!browser.empty()) sockBrowser[sock.get()] = browser;
               // ★★★ NOT nowSecs() — see turnStartForLocked. On a shared dial this stamp IS the
               //     listener's clock (secsLeftFor falls back to it), and stamping it fresh handed
               //     every new socket a full turn: the app pauses its spectrum socket in the
@@ -15401,7 +15423,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ Admin exempt, loopback exempt — see g_vsOneRadioPerIp.
             std::string elsewhereOn;
             if (!occupied && !adminAuthed)
-                elsewhereOn = occHeldElsewhere(sock->peerAddress());
+                elsewhereOn = occHeldElsewhere(occKeyFor(browser, sock->peerAddress()));
+            /* ★★★ AND ON THIS RADIO, IN ANOTHER TAB. One browser holding several listener slots on ONE
+             *  radio — on a locked range, ten tabs are ten VFOs and ten decoders, and everybody else is
+             *  shut out (Stuart, 2026-09-19). Counted by BROWSER, never by address (see sockBrowser), and
+             *  against the same cap as the other radios: 1 = one tab, 2 = two, 0 = no limit (the owner's
+             *  "Allow several connections" switch). The tab's own sockets share its session and are not
+             *  counted. Admin exempt, as for the other radios. */
+            if (!occupied && !adminAuthed && elsewhereOn.empty() && !browser.empty()) {
+                const int cap = g_vsMaxRadiosPerIp.load();
+                if (cap > 0) {
+                    std::set<std::string> tabs;
+                    for (const auto& kv : sockBrowser) {
+                        if (kv.second != browser) continue;
+                        auto ss = sockSession.find(kv.first);
+                        if (ss != sockSession.end() && !ss->second.empty() && ss->second != me) tabs.insert(ss->second);
+                    }
+                    if ((int)tabs.size() >= cap) elsewhereOn = "this radio, in another tab";
+                }
+            }
             // ★★★ A LIVE RESERVATION REFUSES EVERYONE ELSE, EVEN THOUGH A SLOT IS FREE. That is
             //     the entire value of the queue: we told someone they were next, and this is the
             //     window in which that has to be true. Without it the freed slot goes to whoever
@@ -15513,7 +15553,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     queue: there is no slot to wait for — the visitor is holding one themselves, and
             //     a countdown to nothing would be a lie. Closing one radio frees them instantly.
             if (!elsewhereOn.empty() && !override_) {
-                LOGI("%s WS refused — [%s] is already listening on %s (one radio per address)",
+                LOGI("%s WS refused — [%s] is already listening on %s (one per listener)",
                      isAudio ? "audio" : "spectrum", sock->peerAddress().c_str(), elsewhereOn.c_str());
                 const std::string msg = std::string("{\"type\":\"elsewhere\",\"radio\":\"")
                                       + jsonEscape(elsewhereOn) + "\"}";
@@ -15563,8 +15603,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (newOccupant) {
                 // ★ Tell the rest of the machine who holds this radio, so the OTHER radios can
                 //   refuse the same address. See occHeldElsewhere.
-                { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp = sock->peerAddress(); }
-                occWrite(sock->peerAddress());
+                { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp = occKeyFor(browser, sock->peerAddress()); }
+                occWrite(occKeyFor(browser, sock->peerAddress()));
                 // ★★★ NOT nowSecs() — see turnStartForLocked. A reload made a new session id and
                 //     this line handed it a brand-new half hour.
                 occupantSince   = turnStartForLocked(sock->peerAddress(), Impl::nowSecs());
@@ -16337,6 +16377,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               auto it = sockSession.find(sock.get());
               const std::string ses = it != sockSession.end() ? it->second : std::string();
               sockSession.erase(sock.get());
+              sockBrowser.erase(sock.get());
               if (!ses.empty()) {
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
@@ -20845,7 +20886,7 @@ void LocalSdrShim::refreshOccupancy() {
 static std::string occHeldElsewhere(const std::string& ip) {
     const int cap = g_vsMaxRadiosPerIp.load();
     if (ip.empty() || cap <= 0) return "";
-    if (isLoopback(ip)) return "";
+    if (ip.rfind("b:", 0) != 0 && isLoopback(ip)) return "";   // a browser key is never loopback
     std::string dir, serial;
     { std::lock_guard<std::mutex> lk(g_occMtx); dir = g_occDir; serial = g_occSerial; }
     if (dir.empty()) return "";
