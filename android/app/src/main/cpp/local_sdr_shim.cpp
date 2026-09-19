@@ -19489,7 +19489,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int idx = findOurDevice();
         if (idx < 0) return false;
 
-        joinOnce(rtlThread, "capture");     // the old capture thread has exited
+        /* ★★★ A STALL IS NOT AN EXIT (Sony TV, 2026-09-19). "The old capture thread has exited" was
+         *  true for an unplug, where read_async returns — but a stream that simply STOPS delivering
+         *  leaves the reader parked inside rtlsdr_read_async for ever, and this join then parked the
+         *  WATCHDOG with it: one "no IQ for 3s", then nothing, and the radio stayed dead. Cancel first;
+         *  a reader that has already returned makes this a no-op. */
+        if (dev && !rtlThreadDone.load()) { restarting.store(true); rtlsdr_cancel_async(dev); }
+        joinOnce(rtlThread, "capture");
+        restarting.store(false);
         if (dev) { rtlsdr_close(dev); dev = nullptr; }
 
 #ifdef __ANDROID__
