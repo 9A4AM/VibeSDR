@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VibeSDR portable settings</title>
+<!--
+  ★★★ THE PORTABLE SETTINGS STORE (web/client/src/portable.ts). Loaded hidden by a server page on
+  <name>.vibeserver.vibesdr.net; keeps the listener's master VIEW settings and bookmarks in THIS origin's
+  localStorage, so every server in the directory shares them. Everything stays in the listener's browser:
+  nothing is sent anywhere, and this page makes no requests.
+  ★ Answers only pages on a *.vibeserver.vibesdr.net subdomain over https, and only these operations.
+-->
+<script>
+(function () {
+  var KEY = 'vsPortable';
+  var OK = /^https:\/\/[a-z0-9-]+\.vibeserver\.vibesdr\.net$/;
+  function load() {
+    try { var v = JSON.parse(localStorage.getItem(KEY) || '{}'); return v && typeof v === 'object' ? v : {}; }
+    catch (e) { return {}; }
+  }
+  function save(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  window.addEventListener('message', function (e) {
+    if (!OK.test(e.origin) || !e.data || typeof e.data.id !== 'number') return;
+    var d = e.data, s = load(), r = { id: d.id, ok: false };
+    if (d.op === 'get') {
+      r.ok = true;
+      r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null, resetAt: s.resetAt || 0 };
+    } else if (d.op === 'setView' && d.view && typeof d.view === 'object') {
+      s.view = d.view; r.ok = save(s);
+    } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
+      s.bookmarks = d.bookmarks; r.ok = save(s);
+    }
+    e.source.postMessage(r, e.origin);
+  });
+})();
+</script>

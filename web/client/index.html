@@ -4251,6 +4251,14 @@ select.btn { padding: 6px 8px; }
     <input type="range" id="specRatio" min="0" max="60" value="25">
     <span class="val" id="specRatioVal">25%</span>
   </div>
+  <!-- ★ PORTABLE SETTINGS (portable.ts) — only on a *.vibeserver.vibesdr.net address, where they can work. -->
+  <div class="mrow" id="dispAllRow" hidden>
+    <label>ALL SERVERS</label>
+    <div class="seg"><button class="btn" id="dispSaveAll">SAVE FOR ALL VIBESDR.NET SERVERS</button></div>
+  </div>
+  <div class="hint" id="dispAllHint" hidden>Display settings are saved for this server automatically. Save for
+    all and they become your default on every server in the VibeSDR.net directory; anything you then change on
+    one server stays on that server. Reset everything from the directory page.</div>
   <div class="mrow">
     <label>RESET</label>
     <div class="seg"><button class="btn" id="dispReset">↺ DEFAULTS</button></div>

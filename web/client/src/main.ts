@@ -6,6 +6,7 @@
  * an explicit host:port.
  */
 
+import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
@@ -129,11 +130,20 @@ function saveTuned() {
   savePref('tuned', all);
 }
 
-function prefs(): Record<string, unknown> {
+/** THIS server's own settings — its overrides, on a *.vibeserver.vibesdr.net address (portable.ts). */
+function localPrefs(): Record<string, unknown> {
   try { return JSON.parse(localStorage.getItem(LS_PREFS) || '{}'); } catch { return {}; }
 }
+/** What the page USES: the portable MASTER view settings, with this server's own laid on top.
+ *  ★★ Read-only in effect — every WRITE goes through localPrefs(), or one savePref would copy all of
+ *     master into this server as overrides and nothing would ever follow master again. */
+function prefs(): Record<string, unknown> {
+  const local = localPrefs();
+  const mv = masterView();
+  return Object.keys(mv).length ? { ...mv, ...local } : local;
+}
 function savePref(k: string, v: unknown) {
-  const p = prefs(); p[k] = v;
+  const p = localPrefs(); p[k] = v;
   localStorage.setItem(LS_PREFS, JSON.stringify(p));
 }
 
@@ -772,6 +782,13 @@ function refreshRawAudioRow() {
 
 async function connect(host: string, pin: string) {
   currentHost = host;
+  /* ★ PORTABLE SETTINGS FIRST (portable.ts): on a *.vibeserver.vibesdr.net server, load the master view
+   *  settings before anything below reads prefs(), and drop this server's overrides if the directory was
+   *  reset since. Times out rather than hold the radio up; anywhere else it is a no-op. */
+  if (await portableReady()) {
+    const lp = localPrefs();
+    if (honourReset(lp)) localStorage.setItem(LS_PREFS, JSON.stringify(lp));
+  }
   // ★★★ FOLLOW THE PAGE'S OWN SCHEME. These were hardcoded to http:// and ws://, so a server put
   //     behind an HTTPS reverse proxy served an https page whose auth fetch, config fetch and
   //     every WebSocket were plain http/ws — which the browser BLOCKS as mixed content. The
@@ -10333,13 +10350,27 @@ function buildMenu() {
 
   applyCoarse((prefs().wfCoarse as string) || 'auto');
 
+  /* ★ SAVE FOR ALL (portable.ts): what this server is showing becomes the master for every
+   *  *.vibeserver.vibesdr.net server, and this server's own overrides go — it now follows the master too. */
+  if (onVibeDomain()) {
+    $('dispAllRow').hidden = false; $('dispAllHint').hidden = false;
+    $('dispSaveAll').onclick = async () => {
+      const cur = prefs();
+      if (!(await saveViewForAll(cur))) { showPill('Could not reach the VibeSDR.net settings store', 5000); return; }
+      const lp = localPrefs();
+      for (const k of VIEW_KEYS) delete lp[k];
+      localStorage.setItem(LS_PREFS, JSON.stringify(lp));
+      showPill('Saved — these display settings are now your default on every VibeSDR.net server', 5000);
+    };
+  }
+
   // Back to the app's defaults, without hunting every slider.
   $('dispReset').onclick = () => {
     for (const k of ['autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast',
                      'wfSharpness', 'smoothingFrames', 'specFloor', 'specPeakScale',
                      'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow',
                      'wfCoarse', 'palette']) {
-      const p = prefs();
+      const p = localPrefs();
       delete p[k];
       localStorage.setItem(LS_PREFS, JSON.stringify(p));
     }

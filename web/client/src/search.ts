@@ -21,6 +21,7 @@ import {
   loadUserBookmarks, saveUserBookmarks, exportBookmarksJSON,
   parseBookmarksAny, mergeBookmarks, type UserBookmark,
 } from '../../../src/services/userBookmarks';
+import { portableReady, masterBookmarks, saveBookmarks, portableWasReset } from './portable';
 import { BAND_PLAN } from '../../../src/constants/bandPlan';
 import type { SDRMode } from './spectrum';
 import { httpBase } from './origin';
@@ -181,6 +182,20 @@ export async function loadStations(host: string): Promise<number> {
 
 export async function loadBookmarks(): Promise<UserBookmark[]> {
   bookmarks = await loadUserBookmarks();
+  /* ★ PORTABLE BOOKMARKS (portable.ts): on a *.vibeserver.vibesdr.net server, the list that follows you
+   *  is merged in — the app's own merge, so a bookmark already here is not doubled — and the merged list
+   *  goes back, so one saved on another server shows up here and the reverse. */
+  if (await portableReady()) {
+    // ★ A reset on the directory page clears the portable bookmarks; this server's copy goes too, or it would
+    //   be pushed straight back into the store below and the reset would undo itself.
+    if (portableWasReset() && bookmarks.length) { bookmarks = []; await saveUserBookmarks(bookmarks); }
+    const m = masterBookmarks();
+    if (Array.isArray(m) && m.length) {
+      const merged = mergeBookmarks(bookmarks, m as UserBookmark[]);
+      if (merged.length !== bookmarks.length) { bookmarks = merged; await saveUserBookmarks(bookmarks); }
+    }
+    void saveBookmarks(bookmarks);
+  }
   return bookmarks;
 }
 
@@ -192,11 +207,13 @@ export function getStations(): ServerStation[] { return stations; }
 export async function addBookmark(b: Omit<UserBookmark, 'scope'>): Promise<void> {
   bookmarks = mergeBookmarks(bookmarks, [{ ...b, scope: '' }]);
   await saveUserBookmarks(bookmarks);
+  void saveBookmarks(bookmarks);   // ★ and to the portable list — portable.ts
 }
 
 export async function removeBookmark(name: string, frequency: number): Promise<void> {
   bookmarks = bookmarks.filter(b => !(b.name === name && b.frequency === frequency));
   await saveUserBookmarks(bookmarks);
+  void saveBookmarks(bookmarks);
 }
 
 /** UberSDR-importable JSON — the same file the phone app exports. */
@@ -208,6 +225,7 @@ export async function importBookmarks(text: string): Promise<number> {
   if (!incoming.length) throw new Error('No bookmarks found in that file');
   bookmarks = mergeBookmarks(bookmarks, incoming);
   await saveUserBookmarks(bookmarks);
+  void saveBookmarks(bookmarks);
   return incoming.length;
 }
 

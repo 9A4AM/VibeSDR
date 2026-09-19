@@ -15197,6 +15197,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 "connect-src 'self' ws: wss: https: http:; "
                 "worker-src 'self' blob:; "
                 "child-src 'self' blob:; "
+                /* ★★ THE PORTABLE SETTINGS STORE, and nothing else. The page loads a hidden
+                 *  https://vibeserver.vibesdr.net/store.html so a listener's display settings and bookmarks
+                 *  follow them across directory servers (web/client/src/portable.ts). frame-src falls back to
+                 *  child-src above, which would refuse it silently — so it is named, exactly, here. */
+                "frame-src 'self' blob: https://vibeserver.vibesdr.net; "
                 /* ★ form-action 'self', NOT 'none': the page posts a form back to ITSELF and
                  *  'none' blocked it — measured headless, the client never reached the point of
                  *  opening audio. 'self' still stops a form being redirected to somebody else's

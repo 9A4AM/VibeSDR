@@ -231,6 +231,12 @@
   #modeBar .modeHint b { color:var(--text); }
   #modeBar .modeHint a { color:var(--accent); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
+  /* ★ The portable-settings notice above the list (store.html / web client portable.ts). */
+  .portable { color: var(--dim); font-size: 13px; line-height: 1.5; margin: 0 0 14px; display: flex;
+              gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .portable p { margin: 0; flex: 1 1 320px; }
+  .portable button { background: none; color: var(--dim); border: 1px solid currentColor; border-radius: 6px;
+                     padding: 6px 10px; font: inherit; cursor: pointer; white-space: nowrap; }
   /* ══ NARROW SCREENS ═══════════════════════════════════════════════════════════════════════
      ★★ There were no media queries in this page at all, which is fine while everything is a
         flex row that wraps — and not fine for the things that assume room: the control strip
@@ -666,8 +672,28 @@
 <div id="map"></div>
 
 <main>
+  <!-- ★★ PORTABLE SETTINGS (Stuart's wording, 2026-09-19). The store lives in THIS origin's localStorage
+       (store.html), so the reset is simply clearing it here — plus a reset time every server page checks, so
+       each server's own overrides go too the next time it is opened. -->
+  <div class="portable">
+    <p>VibeServer keeps a small store in your browser so your display settings and bookmarks travel between
+      radios and servers. Adjust your display settings in the SDR view and they are saved for that radio;
+      press <b>Save for all</b> there and they become your default on every server in this directory. A
+      radio or server can still keep its own settings if conditions there need them. Nothing leaves your
+      browser.</p>
+    <button type="button" id="portableReset">Reset to defaults</button>
+  </div>
   <div id="list"><div class="empty">Loading…</div></div>
 </main>
+<script>
+  // ★ Clear the portable store and stamp the reset time; each server page drops its own overrides when it
+  //   next opens and sees a newer stamp (portable.ts honourReset).
+  document.getElementById('portableReset').onclick = function () {
+    if (!confirm('Reset your display settings and portable bookmarks for every VibeSDR.net server?')) return;
+    try { localStorage.setItem('vsPortable', JSON.stringify({ resetAt: Date.now() })); } catch (e) {}
+    this.textContent = 'Reset ✓';
+  };
+</script>
 
 <footer>
   Positions are the operator's Maidenhead square — a grid square, not an address.
