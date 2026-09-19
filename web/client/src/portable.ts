@@ -67,7 +67,7 @@ export function portableReady(): Promise<boolean> {
       const cb = waiting.get(e.data.id); if (cb) { waiting.delete(e.data.id); cb(e.data); }
     });
     frame = document.createElement('iframe');
-    frame.src = `${DIRECTORY}/store.html`;
+    frame.src = `${DIRECTORY}/store`;   // ★ the assets binding serves store.html here (a .html path 307s to it)
     frame.style.display = 'none';
     frame.setAttribute('aria-hidden', 'true');
     const loaded = new Promise<void>((r) => { frame!.onload = () => r(); });
