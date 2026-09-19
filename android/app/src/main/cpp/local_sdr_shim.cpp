@@ -7298,6 +7298,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Warnings already sent this session, so each fires once: bit 0 = 2 min, bit 1 = 30 s.
      *  ★ A limit that ends a session with no warning reads as a crash. */
     int occupantWarned = 0;
+    std::string occupantTurnKey;   // ★ the key the occupant's turn is kept under (turnKeyLocked)
     /** address -> monotonic time the cooldown ends. Pruned lazily on lookup. */
     std::map<std::string, double> cooldownUntil;
     std::map<std::string, std::deque<double>> connectStorm;   // recent socket opens per address — see the storm guard
@@ -7320,13 +7321,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    reload-and-wait defeat it again; anything longer would punish somebody who came back an
      *    hour later for a different band.
      */
+    /* ★★★ 2026-09-19 — CONNECTED TIME, A SHORT MEMORY, AND THE BROWSER (Stuart: "Not fair to connect for 1 min
+     *  then leave the server and then go back and be kicked off"). The turn was remembered for the whole
+     *  limit and the clock ran while you were AWAY: an hour-limit server, one minute of listening, back 59
+     *  minutes later — and cut off after ~30 s, charged for an hour nobody listened to. Now:
+     *   ★ time away is not time used — on return `started` moves forward by the absence;
+     *   ★ away longer than kTurnBreakS and the next arrival is a NEW turn, like a new listener;
+     *   ★ a reload or a refresh (Safari's audio, any gremlin) is gone for seconds, so the turn simply
+     *     continues — which is still the whole defence against refreshing for a fresh clock;
+     *   ★ keyed by BROWSER where the client sends one (turnKeyLocked), address otherwise — an address is a
+     *     household, or on CGNAT a crowd of strangers who would otherwise inherit each other's turns. */
     struct Turn { double started = 0; double seen = 0; };
     std::map<std::string, Turn> turns;
+    static constexpr double kTurnBreakS = 15.0 * 60.0;
+    /** The key a socket's turn is kept under — its browser id when it sent one. clientMtx HELD. */
+    std::string turnKeyLocked(const net::Socket* sk, const std::string& addr) {
+        auto it = sockBrowser.find(const_cast<net::Socket*>(sk));
+        return occKeyFor(it != sockBrowser.end() ? it->second : std::string(), addr);
+    }
 
     /** The start time to use for a listener arriving from `addr`. Call with clientMtx HELD. */
     double turnStartForLocked(const std::string& addr, double now) {
-        const int limitMin = g_vsSessionLimitMin.load();
-        const double grace = limitMin > 0 ? (double)limitMin * 60.0 : 300.0;
+        const double grace = kTurnBreakS;
         // ★ Prune while we are here: this map would otherwise grow for the life of the process,
         //   one entry per address ever seen, on a server whose whole point is strangers.
         for (auto it = turns.begin(); it != turns.end(); ) {
@@ -7336,8 +7352,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (addr.empty()) return now;
         auto it = turns.find(addr);
         if (it != turns.end() && (now - it->second.seen) <= grace) {
+            // ★ Same person, back within the break: their turn continues, WITHOUT the time they were away.
+            //   A live listener is touched every tick, so a second socket of the same visit sees ~0 here.
+            it->second.started += now - it->second.seen;
             it->second.seen = now;
-            return it->second.started;          // ★ same person, still within their turn
+            return it->second.started;
         }
         turns[addr] = Turn{ now, now };
         return now;
@@ -15271,7 +15290,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               //     the countdown timer resets" (Stuart, 2026-09-15; measured on the Airspy: two
               //     sockets 15 s apart from one address both told 1800). Same rule as the
               //     occupant and the per-client DSP: a reload does not buy a fresh half hour.
-              sockSince[sock.get()] = turnStartForLocked(sock->peerAddress(), Impl::nowSecs()); }
+              sockSince[sock.get()] = turnStartForLocked(turnKeyLocked(sock.get(), sock->peerAddress()), Impl::nowSecs()); }
 
         // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
         // Registered immediately after the handshake, because the moment this client is published
@@ -15613,7 +15632,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 occWrite(occKeyFor(browser, sock->peerAddress()));
                 // ★★★ NOT nowSecs() — see turnStartForLocked. A reload made a new session id and
                 //     this line handed it a brand-new half hour.
-                occupantSince   = turnStartForLocked(sock->peerAddress(), Impl::nowSecs());
+                occupantTurnKey = turnKeyLocked(sock.get(), sock->peerAddress());
+                occupantSince   = turnStartForLocked(occupantTurnKey, Impl::nowSecs());
                 occupantWarned  = 0;
                 occupantAddr    = sock->peerAddress();
                 occupantAgent   = userAgent;   // for the admin view, same as ClientDsp::agent
@@ -16138,7 +16158,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ The per-listener clock — and it CONTINUES a turn this address already had, so a
                 //   page reload does not buy a fresh one. See turnStartForLocked.
                 { std::lock_guard<std::mutex> lk(clientMtx);
-                  c->since = turnStartForLocked(sock->peerAddress(), Impl::nowSecs());
+                  c->since = turnStartForLocked(turnKeyLocked(sock.get(), sock->peerAddress()), Impl::nowSecs());
                   c->lastAsk = Impl::nowSecs(); }   // ★ arriving is not being idle
                 c->agent = userAgent;
                 // ★★★ BUILD THE CHANNEL WHERE THE LISTENER ASKED TO BE, not at the landing.
@@ -19046,7 +19066,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const std::string addr = specOpen ? c->spec->peerAddress()
                                                   : c->audio->peerAddress();
                 if (addr.empty() || isLoopback(addr)) continue;
-                touchTurnLocked(addr, now);      // ★ still here — their turn has not lapsed
+                touchTurnLocked(turnKeyLocked(specOpen ? c->spec.get() : c->audio.get(), addr), now);   // ★ still here
                 const double left = (double)limitMin * 60.0 - (now - c->since);
                 if (left > 0) {
                     const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
@@ -19161,7 +19181,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   if (adminSocks.count(sk.get())) continue; }     // the owner is exempt
                 auto si = sockSince.find(sk.get());
                 if (si == sockSince.end() || si->second <= 0) continue;
-                touchTurnLocked(addr, now);                     // still here — the turn does not lapse
+                touchTurnLocked(turnKeyLocked(sk.get(), addr), now);   // still here — the turn does not lapse
                 const double left = (double)limitMin * 60.0 - (now - si->second);
                 if (left > 0) {
                     const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
@@ -19346,7 +19366,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           //   changed underneath it. Needed now that TWO threads call this — see the tick note.
           sess = occupantSession;
           // ★ Still connected, so the turn does not lapse while they are sitting here.
-          touchTurnLocked(occupantAddr, Impl::nowSecs()); }
+          touchTurnLocked(occupantTurnKey.empty() ? occupantAddr : occupantTurnKey, Impl::nowSecs()); }
         if (addr.empty() || isLoopback(addr)) return;    // the host's own listening
         // ★★★ THE EXEMPTION IS THE OCCUPANT'S OWN, and this read the radio-wide flag while
         //     occupantSecsLeft() had just been made per-listener — so the countdown would say "no
