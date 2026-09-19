@@ -146,7 +146,9 @@
   .srv > summary { cursor: pointer; padding: 11px 14px 11px 18px; display: flex;
                    align-items: center; gap: 10px; list-style: none; }
   .srv > summary::-webkit-details-marker { display: none; }
-  .dot { width: 10px; height: 10px; flex: 0 0 auto; }
+  /* ★ The map's radio glyph in the list too, in the same state colour (Stuart, 2026-09-19) — one symbol for a
+     server wherever it appears; a PIN'd server wears the padlock, as on the map. */
+  .dot { width: 18px; height: 18px; flex: 0 0 auto; display: inline-flex; background: none !important; }
   .srv .meta { color: var(--dim); font-size: 11px; letter-spacing: .08em;
                 margin-left: auto; text-align: right; }
   /* ★ The server's name carries the amber; the grid square beside it stays dim, so the eye lands
@@ -1130,7 +1132,8 @@ function serverBlock(s) {
       + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}</div>` : '';
   return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">
     <summary>
-      <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
+      <i class="dot ${st.cls}" title="${esc(st.label)}">${s.pin ? padlockGlyph(18)
+        : radioGlyph(STATE_COL[String(st.cls).replace(/^sh-/, '')] || st.colour || STATE_COL.unknown, 18)}</i>
       <span>${esc(s.name)}</span>
       ${s.battery && typeof s.battery.level === 'number'
         ? `<span class="battWrap" title="${s.battery.paused ? 'Low power state — the battery is being protected; back when it has charged' : (s.battery.charging ? `Battery ${s.battery.level}%, charging` : `Battery ${s.battery.level}%, not charging`)}">${batteryIcon(s.battery.level, s.battery.charging, s.battery.paused)}</span>`
