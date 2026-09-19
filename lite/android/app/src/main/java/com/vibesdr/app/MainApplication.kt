@@ -18,7 +18,8 @@ import com.th3rdwave.safeareacontext.SafeAreaContextPackage
 class LitePackage : ReactPackage {
     override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
         listOf(VibeLocalSdrModule(ctx), VibeMdnsModule(ctx))
-    override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
+    override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> =
+        listOf(TvTextInputManager())   // ★ replaces RN's text field so a TV remote can reach it (TvTextInput.kt)
 }
 
 class MainApplication : Application(), ReactApplication {
