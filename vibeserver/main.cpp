@@ -1030,6 +1030,17 @@ static bool g_isPrimaryRadio = true;
 
 int main(int argc, char** argv) {
     g_argv = argv;
+#if defined(__arm__) && !defined(__aarch64__)
+    /* ★★★ VIBESERVER LITE: ON 32-BIT ARM, SPREAD THE RECEIVER OVER THE CORES (2026-09-19).
+     *  A 32-bit ARM box is the Lite class — Stuart's floor is a 1 GHz quad core with 512 MB. On a
+     *  Pi 2 (4x Cortex-A7 @ 900 MHz) one DSP thread could not carry WFM stereo or DAB; with the
+     *  spectrum, the demodulator and DAB's MSC on their own threads it runs WFM, DAB and DAB+ in
+     *  real time. Set here, before any radio opens, so every pipeline starts with it; an owner's
+     *  own setting (the environment, e.g. from the service file) is never overridden. The 64-bit
+     *  builds that the existing servers run never compile this. */
+    setenv("VIBE_DSP_THREADS", "1", 0);
+    setenv("VIBE_DAB_SPLIT",   "1", 0);
+#endif
     // ★ Handled before everything else: it never starts a server, and it must work on a machine
     //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.
     // ★★ WHAT THE SERVER ACTUALLY SEES, in the order --radio numbers them. Needed the moment

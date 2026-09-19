@@ -530,6 +530,10 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   set(_vibe_cf_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/cloudflared-desktop/bin")
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-arm64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+    # ★ 32-bit ARM (VibeServer Lite: a Pi 2, an old Armbian box). This used to fall to the else()
+    #   and bundle the AMD64 binary — a tunnel that could never start on the box it shipped to.
+    set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-arm")
   else()
     set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-amd64")
   endif()

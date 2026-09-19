@@ -38,6 +38,7 @@ fetch() {                       # fetch <asset> <dest-name>
 }
 
 fetch cloudflared-linux-arm64  cloudflared-linux-arm64
+fetch cloudflared-linux-arm    cloudflared-linux-arm      # ★ 32-bit ARM — VibeServer Lite (Pi 2 etc.)
 fetch cloudflared-linux-amd64  cloudflared-linux-amd64
 fetch cloudflared-darwin-arm64.tgz cloudflared-darwin-arm64.tgz
 if [ ! -s "$OUT/cloudflared-darwin-arm64" ]; then
