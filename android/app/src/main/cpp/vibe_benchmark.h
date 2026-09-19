@@ -192,6 +192,32 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         res.push_back(runOne(sc[i].id, sc[i].label, sc[i].fs, sc[i].mode, sc[i].bw, cache[sc[i].fs],
                              secondsPerScenario, sc[i].rds));
     }
+    // ★★ LOCKED RANGE — ONE LISTENER'S DEMODULATOR AT CHANNEL RATE. There each listener runs their own demod on a
+    //    narrow channel cut from the shared capture, on their own thread; the shared front (the wide filtering) is
+    //    the vibe-dsp figure above and is paid once. So: time one demod at its channel rate (all its threads summed —
+    //    they are that listener's), and fit as many as the spare cores carry inside the green budget.
+    struct Lk { const char* id; const char* label; double fs; M mode; double bw; bool fm; };
+    const Lk lk[] = {
+        // ★ The server's own channel rates (chanBinsFor: ~2.5x the bandwidth, whole FFT bins, 2.048 MS/s / 4096):
+        //   512 kHz for WFM, 32 kHz for the narrow modes.
+        // ★★ PROVISIONAL: this times the DEMOD only. A live locked-range listener also pays their own Opus encode,
+        //    their private zoom spectrum and their slice of the channelizer — live on the Pi 2 an NFM listener cost
+        //    ~27 % where this reads ~6 %. Calibrate against a live locked run before these numbers drive a limit.
+        { "lk_wfm", "Locked range, per WFM listener (demod only)", 512000, M::WFM,     200000, true  },
+        { "lk_nfm", "Locked range, per NFM listener (demod only)",  32000, M::NFM,      12500, false },
+        { "lk_am",  "Locked range, per AM listener (demod only)",   32000, M::AM,       10000, false },
+        { "lk_ssb", "Locked range, per SSB listener (demod only)",  32000, M::SSB_USB,   2700, false },
+    };
+    std::map<std::string, double> perListener;
+    for (const auto& l : lk) {
+        if (progress) progress(N, N, l.label);
+        const auto sig = l.fm ? fmStation(l.fs, 1.0, 0.0) : nbSignal(l.fs, 1.0, 0.0);
+        Result one = runOne(l.id, l.label, l.fs, l.mode, l.bw, sig, secondsPerScenario, false);
+        double sum = 0; for (const auto& t : one.threads) sum += t.second;
+        one.pct = sum;                              // ★ a listener's whole cost: all of its threads
+        perListener[l.id] = sum;
+        res.push_back(one);
+    }
     if (progress) progress(N, N, "done");
     // ★ The recommended rate: the highest WFM rate that grades green, never below 1.024 MS/s.
     double rec = 1024000;
@@ -199,9 +225,13 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         if (r.id.rfind("wfm_", 0) == 0 && r.pct < 70 && r.rate > rec) rec = r.rate;
     // ★ Locked range: every listener is a demodulator of their own, so the ceiling is how many fit in one core's
     //   green budget. An ESTIMATE from the single-listener figure, labelled as one.
+    // ★ Spare cores = all but the one the shared front (vibe-dsp) holds; each gets the green budget (70 %).
+    const long cores = std::max(1L, sysconf(_SC_NPROCESSORS_ONLN));
+    const double budget = 70.0 * std::max(1L, cores - 1);
     auto usersFor = [&](const char* id) {
-        for (const auto& r : res) if (r.id == id && r.pct > 0) return std::max(0, (int)std::floor(70.0 / r.pct));
-        return 0;
+        auto it = perListener.find(id);
+        // ★ Capped at 20: past that the uplink decides, not the CPU (a fast machine "fits" thousands).
+        return (it == perListener.end() || it->second <= 0) ? 0 : std::min(20, std::max(0, (int)std::floor(budget / it->second)));
     };
     std::string j = "{\"v\":1,\"at\":" + std::to_string((long long)time(nullptr)) + ",\"rows\":[";
     for (size_t i = 0; i < res.size(); ++i) {
@@ -217,8 +247,9 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         j += "}}";
     }
     j += "],\"recommendRate\":" + std::to_string((long long)rec);
-    j += ",\"lockedUsers\":{\"nfm\":" + std::to_string(usersFor("nfm_2048")) + ",\"am\":" + std::to_string(usersFor("am_2048"))
-       + ",\"ssb\":" + std::to_string(usersFor("ssb_2048")) + "}}";
+    j += ",\"cores\":" + std::to_string(cores);
+    j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
+       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}}";
     return j;
 }
 
