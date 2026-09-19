@@ -1,5 +1,6 @@
 #include "directory.h"
 #include "solar.h"   // ★ gridToLatLon — the locator is validated HERE, see worker()
+#include "vibe_hwinfo.h"   // ★ the machine, for the listing
 
 #include <atomic>
 #include <chrono>
@@ -445,6 +446,8 @@ std::string buildStatus(int port) {
     const std::string host = hostModel(), plat = platformName();
     if (!host.empty()) j += ",\"host\":\"" + host + "\"";
     if (!plat.empty()) j += ",\"platform\":\"" + plat + "\"";
+    // ★ CPU, cores, clock, RAM and the instruction set this build runs — see vibe_hwinfo.h.
+    j += ",\"hw\":" + vibe::hardwareJson();
     // ★ The contract this server speaks (docs/PROTOCOL.md) — a client greys a server out by these.
     if (jsonNum(ident, "proto", -1) >= 0)
         j += ",\"proto\":" + std::to_string((int)jsonNum(ident, "proto", 0))

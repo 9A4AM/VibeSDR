@@ -548,6 +548,8 @@ object VibeTunnel {
             out.put("pin", j.optBoolean("pin", false))
             // ★ The contract this server speaks (docs/PROTOCOL.md).
             if (j.has("proto")) { out.put("proto", j.optInt("proto", 1)); out.put("minProto", j.optInt("minProto", 0)) }
+            // ★ The machine — CPU, cores, clock, RAM, instruction set — as the server measured it (vibe_hwinfo.h).
+            j.optJSONObject("hw")?.let { out.put("hw", it) }
             // ★ The phone's battery, as the server publishes it — the badge beside the entry.
             if (j.has("batteryLevel")) out.put("battery", JSONObject().apply {
                 put("level", j.optInt("batteryLevel", -1)); put("charging", j.optBoolean("batteryCharging", false))

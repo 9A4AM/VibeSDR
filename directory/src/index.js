@@ -640,6 +640,15 @@ async function list(env, url) {
       //   or an icon URL: what a server says about itself must stay text, or one day a listing
       //   carries an image. Not lowercased — it is a NAME, and "macOS" is not "macos".
       platform: typeof status.platform === 'string' ? status.platform.slice(0, 40) : '',
+      // ★ THE MACHINE, as the server measured it (vibe_hwinfo.h) — shown so a listener can see a DAB receiver
+      //   running on a 900 MHz Pi 2 or a TV (Stuart, 2026-09-19). Each field checked and bounded; text stays text.
+      hw: (status.hw && typeof status.hw === 'object') ? {
+        cpu:   typeof status.hw.cpu === 'string' ? status.hw.cpu.slice(0, 60) : '',
+        cores: Number.isInteger(status.hw.cores) && status.hw.cores > 0 && status.hw.cores <= 512 ? status.hw.cores : 0,
+        mhz:   Number.isInteger(status.hw.mhz) && status.hw.mhz > 0 && status.hw.mhz < 10000 ? status.hw.mhz : 0,
+        ramMb: Number.isInteger(status.hw.ramMb) && status.hw.ramMb > 0 && status.hw.ramMb < 4194304 ? status.hw.ramMb : 0,
+        isa:   ['64-bit', '32-bit NEON', '32-bit'].includes(status.hw.isa) ? status.hw.isa : '',
+      } : null,
       // ★ How long a listener gets, said BEFORE they click rather than when they are cut off.
       limitMin: Number(status.limitMin) > 0 ? Number(status.limitMin) : 0,
       listeners: Number(status.listeners || 0),

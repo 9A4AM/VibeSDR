@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
+#include "vibe_hwinfo.h"   // ★ what this server runs on, for the directory — see the header
 
 #include <algorithm>
 #include <atomic>
@@ -14543,7 +14544,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int  vsFreeIn   = vsClaimNow ? 0 : LocalSdrShim::instance().occupantSecsLeft();
             // ★ `proto` / `minProto`: the contract this server speaks and the lowest it accepts —
             //   see VS_PROTO. A client draws "update the app" from these, never from `version`.
-            std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":") + std::to_string(VS_PROTO)
+            std::string body = std::string("{\"server\":\"vibeserver\",\"hw\":") + vibe::hardwareJson()
+                             + ",\"proto\":" + std::to_string(VS_PROTO)
                              + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"pin\":"
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")

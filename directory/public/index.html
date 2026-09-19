@@ -1127,9 +1127,19 @@ function serverBlock(s) {
    * ★ An unknown platform shows nothing rather than a guess.
    */
   // ★ Printed as the server said it — no table to keep in step with platforms we have not met.
-  const extra = (s.host || s.platform)
+  /* ★★ THE MACHINE UNDER IT (Stuart, 2026-09-19) — "Cortex-A7 · BCM2835 · 4 cores @ 0.9 GHz · 920 MB RAM · 32-bit
+   *  NEON", as the server measured it. Seeing a DAB receiver on a Pi 2 or a TV is the pitch for installing one. */
+  const h = s.hw || null;
+  const hwLine = h ? [
+    h.cpu || '',
+    h.cores ? `${h.cores} core${h.cores > 1 ? 's' : ''}${h.mhz ? ` @ ${(h.mhz / 1000).toFixed(h.mhz % 1000 ? 1 : 0)} GHz` : ''}` : '',
+    h.ramMb ? (h.ramMb >= 1024 ? `${(h.ramMb / 1024).toFixed(h.ramMb >= 10240 ? 0 : 1)} GB RAM` : `${h.ramMb} MB RAM`) : '',
+    h.isa || '',
+  ].filter(Boolean).join(' · ') : '';
+  const extra = (s.host || s.platform || hwLine)
     ? `<div class="rcHost">${s.host ? `Server: ${esc(s.host)}` : ''}`
-      + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}</div>` : '';
+      + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}`
+      + `${hwLine ? `${s.host || s.platform ? '<br>' : ''}${esc(hwLine)}` : ''}</div>` : '';
   return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}">${s.pin ? padlockGlyph(18)
