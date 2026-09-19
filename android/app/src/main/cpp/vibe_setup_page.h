@@ -2239,6 +2239,7 @@ async function eibiFetch() {
  *    ADVERTISES seven rates and implements three (see the airspyhf notes in the shim).
  */
 const DRIVER_HW = {
+  /* ★ Android's copy is RATE_OPTIONS_RTL in src/screens/ServerModeScreen.tsx — edit both together. */
   rtl:      { rates: [250000, 1024000, 1536000, 1792000, 1920000, 2048000, 2160000, 2400000],
               biasT: true,  rfNotch: false, lnaState: false },
   rtlsdr:   { rates: [250000, 1024000, 1536000, 1792000, 1920000, 2048000, 2160000, 2400000],

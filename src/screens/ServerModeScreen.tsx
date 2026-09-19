@@ -61,11 +61,22 @@ type PinMode = 'random' | 'custom' | 'off';
 // impossible (Stuart, 2026-07-27). The shim would snap a pinned rate to the nearest real one,
 // so the menu was lying rather than breaking, which is worse.
 // ★ FIFTH time today the same shape has bitten: a list written when there was one radio.
+// ★★ THE SAME RATES AS THE LINUX SETUP PAGE (vibe_setup_page.h, `rtl: { rates: [...] }`), plus 1.2 and 960 k
+//    which were only ever here. Android offered three while the Pi offered eight, so a TV with an RTL-SDR V4
+//    could not pick 2.048 — DAB's native rate — while the Pi's NooElec could (Stuart, 2026-09-19). It looked
+//    like a per-dongle limit; it was two copies of one list. Edit both together.
 const RATE_OPTIONS_RTL = [
-  { label: 'Client-controlled', value: 0 },
-  { label: 'Full · 2.4 MHz',  value: 2_400_000 },
-  { label: '1.2 MHz',         value: 1_200_000 },
-  { label: '960 kHz (light)', value: 960_000 },
+  { label: 'Client-controlled',     value: 0 },
+  { label: 'Full · 2.4 MHz',        value: 2_400_000 },
+  { label: '2.16 MHz',              value: 2_160_000 },
+  { label: '2.048 MHz (DAB native)', value: 2_048_000 },
+  { label: '1.92 MHz',              value: 1_920_000 },
+  { label: '1.792 MHz',             value: 1_792_000 },
+  { label: '1.536 MHz',             value: 1_536_000 },
+  { label: '1.2 MHz',               value: 1_200_000 },
+  { label: '1.024 MHz',             value: 1_024_000 },
+  { label: '960 kHz (light)',       value: 960_000 },
+  { label: '250 kHz (lightest)',    value: 250_000 },
 ];
 // ★★★ HackRF One — EXPERIMENTAL, and the ONLY radio here whose FLOOR is above the dongle
 // menu's CEILING. A HackRF cannot go below 2 MSPS, so the RTL list (2.4 / 1.2 / 960 kHz) would
