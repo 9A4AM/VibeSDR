@@ -545,6 +545,14 @@ public:
     using ConfigGetFn = std::function<std::string()>;                             // -> JSON
     using ConfigSetFn = std::function<bool(const std::string&, std::string&)>;    // JSON, &err
     static void setConfigHandlers(ConfigGetFn get, ConfigSetFn set);
+
+    /** ★★★ THE SERVER BENCHMARK (vibe_benchmark.h). Run = measure this box and save the result; Get = the last
+     *  saved result, or "" if it has never run. The HTTP endpoints live here because every platform serves them
+     *  from the same place the config endpoints are served; the WORK lives in the daemon, which owns the radio
+     *  it has to pause and the file it writes — the same split as setConfigHandlers, for the same reason. */
+    using BenchRunFn = std::function<std::string(bool force, std::string& err)>;   // -> JSON result
+    using BenchGetFn = std::function<std::string()>;                               // -> JSON, or ""
+    static void setBenchmarkHandlers(BenchRunFn run, BenchGetFn get);
     /** Has the owner finished browser setup? Distinct from "an admin password is set" — the
      *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */

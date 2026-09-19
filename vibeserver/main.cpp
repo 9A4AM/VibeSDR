@@ -62,6 +62,7 @@
 #include <netinet/in.h>
 #include "vibeserver_config.h"
 #include "vibe_bands.h"
+#include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
 #include "eibi.h"
 #include "solar.h"
 #include "geoip.h"
@@ -799,6 +800,34 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             vsconfig::ServerConfig g_serverConfig; std::string g_myRadioSerial;
             /// True in the process that holds the public port and owns no radio.
             std::atomic<bool> g_amFrontDoor{false};
+
+/** ★ Where the benchmark's result and its DAB clip live: beside the config, which is the one directory the
+ *  daemon already owns on every platform. */
+static std::string vsBenchDir() {
+    const std::string p = g_configPath;
+    const size_t slash = p.find_last_of('/');
+    return slash == std::string::npos ? std::string(".") : p.substr(0, slash);
+}
+static std::string vsBenchPath() { return vsBenchDir() + "/benchmark.json"; }
+static void vsBenchSave(const std::string& j) {
+    if (j.empty()) return;
+    // ★ Written whole, then moved: a half-written result would read as a broken machine.
+    const std::string tmp = vsBenchPath() + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+        const bool ok = std::fwrite(j.data(), 1, j.size(), f) == j.size();
+        std::fclose(f);
+        if (ok) std::rename(tmp.c_str(), vsBenchPath().c_str()); else std::remove(tmp.c_str());
+    }
+}
+static std::string vsBenchLoad() {
+    FILE* f = std::fopen(vsBenchPath().c_str(), "rb");
+    if (!f) return "";
+    std::string out; char buf[4096]; size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
             std::atomic<bool> g_restartRequested{false};
             /** ★ Earliest moment the restart may happen, so the HTTP reply can drain first. */
             std::atomic<double> g_restartNotBefore{0.0};
@@ -1498,6 +1527,50 @@ int main(int argc, char** argv) {
                          ip.empty() ? "no IPv4 address found" : "no name set");
         }
     }
+    /* ★★★ THE BENCHMARK, WIRED (Stuart, 2026-09-19). What this box can actually carry, measured on the box —
+     *  Lite runs it at first setup and switches red features off; the full versions offer it in setup as advice.
+     *  ★★ THE RADIO GOES OFF THE AIR FOR THE RUN. Measuring while capturing would measure the two fighting for
+     *     the cores and give every row a number nobody can act on — and the listener's audio would break anyway.
+     *     So: refuse while anyone is listening (unless the owner forces it), stop the radio, measure, save, and
+     *     then restart the process so the radio comes back exactly as it started rather than half-reconstructed
+     *     here. The reply goes out FIRST; the restart follows a moment later, as the settings save does.
+     *  ★ The result is saved beside the config, so the admin page can show it without re-running. */
+    LocalSdrShim::setBenchmarkHandlers(
+        [](bool force, std::string& err) -> std::string {
+            static std::mutex runMtx;
+            std::unique_lock<std::mutex> lk(runMtx, std::try_to_lock);
+            if (!lk.owns_lock()) { err = "a benchmark is already running"; return ""; }
+            auto& shim = LocalSdrShim::instance();
+            const int listeners = shim.listenerCount();
+            if (listeners > 0 && !force) {
+                err = std::to_string(listeners) + (listeners == 1 ? " listener is" : " listeners are")
+                    + " connected — the radio goes off the air for the measurement";
+                return "";
+            }
+            const bool wasRunning = shim.isRunning();
+            if (wasRunning) shim.stop();
+            // ★ The DAB rows need the clip; without it they are simply absent (never a guessed figure).
+            const std::string clip = vibe::ensureDabClip(vsBenchDir());
+            std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
+                                               [&] { return vibe::runDabRows(clip, 6.0); });
+            vsBenchSave(j);
+            if (wasRunning) {
+                // ★★ Same restart as the settings save: reply first, then come back. A detached thread so the
+                //    HTTP reply is already on the wire — see the "Save and reboot" path.
+                std::thread([] {
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
+                    reapRadios();
+                    const std::string me = selfExePath();
+                    if (!me.empty()) execv(me.c_str(), g_argv);
+                    execvp(g_argv[0], g_argv);
+                    _exit(0);
+                }).detach();
+            }
+            return j;
+        },
+        []() -> std::string { return vsBenchLoad(); });
+
     LocalSdrShim::setConfigHandlers(
         []() -> std::string {
             // ★★ THE WHOLE MACHINE, with THIS radio's live values folded in. The page needs every

@@ -3573,6 +3573,9 @@ static inline int opusBitrateFor(int channels) {
 // ── The config API's handlers, registered by the DAEMON (never on a phone) ────────────────────
 // See local_sdr_shim.h for why this is a callback and not code in here.
 static std::mutex                    g_vsConfigMtx;
+static LocalSdrShim::BenchRunFn      g_vsBenchRun;
+static LocalSdrShim::BenchGetFn      g_vsBenchGet;
+static std::mutex                    g_vsBenchMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
@@ -13588,6 +13591,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/dabmot", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
+                || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
@@ -14176,6 +14180,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
             sock->close();
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/benchmark", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/benchmark", 0) == 0) {
+            /* ★★★ WHAT THIS BOX CAN CARRY (vibe_benchmark.h). GET returns the last result, POST measures.
+             *  ★★ ADMIN ONLY, and by the same gate as the config endpoints: a POST takes the radio off the air
+             *     for a minute, which is not something a passer-by may do. GET is behind the same door because
+             *     the result describes the machine.
+             *  ★★ A POST BLOCKS for as long as the measurement takes (a minute or two on a slow box) — the page
+             *     is told to expect that. Only one runs at a time; the daemon refuses the second. */
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            LocalSdrShim::BenchRunFn runFn; LocalSdrShim::BenchGetFn getFn;
+            { std::lock_guard<std::mutex> lk(g_vsBenchMtx); runFn = g_vsBenchRun; getFn = g_vsBenchGet; }
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!runFn || !getFn) {
+                reply(501, "Not Implemented", "{\"error\":\"this build cannot run the benchmark\"}");
+                return;
+            }
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            if (!pr.ok || g_vsAuthState.blocked(ip)) {
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+            if (!isPost) {
+                const std::string j = getFn();
+                reply(200, "OK", j.empty() ? "{\"v\":0}" : j);
+                return;
+            }
+            // ★ force=1 runs it even with listeners connected — the owner's call, and the page says what it costs.
+            const bool force = reqLine.find("force=1") != std::string::npos;
+            std::string err;
+            const std::string j = runFn(force, err);
+            if (j.empty()) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+            reply(200, "OK", j);
             return;
 
         } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
@@ -21968,6 +22017,12 @@ static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware) {
 }
 void LocalSdrShim::setVibeServerDabNotch(bool on) { g_vsDabNotch.store(on); }
 void LocalSdrShim::setVibeServerMaxUsers(int n) { g_vsMaxUsers.store(n > 1 ? n : 1); }
+
+void LocalSdrShim::setBenchmarkHandlers(BenchRunFn run, BenchGetFn get) {
+    std::lock_guard<std::mutex> lk(g_vsBenchMtx);
+    g_vsBenchRun = std::move(run);
+    g_vsBenchGet = std::move(get);
+}
 
 void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

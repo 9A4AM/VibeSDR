@@ -162,6 +162,27 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
+      <!-- ★★★ WHAT THIS BOX CAN CARRY, AT THE TOP (Stuart, 2026-09-19). Every setting below is a promise about
+           work this machine will have to do, and until it has been measured nobody — owner or us — knows which
+           of those promises it can keep. On VibeServer Lite this runs ITSELF at first setup and switches red
+           features off; everywhere else it is a button, because a full-sized box is assumed to cope.
+           ★★ It is NOT free to run: the radio goes off the air for about two minutes and the server restarts
+              afterwards, so the page says so before the owner presses it rather than after. -->
+      <div class="card" id="benchCard">
+      <h2>What this box can carry</h2>
+      <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
+         can actually keep up with. The radio is off the air while it runs (about two minutes) and the server
+         restarts when it finishes.</p>
+      <div class="row">
+        <button id="benchRun" type="button">Run benchmark</button>
+        <span class="note" id="benchWhen"></span>
+      </div>
+      <div class="note" id="benchMsg"></div>
+      <table id="benchTable" class="hide" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
+        <tbody id="benchRows"></tbody>
+      </table>
+      <div class="note hide" id="benchAdvice"></div>
+      </div>
       <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
@@ -1203,6 +1224,136 @@ let cfg  = null;
  *  the honest state. Read from cfg.dirStatus (vibedir::statusJson folded into /vibeserver/config)
  *  and refreshed every 15 s while the owner is looking, because the tunnel and the registration
  *  arrive a few seconds after the save. */
+/* ★★★ THE BENCHMARK (vibe_benchmark.h), IN THE PAGE. Three jobs: show the last result, run a new one, and
+ *  turn what it found into settings. Colours are the engine's own grades — green under 70 % of a core, amber to
+ *  85, red above — because a number without a verdict makes the owner guess, and guessing is what this exists
+ *  to remove.
+ *  ★★ RED MEANS OFF BY DEFAULT, NOT GONE (Stuart, 2026-09-19). The owner may switch it back on: it CAN work,
+ *     just riskily, so this is not AGENTS.md's "remove a control that only works in one scenario" — it is a
+ *     default with the reason shown and an override beside it. */
+let BENCH = null;
+
+function benchGradeColour(g) {
+  return g === "red" ? "#ff8a7d" : g === "amber" ? "#ffcc66" : g === "none" ? "var(--dim)" : "#7bd88f";
+}
+
+function renderBench(j) {
+  BENCH = (j && j.v) ? j : null;
+  const tbl = $("benchTable"), rows = $("benchRows"), when = $("benchWhen"), adv = $("benchAdvice");
+  if (!BENCH) { if (tbl) tbl.classList.add("hide"); if (when) when.textContent = "Never run on this machine."; return; }
+  if (when) {
+    const d = new Date((BENCH.at || 0) * 1000);
+    when.textContent = "Last run " + (isFinite(d.getTime()) ? d.toLocaleString() : "recently") + ".";
+  }
+  rows.innerHTML = "";
+  for (const r of (BENCH.rows || [])) {
+    const tr = document.createElement("tr");
+    // ★ "none" = the row could not be measured (the DAB clip could not be fetched). Saying "0 %" would be a lie
+    //   and saying nothing would look like a feature that does not exist here.
+    const pct = r.grade === "none" ? "not measured" : (Math.round(r.pct) + "% of a core");
+    tr.innerHTML = `<td style="padding:3px 6px 3px 0;border-bottom:1px solid var(--line)">${esc(r.label || r.id)}</td>`
+      + `<td style="padding:3px 0;border-bottom:1px solid var(--line);text-align:right;color:${benchGradeColour(r.grade)}">${esc(pct)}</td>`;
+    rows.appendChild(tr);
+  }
+  tbl.classList.remove("hide");
+  const bits = [];
+  if (BENCH.recommendRate) bits.push("Recommended sample rate: <b>" + (BENCH.recommendRate / 1e6).toFixed(3) + " MS/s</b>");
+  if (BENCH.network && BENCH.network.users) {
+    bits.push("The link carries about <b>" + BENCH.network.users + "</b> listeners ("
+              + Math.round(BENCH.network.uplinkKBps) + " kB/s up)");
+  }
+  const lu = BENCH.lockedUsers || {};
+  if (lu.nfm || lu.wfm) {
+    bits.push("On a locked range this box fits about <b>" + (lu.wfm || 0) + "</b> WFM or <b>"
+              + (lu.nfm || 0) + "</b> narrow-mode listeners");
+  }
+  const red = (BENCH.rows || []).filter(r => r.grade === "red").map(r => r.label || r.id);
+  if (red.length) bits.push("Too heavy for this box: <b>" + red.map(esc).join(", ") + "</b>");
+  adv.innerHTML = bits.join("<br>");
+  adv.classList.toggle("hide", !bits.length);
+  benchApplyDefaults();
+}
+
+/** ★★ What the measurement CHANGES. Only ever tightens a setting the owner has not already tightened further,
+ *  and only on a fresh setup — re-running it later must not quietly undo somebody's deliberate choice. */
+function benchApplyDefaults() {
+  // ★ Only on a machine that has never been set up: re-running it later must not silently undo a deliberate
+  //   choice the owner made afterwards (they can still read the table and change things themselves).
+  if (!BENCH || (typeof cfg === "object" && cfg && cfg.configured)) return;
+  const row = id => (BENCH.rows || []).find(r => r.id === id);
+  const rdsx = row("rdsx_2048"), scan = row("dab_scan");
+  const rdsBox = document.querySelector('input[data-mode="rds"]');
+  if (rdsx && rdsx.grade === "red" && rdsBox && rdsBox.checked) {
+    // ★ CHECKED means OFFERED — see the data-mode handler; the stored list is what is switched OFF.
+    rdsBox.checked = false;
+    rdsBox.dispatchEvent(new Event("change"));
+    benchNote(rdsBox, "Advanced RDS is off: it measured " + Math.round(rdsx.pct) + "% of a core here.");
+  }
+  if (scan && scan.grade === "red" && $("dabScanLabels")) {
+    $("dabScanLabels").value = "0";
+    benchNote($("dabScanLabels"), "The station-label scan is off: it measured " + Math.round(scan.pct) + "% of a core here.");
+  }
+  if (BENCH.recommendRate && $("rate")) {
+    const cur = parseFloat($("rate").value || "0");
+    if (cur > BENCH.recommendRate) {
+      $("rate").value = String(BENCH.recommendRate);
+      benchNote($("rate"), "Sample rate set to what this box measured green.");
+    }
+  }
+  // ★ The honest ceiling is the SMALLER of what the processor can demodulate and what the link can carry.
+  const lu = BENCH.lockedUsers || {};
+  const cpuUsers = Math.max(lu.nfm || 0, lu.wfm || 0);
+  const netUsers = (BENCH.network && BENCH.network.users) || 0;
+  const cap = Math.min(cpuUsers || 99, netUsers || 99);
+  if (cap > 0 && cap < 99 && $("users") && Number($("users").value || 1) > cap) {
+    $("users").value = String(cap);
+    benchNote($("users"), "Listener limit set to " + cap + " — what this box and its link measured.");
+  }
+}
+
+/** The reason, beside the control it changed. A default nobody can see the reason for is a default the owner
+ *  undoes on the next visit. */
+function benchNote(el, text) {
+  if (!el || !el.parentElement) return;
+  const n = document.createElement("div");
+  n.className = "note";
+  n.style.color = "var(--amber)";
+  n.textContent = text;
+  el.parentElement.appendChild(n);
+}
+
+async function benchLoad() {
+  try {
+    const r = await fetch("/vibeserver/benchmark?" + await authQuery(), {cache:"no-store"});
+    if (!r.ok) return;
+    renderBench(await r.json());
+  } catch (e) { /* the card simply stays empty */ }
+}
+
+async function benchRun(force) {
+  const btn = $("benchRun"), msg = $("benchMsg");
+  if (btn) { btn.disabled = true; btn.textContent = "Measuring…"; }
+  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes about two minutes.";
+  try {
+    const r = await fetch("/vibeserver/benchmark?" + await authQuery() + (force ? "&force=1" : ""), {
+      method: "POST", cache: "no-store"
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      // ★ 409 = somebody is listening. Offer the override rather than refusing flatly — it is the owner's radio.
+      if (r.status === 409 && !force && confirm((j.error || "Busy") + ".\n\nRun it anyway?")) return benchRun(true);
+      if (msg) msg.textContent = j.error || "The benchmark could not run.";
+      return;
+    }
+    renderBench(j);
+    if (msg) msg.textContent = "Done. The server is restarting to put the radio back on the air.";
+  } catch (e) {
+    if (msg) msg.textContent = "The benchmark did not finish: " + (e && e.message ? e.message : e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Run benchmark"; }
+  }
+}
+
 function renderDirStatus(st) {
   const el = $("dirStatus"); if (!el) return;
   const on = $("dirList") && $("dirList").checked;
@@ -1586,12 +1737,16 @@ function modeBlockSet() {
  *  send the field, and greying out DAB on a server that does it perfectly well would be worse
  *  than saying nothing. */
 let DAB_DECODER = true;
+/** ★ Is this VibeServer Lite? Lite MEASURES ITSELF at first setup — it is the class of box that needs it —
+ *  while the full versions only offer the button (Stuart, 2026-09-19). */
+let IS_LITE = false;
 async function readDabDecoder() {
   try {
     const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
     if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
     // ★ Lite-only choices appear only on a Lite server (a 32-bit ARM build) — see "lite" in the shim.
     $("dabScanRow").classList.toggle("hide", j.lite !== true);
+    IS_LITE = j.lite === true;
   } catch (e) { /* leave it optimistic */ }
 }
 
@@ -3581,9 +3736,20 @@ async function signIn(fromTicket) {
     // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
     //   then confirm it took, which is the whole point of keeping the marker on disk.
     serialStatus();
+    /* ★★★ THE BENCHMARK. Show what is already known, then — on Lite, at FIRST setup only — measure this box
+     *  before the owner answers questions whose right answers depend on what it can carry. Everywhere else the
+     *  button is there and the choice is theirs (Stuart, 2026-09-19).
+     *  ★★ It is not run behind their back: the card says what it costs, and this path announces it first. */
+    await benchLoad();
+    if (IS_LITE && !cfg.configured && !BENCH) {
+      $("benchMsg").textContent = "First setup on VibeServer Lite: measuring what this box can carry "
+        + "before you choose anything. About two minutes.";
+      benchRun(false);
+    }
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }
 }
 
+$("benchRun").addEventListener("click", () => benchRun(false));
 $("signinBtn").onclick = () => signIn(false);
 
 // ★ Arrived from the landing page already signed in — go straight in rather than asking again.
