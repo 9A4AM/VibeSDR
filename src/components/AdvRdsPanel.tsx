@@ -1100,7 +1100,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           {/* ★ ONE SYMBOL PLOT, full width — the web's EYE. The app carried this AND a second
               "SYMBOL TRACE" of the same data (Stuart, 2026-09-14: "there is 2 symbol trace
               lines"); the wide one stays. Two clean bands = every bit decided with margin. */}
-          <Text style={s.plotLbl}>SYMBOL EYE</Text>
+          {/* ★ Its name is SYMBOL TRACE — what the website and the About note call it. It became "SYMBOL EYE"
+              when the duplicate went (above), and Stuart could not remember the original (2026-09-19). */}
+          <Text style={s.plotLbl}>SYMBOL TRACE</Text>
           <Eye xy={plotXy} width={310} height={70} />
           <Text style={s.plotNote}>
             Two clear bands = every bit decided with margin. A filled gap means symbols are
