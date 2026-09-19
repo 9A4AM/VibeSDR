@@ -71,7 +71,7 @@ public:
          *  presented: 1.0% on a first entry and 16.9% on the second, same service, same signal. */
         lsfPend_.clear();
         sid_ = 0;
-        mp2_.reset();
+        requestMp2Reset_();   // ★ vibe-mp2 owns the decoder — see mp2Loop_
         /* ★ And the AAC decoder, for the same reason as lsfPend_ and mp2_: it holds a codec
          *  configured for the OLD service's rate and channel mode, and DAB+ services on one
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
@@ -119,7 +119,8 @@ public:
      *  2026-09-08: "been stuck on the same figure … for multiple tunes"). A counter that
      *  describes the last station is worse than none: it reads as a fault on this one. */
     void resetAudioCounters() {
-        mp2In_ = mp2Bad_ = mp2Out_ = mp2WithCrc_ = 0; mp2Concealed_ = 0; mp2BerGated_ = 0; berRun_ = 0; lastGoodPcm_.clear();
+        mp2In_ = mp2Bad_ = mp2Out_ = mp2WithCrc_ = 0; mp2Concealed_ = 0; mp2BerGated_ = 0;
+        requestMp2Reset_();                 // ★ berRun_/lastGoodPcm_ belong to vibe-mp2 — see mp2Loop_
         scfChecked_ = 0; scfOk_[0] = scfOk_[1] = scfOk_[2] = scfOk_[3] = 0;
         lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
         sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
@@ -132,7 +133,7 @@ public:
         resetAudioCounters();
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
-        mp2_.reset();
+        requestMp2Reset_();   // ★ vibe-mp2 owns the decoder — see mp2Loop_
         aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
         /* ★★★ AND THE SUPER-FRAME WINDOW. sf_ holds the last five logical frames — of the OLD
          *  service. The first super frame after a switch could be four old frames and one new,
@@ -337,7 +338,7 @@ public:
                      *  intent and it re-applies the moment the ensemble is read again. */
                     sid_ = 0;
                     resetAudioCounters();   // ★ a new multiplex starts its own tally
-                    mp2_.reset(); aac_.reset(); pad_.reset(); { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); } sf_.clear();
+                    requestMp2Reset_(); aac_.reset(); pad_.reset(); { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); } sf_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
                     pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
@@ -352,6 +353,7 @@ public:
         cv_.notify_all();
         inCv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        stopMp2_();
         started_ = false;
     }
 
@@ -1440,6 +1442,186 @@ private:
     struct DlsRec { std::string text; double at = 0; uint32_t changes = 0; };
 
     /** Turn whatever logical frames arrived into PCM. */
+    /* ★★★ MP2 AUDIO IS DECODED ON ITS OWN THREAD (2026-09-19, a Raspberry Pi 2). The Layer II synthesis ran
+     *  inside drainAudio() on vibe-dab — the thread that also runs the whole OFDM front end and FIC, at
+     *  ~92 % of a 900 MHz Cortex-A7 on its own. The decode is ~6-7 % more, which put it past 100 %: the
+     *  decoder fell to ~10.1 frames/s against 10.42 and dropped input, and Stuart heard MP2 break up
+     *  while DAB+ on the SAME multiplex was clean — because DAB+ audio is decoded by ffmpeg, in another
+     *  process, on another core. Now MP2 is too.
+     *  ★ The decoder and its concealment state (mp2_, rmsRef_, berRun_, lastGoodPcm_) belong to vibe-mp2
+     *    alone: every reset is a REQUEST (requestMp2Reset_) that bumps a generation, drops the queued
+     *    frames of the old service and is applied here before the next decode. The decode itself takes
+     *    no lock; the counters, the PAD feed and the PCM push take m_ briefly afterwards — waiting there
+     *    is fine: this is not the DSP thread, and the PCM buffer holds ~2 s. */
+    struct Mp2Job { std::vector<uint8_t> f; double ber; uint32_t gen; };
+    void enqueueMp2_(const std::vector<uint8_t>& f, double ber) {
+        {
+            std::lock_guard<std::mutex> qk(mp2QM_);
+            if (!mp2Thread_.joinable()) { mp2Stop_ = false; mp2Thread_ = std::thread([this] { mp2Loop_(); }); }
+            mp2Q_.push_back({ f, ber, mp2Gen_.load(std::memory_order_relaxed) });
+            while (mp2Q_.size() > 64) mp2Q_.pop_front();          // ~3 s: behind that far, drop, never block
+        }
+        mp2QCv_.notify_one();
+    }
+    void requestMp2Reset_() {
+        std::lock_guard<std::mutex> qk(mp2QM_);
+        mp2Gen_.fetch_add(1, std::memory_order_relaxed);
+        mp2Q_.clear();
+        mp2ResetReq_ = true;
+    }
+    void stopMp2_() {
+        { std::lock_guard<std::mutex> qk(mp2QM_); mp2Stop_ = true; mp2Q_.clear(); }
+        mp2QCv_.notify_all();
+        if (mp2Thread_.joinable()) mp2Thread_.join();
+    }
+    void mp2Loop_() {
+        vibeAudioThread("vibe-mp2");
+        for (;;) {
+            Mp2Job job;
+            bool doReset = false;
+            {
+                std::unique_lock<std::mutex> qk(mp2QM_);
+                mp2QCv_.wait(qk, [this] { return !mp2Q_.empty() || mp2Stop_; });
+                if (mp2Stop_) return;
+                job = std::move(mp2Q_.front()); mp2Q_.pop_front();
+                doReset = mp2ResetReq_; mp2ResetReq_ = false;
+                if (job.gen != mp2Gen_.load(std::memory_order_relaxed)) continue;   // an old service's frame
+            }
+            if (doReset) { mp2_.reset(); berRun_ = 0; lastGoodPcm_.clear(); rmsRef_ = 0.0; }
+            mp2Decode_(job.f, job.ber, job.gen);
+        }
+    }
+    void mp2Decode_(const std::vector<uint8_t>& f, const double frameBer, const uint32_t gen) {
+            std::vector<float> out;
+            if (mp2_.decode(f.data(), f.size(), out) <= 0) {
+                mp2_.resetScfHistory();
+                std::lock_guard<std::mutex> lk(m_);
+                if (gen == mp2Gen_.load(std::memory_order_relaxed)) { ++mp2In_; ++mp2Bad_; }
+                return;
+            }
+            bool concealed = false, gated = false;
+            /* ★★★ CONCEAL THE SQUEAL. THE MPEG CRC DOES NOT COVER THE SCALEFACTORS — it spans the
+             *  header, the allocation and the scfsi only (see mp2Crc16) — so a frame whose
+             *  SCALEFACTORS were corrupted passes every check we make and decodes into full-scale
+             *  noise. Scalefactors are logarithmic gains: one wrong index is tens of dB, which is
+             *  why the failure is a SQUEAL rather than the bubbling mud of ordinary bit errors,
+             *  and why Stuart has described it that way from the very first report.
+             *  ★★★ MEASURED on 60 s of captured air (dab-offline): median frame RMS 0.145, p95
+             *      0.218 — and a peak of 2.927, which valid Layer II output cannot produce. 15
+             *      frames of 2439 arrive at full scale. Those fifteen are the squeals.
+             *  ★★★ THIS IS WHAT THE REFERENCE DOES. Stuart, comparing the SAME dongle and aerial
+             *      on OpenWebRX minutes earlier: "no awful squeal on OWRX, a little hiccup of
+             *      silence ... now crystal clear", and "I can listen to OWRX for extended periods
+             *      of time, I could not ours." A receiver that cannot decode a frame must say
+             *      nothing; it must never say something loud.
+             *  ★★ CONCEALMENT, NOT A CURE, and it is not pretending otherwise — the counter is
+             *     published so the underlying error rate stays visible. OWRX stalls far less
+             *     often than we squeal, which is the real gap and is still being worked.
+             *  ★ Two tests, both from the measurement above: a peak no valid frame can reach, and
+             *    a level wildly out of line with this service's own running average. The average
+             *    is seeded from the first good frames and moves slowly, so a genuinely loud
+             *    passage cannot be silenced by it. */
+            {
+                float pk = 0.0f; double sq = 0.0;
+                for (float v : out) { const float a = std::fabs(v); if (a > pk) pk = a; sq += double(v) * v; }
+                const double rms = out.empty() ? 0.0 : std::sqrt(sq / double(out.size()));
+                const bool impossible = (pk > 1.5f);
+                const bool wayOut     = (rmsRef_ > 0.0 && rms > rmsRef_ * 6.0);
+                if (impossible || wayOut) {
+                    concealed = true;
+                    std::fill(out.begin(), out.end(), 0.0f);       // a stall, not a squeal
+                } else if (rms > 0.0) {
+                    rmsRef_ = rmsRef_ > 0.0 ? rmsRef_ * 0.98 + rms * 0.02 : rms;
+                }
+            }
+            /* ★★★ THE QUALITY GATE — THE "BUBBLING MUD" (2026-09-16). MPEG's CRC covers the
+             *  header, allocation and scfsi; the ScF-CRC covers the scale factors; NOTHING covers
+             *  the sample data, which is most of the frame. On a marginal mux (9A, 10D at MER
+             *  8-9 dB) the Viterbi leaves residual errors there, every check passes, and the
+             *  frame decodes into the burbling Stuart has described since the first MP2 report.
+             *  The receiver knows which frames those are: its raw pre-Viterbi bit error rate,
+             *  from re-encoding the decision, is the margin the decoder had. Above the threshold
+             *  the frame is not trusted: the previous good frame is repeated, fading, and after
+             *  three in a row it is silence — a hiccup, which is what the reference receivers do,
+             *  instead of 24 ms of mud. ★ Threshold from measurement (VIBE_DAB_MP2_BER overrides);
+             *  the count is published so the underlying error rate stays visible. */
+            {
+                static const double berGate = std::getenv("VIBE_DAB_MP2_BER") ? atof(std::getenv("VIBE_DAB_MP2_BER")) : kMp2BerGate;
+                if (berGate > 0.0 && frameBer > berGate) {
+                    gated = true;
+                    ++berRun_;
+                    if (berRun_ <= 3 && lastGoodPcm_.size() == out.size()) {
+                        const float g = berRun_ == 1 ? 0.7f : berRun_ == 2 ? 0.4f : 0.15f;
+                        for (size_t k = 0; k < out.size(); ++k) out[k] = lastGoodPcm_[k] * g;
+                    } else {
+                        std::fill(out.begin(), out.end(), 0.0f);
+                    }
+                } else {
+                    berRun_ = 0;
+                    lastGoodPcm_ = out;
+                }
+            }
+            // ★ Shared from here on: the counters json() reads, the PAD decoder, the PCM buffer.
+            std::lock_guard<std::mutex> lk(m_);
+            if (gen != mp2Gen_.load(std::memory_order_relaxed)) return;   // the service changed meanwhile
+            ++mp2In_; ++mp2Out_;
+            if (concealed) ++mp2Concealed_;
+            if (gated) ++mp2BerGated_;
+            if (mp2_.lastHadCrc()) ++mp2WithCrc_;
+            {   // ★ Which ScF-CRC convention matches on air — see Mp2Decoder::tallyScfCrc.
+                const auto& t = mp2_.scfCrc();
+                scfChecked_ = t.checked;
+                for (int v = 0; v < 4; ++v) scfOk_[v] = t.ok[v];
+            }
+            /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
+             *  and its OWN sample rate, and this pushed the result straight into a buffer that
+             *  takePcm() reads as 48 kHz STEREO pairs. Two independent speed-ups, and UK DAB has
+             *  both: a MONO service (talkSPORT, LBC) hands back one sample per frame slot and
+             *  every pair read as L/R plays at 2x; an LSF service at 24 kHz plays at 2x again.
+             *  BBC National 12B is 48 kHz stereo throughout, which is why it sounded perfect and
+             *  D1 National did not — the first mux I tested agreed with the bug.
+             *  ★ Upmix and resample HERE, where the frame's own header is still in hand. Linear
+             *    interpolation: the ratios are exact small integers (48/24 = 2, 48/32 = 1.5) so
+             *    this is not the place to spend an FIR, and a wrong-speed stream is not a
+             *    fidelity problem to be tuned — it is a bug to be removed. */
+            /* ★★★ THE DYNAMIC LABEL — DAB'S "NOW PLAYING" — LIVES IN THE TAIL OF THIS FRAME.
+             *  EN 300 401 clause 7.4: [ ... audio ... ][ X-PAD ][ ScF-CRC ][ F-PAD (2) ]. F-PAD is
+             *  the last two bytes; the scale factor CRC sits between it and the X-PAD, so it has
+             *  to be lifted out before the PAD reader sees the field or the indicator list is read
+             *  out of the wrong bytes.
+             *  ★★ THE ScF-CRC LENGTH RULE (TS 103 466, as dablin and welle.io apply it): four
+             *     bytes, except two for MPEG-1 below 56 kbit/s mono / 112 kbit/s stereo. LSF (24
+             *     kHz) frames always carry four. The 2026-09-05 conclusion that "this air carries
+             *     no ScF-CRC" was drawn while the X-PAD bytes were being read in the wrong order
+             *     (see vibe_dab_pad.h), so it is withdrawn and the rule is applied — and the DLS
+             *     CRC-16 is the oracle: a wrong length puts the indicator list in the wrong place
+             *     and crcOk stays at zero, which is VISIBLE. VIBE_DAB_SCFCRC_LEN still overrides.
+             *  ★ The whole tail goes to the reader, not 48 bytes: a variable X-PAD field can be
+             *    four sub-fields of 48 plus its list, and the reader sizes the field itself. */
+            {
+                const auto& mi2 = mp2_.info();
+                static const int scfCrcEnv = std::getenv("VIBE_DAB_SCFCRC_LEN")
+                                           ? atoi(std::getenv("VIBE_DAB_SCFCRC_LEN")) : -1;
+                size_t scfCrcLen = 4;
+                if (!mi2.lsf && mi2.bitrateKbps < (mi2.channels == 1 ? 56 : 112)) scfCrcLen = 2;
+                if (scfCrcEnv >= 0) scfCrcLen = size_t(scfCrcEnv);
+                if (f.size() > scfCrcLen + 2) {
+                    const size_t fpadAt = f.size() - 2;
+                    const size_t xEnd   = fpadAt - scfCrcLen;      // X-PAD ends before the ScF-CRC
+                    const size_t take   = xEnd < 200 ? xEnd : 200; // 4 x 48 + a 4-byte list
+                    std::vector<uint8_t> win;
+                    win.reserve(take + 2);
+                    win.insert(win.end(), f.begin() + long(xEnd - take), f.begin() + long(xEnd));
+                    win.push_back(f[fpadAt]); win.push_back(f[fpadAt + 1]);
+                    pad_.feed(win.data(), win.size());
+                }
+            }
+            const auto& mi = mp2_.info();
+            pushPcm48Stereo(out.data(), out.size(),
+                            mi.channels > 0 ? mi.channels : 2,
+                            mi.sampleRateHz > 0 ? mi.sampleRateHz : int(kAudioRateHz));
+    }
+
     void drainAudio() {
         // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
         std::vector<std::vector<uint8_t>> frames; std::vector<double> bers;
@@ -1509,132 +1691,9 @@ private:
                     }
                 }
             }
-            std::vector<float> out;
-            ++mp2In_;
-            if (mp2_.decode(f.data(), f.size(), out) <= 0) {
-                ++mp2Bad_;
-                /* ★ The squeal guard judges a scale factor against what this sub-band was doing a
-                 *  moment ago. A refused frame ends that continuity — the next frame we accept may
-                 *  be 24 ms or a second later, in a different passage — so drop the reference
-                 *  rather than fight the first frames back in with it. */
-                mp2_.resetScfHistory();
-                continue;
-            }
-            ++mp2Out_;
-            /* ★★★ CONCEAL THE SQUEAL. THE MPEG CRC DOES NOT COVER THE SCALEFACTORS — it spans the
-             *  header, the allocation and the scfsi only (see mp2Crc16) — so a frame whose
-             *  SCALEFACTORS were corrupted passes every check we make and decodes into full-scale
-             *  noise. Scalefactors are logarithmic gains: one wrong index is tens of dB, which is
-             *  why the failure is a SQUEAL rather than the bubbling mud of ordinary bit errors,
-             *  and why Stuart has described it that way from the very first report.
-             *  ★★★ MEASURED on 60 s of captured air (dab-offline): median frame RMS 0.145, p95
-             *      0.218 — and a peak of 2.927, which valid Layer II output cannot produce. 15
-             *      frames of 2439 arrive at full scale. Those fifteen are the squeals.
-             *  ★★★ THIS IS WHAT THE REFERENCE DOES. Stuart, comparing the SAME dongle and aerial
-             *      on OpenWebRX minutes earlier: "no awful squeal on OWRX, a little hiccup of
-             *      silence ... now crystal clear", and "I can listen to OWRX for extended periods
-             *      of time, I could not ours." A receiver that cannot decode a frame must say
-             *      nothing; it must never say something loud.
-             *  ★★ CONCEALMENT, NOT A CURE, and it is not pretending otherwise — the counter is
-             *     published so the underlying error rate stays visible. OWRX stalls far less
-             *     often than we squeal, which is the real gap and is still being worked.
-             *  ★ Two tests, both from the measurement above: a peak no valid frame can reach, and
-             *    a level wildly out of line with this service's own running average. The average
-             *    is seeded from the first good frames and moves slowly, so a genuinely loud
-             *    passage cannot be silenced by it. */
-            {
-                float pk = 0.0f; double sq = 0.0;
-                for (float v : out) { const float a = std::fabs(v); if (a > pk) pk = a; sq += double(v) * v; }
-                const double rms = out.empty() ? 0.0 : std::sqrt(sq / double(out.size()));
-                const bool impossible = (pk > 1.5f);
-                const bool wayOut     = (rmsRef_ > 0.0 && rms > rmsRef_ * 6.0);
-                if (impossible || wayOut) {
-                    ++mp2Concealed_;
-                    std::fill(out.begin(), out.end(), 0.0f);       // a stall, not a squeal
-                } else if (rms > 0.0) {
-                    rmsRef_ = rmsRef_ > 0.0 ? rmsRef_ * 0.98 + rms * 0.02 : rms;
-                }
-            }
-            /* ★★★ THE QUALITY GATE — THE "BUBBLING MUD" (2026-09-16). MPEG's CRC covers the
-             *  header, allocation and scfsi; the ScF-CRC covers the scale factors; NOTHING covers
-             *  the sample data, which is most of the frame. On a marginal mux (9A, 10D at MER
-             *  8-9 dB) the Viterbi leaves residual errors there, every check passes, and the
-             *  frame decodes into the burbling Stuart has described since the first MP2 report.
-             *  The receiver knows which frames those are: its raw pre-Viterbi bit error rate,
-             *  from re-encoding the decision, is the margin the decoder had. Above the threshold
-             *  the frame is not trusted: the previous good frame is repeated, fading, and after
-             *  three in a row it is silence — a hiccup, which is what the reference receivers do,
-             *  instead of 24 ms of mud. ★ Threshold from measurement (VIBE_DAB_MP2_BER overrides);
-             *  the count is published so the underlying error rate stays visible. */
-            {
-                static const double berGate = std::getenv("VIBE_DAB_MP2_BER") ? atof(std::getenv("VIBE_DAB_MP2_BER")) : kMp2BerGate;
-                if (berGate > 0.0 && frameBer > berGate) {
-                    ++mp2BerGated_;
-                    ++berRun_;
-                    if (berRun_ <= 3 && lastGoodPcm_.size() == out.size()) {
-                        const float g = berRun_ == 1 ? 0.7f : berRun_ == 2 ? 0.4f : 0.15f;
-                        for (size_t k = 0; k < out.size(); ++k) out[k] = lastGoodPcm_[k] * g;
-                    } else {
-                        std::fill(out.begin(), out.end(), 0.0f);
-                    }
-                } else {
-                    berRun_ = 0;
-                    lastGoodPcm_ = out;
-                }
-            }
-            if (mp2_.lastHadCrc()) ++mp2WithCrc_;
-            {   // ★ Which ScF-CRC convention matches on air — see Mp2Decoder::tallyScfCrc.
-                const auto& t = mp2_.scfCrc();
-                scfChecked_ = t.checked;
-                for (int v = 0; v < 4; ++v) scfOk_[v] = t.ok[v];
-            }
-            /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
-             *  and its OWN sample rate, and this pushed the result straight into a buffer that
-             *  takePcm() reads as 48 kHz STEREO pairs. Two independent speed-ups, and UK DAB has
-             *  both: a MONO service (talkSPORT, LBC) hands back one sample per frame slot and
-             *  every pair read as L/R plays at 2x; an LSF service at 24 kHz plays at 2x again.
-             *  BBC National 12B is 48 kHz stereo throughout, which is why it sounded perfect and
-             *  D1 National did not — the first mux I tested agreed with the bug.
-             *  ★ Upmix and resample HERE, where the frame's own header is still in hand. Linear
-             *    interpolation: the ratios are exact small integers (48/24 = 2, 48/32 = 1.5) so
-             *    this is not the place to spend an FIR, and a wrong-speed stream is not a
-             *    fidelity problem to be tuned — it is a bug to be removed. */
-            /* ★★★ THE DYNAMIC LABEL — DAB'S "NOW PLAYING" — LIVES IN THE TAIL OF THIS FRAME.
-             *  EN 300 401 clause 7.4: [ ... audio ... ][ X-PAD ][ ScF-CRC ][ F-PAD (2) ]. F-PAD is
-             *  the last two bytes; the scale factor CRC sits between it and the X-PAD, so it has
-             *  to be lifted out before the PAD reader sees the field or the indicator list is read
-             *  out of the wrong bytes.
-             *  ★★ THE ScF-CRC LENGTH RULE (TS 103 466, as dablin and welle.io apply it): four
-             *     bytes, except two for MPEG-1 below 56 kbit/s mono / 112 kbit/s stereo. LSF (24
-             *     kHz) frames always carry four. The 2026-09-05 conclusion that "this air carries
-             *     no ScF-CRC" was drawn while the X-PAD bytes were being read in the wrong order
-             *     (see vibe_dab_pad.h), so it is withdrawn and the rule is applied — and the DLS
-             *     CRC-16 is the oracle: a wrong length puts the indicator list in the wrong place
-             *     and crcOk stays at zero, which is VISIBLE. VIBE_DAB_SCFCRC_LEN still overrides.
-             *  ★ The whole tail goes to the reader, not 48 bytes: a variable X-PAD field can be
-             *    four sub-fields of 48 plus its list, and the reader sizes the field itself. */
-            {
-                const auto& mi2 = mp2_.info();
-                static const int scfCrcEnv = std::getenv("VIBE_DAB_SCFCRC_LEN")
-                                           ? atoi(std::getenv("VIBE_DAB_SCFCRC_LEN")) : -1;
-                size_t scfCrcLen = 4;
-                if (!mi2.lsf && mi2.bitrateKbps < (mi2.channels == 1 ? 56 : 112)) scfCrcLen = 2;
-                if (scfCrcEnv >= 0) scfCrcLen = size_t(scfCrcEnv);
-                if (f.size() > scfCrcLen + 2) {
-                    const size_t fpadAt = f.size() - 2;
-                    const size_t xEnd   = fpadAt - scfCrcLen;      // X-PAD ends before the ScF-CRC
-                    const size_t take   = xEnd < 200 ? xEnd : 200; // 4 x 48 + a 4-byte list
-                    std::vector<uint8_t> win;
-                    win.reserve(take + 2);
-                    win.insert(win.end(), f.begin() + long(xEnd - take), f.begin() + long(xEnd));
-                    win.push_back(f[fpadAt]); win.push_back(f[fpadAt + 1]);
-                    pad_.feed(win.data(), win.size());
-                }
-            }
-            const auto& mi = mp2_.info();
-            pushPcm48Stereo(out.data(), out.size(),
-                            mi.channels > 0 ? mi.channels : 2,
-                            mi.sampleRateHz > 0 ? mi.sampleRateHz : int(kAudioRateHz));
+            // ★ MP2 IS DECODED ON vibe-mp2, NOT HERE — see mp2Loop_. This thread only pairs the halves
+            //   and hands the frame over, with its error rate and the service generation it belongs to.
+            enqueueMp2_(f, frameBer);
         }
         while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
     }
@@ -2213,6 +2272,13 @@ private:
     uint32_t                mp2Concealed_ = 0;
     uint32_t                mp2BerGated_  = 0;    ///< frames replaced by the raw-BER quality gate
     int                     berRun_       = 0;    ///< consecutive gated frames (drives the fade)
+    // ── vibe-mp2 — see mp2Loop_ ──
+    std::mutex              mp2QM_;
+    std::condition_variable mp2QCv_;
+    std::deque<Mp2Job>      mp2Q_;
+    std::thread             mp2Thread_;
+    std::atomic<uint32_t>   mp2Gen_{0};
+    bool                    mp2Stop_ = false, mp2ResetReq_ = false;
     std::vector<float>      lastGoodPcm_;         ///< the frame repeated while gating
     static constexpr double kMp2BerGate   = 0.0;  ///< ★ OFF by default — see the note at the gate; VIBE_DAB_MP2_BER (cliff units, try 2.0) enables it
     double                  rmsRef_ = 0.0;
