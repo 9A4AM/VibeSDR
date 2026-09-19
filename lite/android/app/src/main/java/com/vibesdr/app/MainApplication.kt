@@ -42,6 +42,11 @@ class MainApplication : Application(), ReactApplication {
          *  demodulator (with the Opus encode) onto their own threads; see RxPipeline::setDemodThread.
          *  Set before the engine starts: RxPipeline reads it in start(). The main app does not set it. */
         try { android.system.Os.setenv("VIBE_DSP_THREADS", "1", true) } catch (_: Throwable) {}
+        /* ★ And DAB's receiver over two cores: the OFDM front end on vibe-dab, the MSC (the playing
+         *  service AND the label scanner's sub-channels) on vibe-dab-msc. Measured on a Pi 2 at 900 MHz,
+         *  2026-09-19: one thread could not keep up (22 % of the input dropped); split, 10.42 frames/s,
+         *  0 dropped, 0 bad MP2 frames over 128 s. See DabReceiver::setMscThread. */
+        try { android.system.Os.setenv("VIBE_DAB_SPLIT", "1", true) } catch (_: Throwable) {}
         SoLoader.init(this, false)
     }
 }
