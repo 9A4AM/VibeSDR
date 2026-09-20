@@ -1282,6 +1282,14 @@ function ControlsBar({
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
     vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects,
+    /* ★★★ FIVE PROPS THE BARS DESTRUCTURE AND NEVER RECEIVED (Stuart, 2026-09-20: "no shared dial notification
+     *  above the frequency"). ControlsBar took them, the bars declared them, and NOTHING carried them across
+     *  this object — so `sharedDial` was undefined in both bars and the shared-tuner banner could not draw on
+     *  any phone, tablet or Mac. The web client showed it because it has its own code; the app's box has been
+     *  dead since the day it was added, and in landscape it did not merely fail, it THREW (see LandscapeBar).
+     *  ★★ The same silence covers the bar's session clock, the lightning badge, read-only and admin: the props
+     *     exist, are typed `any`, and go nowhere. A prop list written twice is a fact stored twice. */
+    readOnly, sessionLeft, sharedDial, storms, adminMode,
   };
 
   return (
