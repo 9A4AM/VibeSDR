@@ -1128,8 +1128,15 @@ export abstract class SdrWsClient {
       if (!p) return;
       // ★ Backgrounded, this socket is deliberately closed — the native audio path carries the tune there.
       if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+      /* ★★★ A FALLBACK, NOT A SECOND TUNE (Stuart: "just gotta make sure double tunes do not happen"). By now
+       *  the server has had 250 ms to answer the native path, and every config carries the vfo it actually
+       *  sits on — so if it is already there, the audio socket did its job and this must stay quiet. Measured
+       *  on the Pi 2: sending both put one extra `config` on the wire and re-tuned nothing (the hardware has
+       *  an "already there" early-out), but a duplicate nobody needs is still a duplicate.
+       *  ★ If the echo is late we send anyway and the server no-ops — the wrong way round is silence. */
+      if (Math.abs(Number(this.lastServerVfo) - p.frequency) < 1) return;
       this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency: p.frequency, mode: p.mode }));
-    }, 90);
+    }, 250);
   }
 
   private _sendView(frequency: number, binBandwidth: number) {
