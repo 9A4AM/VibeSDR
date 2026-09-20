@@ -990,16 +990,22 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             </Text>
           )}
         </View>
+        {/* ★★ THE RECORDING TIMER BELONGS BESIDE THE CLOCK, not out on the right. Pinned to the
+            right-hand end it collided with the connection stats, which have grown as the AGC
+            readouts were added — "now the recording clock clips" (Stuart, 2026-09-20), with
+            0:00:10 printed through "IF wide auto".
+            ★★ And it is the same shape as landscape: CLOCK ON THE LEFT, STATUS ON THE RIGHT. The two
+               orientations now read the same way round, which is what he asked for.
+            ★ It is a time, so it sits with the other times — the grouping was always wrong; it was
+              only invisible while the stats were short enough to leave a gap. */}
+        {isRecording && (
+          <View style={[por.recRow, { flexShrink: 0 }]}>
+            <View style={por.recDot} />
+            <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
+          </View>
+        )}
         {/* ★ The stats never shrink — they are the thing being covered. */}
-        <View style={{ flexShrink: 0, marginLeft: 6 }}><LinkIndicator bus={bus} /></View>
-        <View style={{ flexShrink: 0, alignItems: 'flex-end' }}>
-          {isRecording && (
-            <View style={por.recRow}>
-              <View style={por.recDot} />
-              <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
-            </View>
-          )}
-        </View>
+        <View style={{ flexShrink: 0, marginLeft: 'auto', paddingLeft: 6 }}><LinkIndicator bus={bus} /></View>
       </View>
 
     </View>
