@@ -7665,17 +7665,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ STABLE OBJECTS FOR A MEMOISED CHILD. ControlsBar is React.memo, and these two were object
    *  literals built inline in the render — a new identity every time, so the memo could never
    *  hit and the drum, the Skia meter and every button re-rendered at the screen's rate. */
-  const sessionLeftProp = useMemo(() => sessionLeftMs == null ? null : {
-    // ★ Once a GUARANTEE has run out the number means nothing — you are not counting down
-    //   to anything — so it stops being a clock and says what is actually true.
-    text: (limitSoft && sessionLeftMs <= 0)
-      ? 'open'
-      : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
-    // ★★ RED MEANS "YOU ARE ABOUT TO BE CUT OFF", which on a soft receiver is never true:
-    //    nobody is moved until another listener wants the slot, and then with 60s notice.
-    urgent: !limitSoft && sessionLeftMs < 120_000,
-    soft: limitSoft,
-  }, [sessionLeftMs, limitSoft]);
   // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
   //   count is trivia, not permission.
   const sharedDialProp = useMemo(() => sharedDial && dialState ? {
@@ -8798,7 +8787,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           readOnly={readOnly}
           activeDecoder={activeDecoder}
           adminMode={adminOk}
-          sessionLeft={sessionLeftProp}
           sharedDial={sharedDialProp}
           storms={storms}
           dabOn={dabOn}

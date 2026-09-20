@@ -297,8 +297,6 @@ export interface ControlsBarProps {
   freqFormat?: (hz: number) => string;
   /** SpyServer: another client owns the tuner — grey the drums, disable tuning. */
   readOnly?: boolean;
-  /** Time-limited receiver countdown shown beside the clock. */
-  sessionLeft?: { text: string; urgent: boolean; soft?: boolean } | null;
   /** ★★★ WHO ELSE IS ON THIS DIAL — the answer to the only question that matters before you turn
    *  it. On a shared-VFO receiver anybody may tune and the server stops nobody, so the etiquette is
    *  the whole mechanism; but asking in the chat every time would be absurd when you are the only
@@ -757,7 +755,7 @@ function useHandbackFlash() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
   const handbackFlash = useHandbackFlash();
 
@@ -962,13 +960,17 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
                   accessibilityLabel="Admin mode — this session is not time limited">
               ⚿ Admin Mode
             </Text>
-          ) : !!sessionLeft && (
-            <Text style={{ color: sessionLeft.urgent ? '#ff6b6b' : t.clockColor,
-                           fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}>
-              {/* ★ A soft limit is a shield, not a draining hourglass — see SDRScreen. */}
-              {sessionLeft.soft ? '🛡' : '⏳'}{sessionLeft.text}
-            </Text>
-          )}
+          ) : null}
+          {/* ★★★ NO SECOND COUNTDOWN HERE. The session timer already has a large, legible card over
+              the spectrum ("GUARANTEED TIME ENDS IN 29:13"), and repeating it as a 9pt shield in
+              the status row was both redundant and the thing that pushed this row over its width —
+              the clock printed straight through the link icons because of it.
+              ★★ Stuart, 2026-09-20: "that super tiny shield and countdown in the clock confused me and
+                 that was what caused the earlier clipping and isnt needed as there is a large easier
+                 to see clock in the spectrum anyway."
+              ★ The ADMIN chip above STAYS: an admin session shows no card over the spectrum
+                (see SDRScreen's rxClock, which is suppressed when adminOk), so this is its only
+                indication — removing it would leave nothing at all. */}
           {/* The room, beside the clock — the same kind of fact as "how long have I got", and read
               at the same moment. ★ Green when you are alone: a colour you can take in without
               reading, because the point is to answer "may I just tune?" at a glance. */}
@@ -1229,7 +1231,6 @@ function ControlsBar({
    *  the app to the server list (Stuart, 2026-09-20). Three layers each keep their own hand-written copy of
    *  the prop list; a name has to appear in ALL of them or it is either dead or fatal. */
   readOnly,
-  sessionLeft,
   sharedDial,
   storms,
   adminMode,
@@ -1313,7 +1314,7 @@ function ControlsBar({
      *  dead since the day it was added, and in landscape it did not merely fail, it THREW (see LandscapeBar).
      *  ★★ The same silence covers the bar's session clock, the lightning badge, read-only and admin: the props
      *     exist, are typed `any`, and go nowhere. A prop list written twice is a fact stored twice. */
-    readOnly, sessionLeft, sharedDial, storms, adminMode,
+    readOnly, sharedDial, storms, adminMode,
   };
 
   return (
