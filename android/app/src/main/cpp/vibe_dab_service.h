@@ -78,6 +78,7 @@ public:
         channel_ = idx;
         rx_.reset();
         dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
+        holdScanForNewService_();   // ★ a new multiplex is a new station too
         for (auto& t : taps_) t.reset();
         rx_.setCentreHz(double(kBandIII[idx].centreHz));
         publishQuality_();                                          // ★ a new block is not locked yet
@@ -150,6 +151,7 @@ public:
     void setService(uint32_t sid) {
         std::lock_guard<std::mutex> lk(m_);
         want_ = sid;
+        holdScanForNewService_();   // ★ the new station gets the MSC thread to itself — see scanHoldUntil_
         resetAudioCounters();
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
@@ -1419,6 +1421,22 @@ public:
         return false;
     }
 private:
+    /** Idle the scan slots and keep them idle until the new station plays. Call with m_ held. */
+    void holdScanForNewService_() {
+        /* ★★★ OFF BY DEFAULT, AND DELIBERATELY SO (Stuart, 2026-09-20: "hold off on the pausing the text
+         *  scanning whilst changing station"). The theory — that the scanner's rotation delays a station
+         *  change — is UNMEASURED: on a Mac and on the Pi 500 a switch takes 0.68 s whether the scan is on,
+         *  off or held, so the harness does not reproduce what a listener hears (1-2 s on a Sony with the scan
+         *  off against 3-4 s on the Pi 500 and Lenovo with it on). Shipping it on would be shipping a guess.
+         *  ★ VIBE_DAB_SCAN_HOLD=1 switches it on for a by-ear A/B on a box that runs the scan. */
+        static const bool on = std::getenv("VIBE_DAB_SCAN_HOLD") && std::getenv("VIBE_DAB_SCAN_HOLD")[0] == '1';
+        if (!on) return;
+        scanHoldUntil_ = nowSec() + kScanHoldS;
+        scanHoldPcm_ = pcmPushed_;
+        for (size_t i = 0; i < kScanSlots && i < rx_.scanSlots(); ++i) rx_.scanSelect(i, 0);
+        scanIdled_ = true;
+    }
+
     void pumpScan() {
         /* ★ The owner may switch the whole-multiplex scan off — see dabScanLabelsOn(). Idle the slots
          *  once (the SPI/logo slot is separate and untouched) and let the playing service keep its own
@@ -1429,6 +1447,12 @@ private:
                 scanIdled_ = true;
             }
             return;
+        }
+        /* ★★ NOT WHILE A STATION IS STARTING. The slots were idled by holdScanForNewService_(); leave them so
+         *  until the new service has pushed audio (it is playing) or the hold expires. */
+        if (scanHoldUntil_ > 0) {
+            if (pcmPushed_ > scanHoldPcm_ || nowSec() > scanHoldUntil_) scanHoldUntil_ = 0;
+            else return;
         }
         scanIdled_ = false;
         const Ensemble& e = rx_.ensemble();
@@ -2101,6 +2125,16 @@ private:
     MotCarousel     carousel_;
     std::map<uint32_t, std::vector<SpiLogoRef>> spiLogoRefs_;
     std::map<uint32_t, DlsRec> dlsAll_;
+    /** ★★★ THE SCANNER STANDS ASIDE WHILE A NEW STATION STARTS (Stuart, 2026-09-20). The whole-multiplex scan
+     *  decodes four extra sub-channels and rotates them every 4 s, and every rotation's scanSelect() makes the
+     *  front end wait for the MSC thread to drain — so a station change that lands mid-rotation queues behind
+     *  work nobody is listening to. Measured by ear on identical multiplexes: 1-2 s to switch on a Sony TV with
+     *  the scan OFF against 3-4 s on the Pi 500 and Lenovo with it ON.
+     *  ★ Held until the new station is actually producing audio, or kScanHoldS at the outside — whichever comes
+     *    first, so a station that never starts cannot silence the scanner for good. */
+    double   scanHoldUntil_ = 0;
+    uint64_t scanHoldPcm_ = 0;
+    static constexpr double kScanHoldS = 6.0;
     double scanRotatedAt_ = 0; size_t scanCursor_ = 0;        ///< and WHY a super frame was thrown away
     /** ★ Carried across calls so the 32 kHz -> 48 kHz conversion is ONE continuous stream rather
      *  than one restart per access unit. See pushPcm48Stereo. */
