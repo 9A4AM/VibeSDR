@@ -559,6 +559,9 @@ export abstract class SdrWsClient {
   // VFO lock / waterfall panning (see SDRBackend.setFollowMode/panSpan).
   // followVfo=true reproduces today's behaviour: tune() recentres the view.
   private followVfo = true;
+  /** ★ Does this receiver share one dial? Set from the server's `dial` message. On a shared dial a centre
+   *  change we did not ask for is another listener tuning, and must be ADOPTED rather than argued with. */
+  private sharedDial = false;
   // Local hardware only — set by the adapter from the device config. Drives the
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
   /**
@@ -2233,6 +2236,8 @@ export abstract class SdrWsClient {
       return;
     }
     if (msg.type === 'dial') {
+      // ★ Remembered because it changes what an "unsolicited" centre MEANS — see the config handler.
+      this.sharedDial = String(msg.mode || 'exclusive') !== 'exclusive';
       this.callbacks.onDial?.({
         mode: String(msg.mode || 'exclusive'),
         tuner: Number(msg.tuner) || 0,
@@ -2711,11 +2716,19 @@ export abstract class SdrWsClient {
       const unsolicitedChange = v.binBandwidth > 0 &&
         (Math.abs(this.status.centerHz - v.centerHz) > 1 ||
          Math.abs(this.status.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6);
-      if (unsolicitedChange) {
+      /* ★★★ ON A SHARED DIAL, "UNSOLICITED" IS JUST SOMEBODY ELSE (Stuart, 2026-09-20). Re-asserting our own
+       *  window is right on a PRIVATE receiver, where a centre we did not ask for means something went wrong.
+       *  On a shared one it is exactly backwards: another listener tuned, and this drags the radio back to
+       *  where WE were. Two app clients then fight over the capture — he tuned the iPhone to 99.7 MHz, the Mac
+       *  hauled it back to 96.1, and both waterfalls emptied while the RDS followed the station nobody could
+       *  see. The server says as much in its own config: "a joiner must adopt it rather than impose one".
+       *  ★★ So here we adopt: fall through to the lines below, which take the server's centre as ours. */
+      if (unsolicitedChange && !this.sharedDial) {
         this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
         this._sendView(Math.round(v.centerHz), v.binBandwidth);
         return;
       }
+      if (unsolicitedChange) this.dbg(`shared dial: adopting the server's centre ${this.status.centerHz}`);
       this.view.centerHz     = this.status.centerHz;
       this.view.binBandwidth = this.status.binBandwidth;
       this.callbacks.onStatus({ ...this.status });
