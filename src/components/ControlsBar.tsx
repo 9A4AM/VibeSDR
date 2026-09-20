@@ -1006,6 +1006,12 @@ const por = StyleSheet.create({
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
+  /* ★★★ sharedDial WAS MISSING FROM THIS LIST AND USED IN THE BODY. The props arrive as {...shared}, so the
+   *  name simply was not in scope and the landscape bar threw "Property 'sharedDial' doesn't exist" the moment
+   *  it rendered — the whole app bounced back to the server list (Stuart, 2026-09-20). PortraitBar destructures
+   *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
+   *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
+  sharedDial,
   vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
   const handbackFlash = useHandbackFlash();
 
