@@ -1253,6 +1253,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (d.channel && (dabChannel < 0 || DAB_BLOCKS[dabChannel]?.name !== d.channel)) {
         const i = DAB_BLOCKS.findIndex(b => b.name === d.channel);
         if (i >= 0) { dabChannel = i; savePref('dabChannel', d.channel); }
+        /* ★★ THE ARROWS LEARN THE BLOCK FROM THE SERVER, TOO. They named the neighbouring multiplexes only
+         *  after a tune, because that was the only path that refreshed them — so LANDING on a receiver already
+         *  in DAB left them blank until you moved (Stuart, 2026-09-20). Every place dabChannel changes must
+         *  say so; this is the one the server drives. */
+        syncDialTips();
       }
       const prev = dabState;
       if (prev && prev.channel === d.channel && d.services.length === 0 && prev.services.length > 0
@@ -5723,6 +5728,8 @@ function dabRememberedChannel(): number {
  *  must JOIN that session, not send a channel of its own. The first version sent
  *  {on:1, channel:12B} regardless and hijacked the dial from the station everyone was on. */
 function dabUiOn() {
+  // ★ Entering DAB changes what the arrows do, so it changes what they must say — see syncDialTips.
+  setTimeout(syncDialTips, 0);
   dabOn = true;
   wf?.applySettings({ minRangeDb: 15 });   // ★ a DAB block is flat and a few dB up — see SignalProcessorSettings.minRangeDb
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
