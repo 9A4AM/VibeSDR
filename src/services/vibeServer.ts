@@ -145,6 +145,30 @@ export type VibeServerConfig = {
   trustedProxies?: string;
   /** ★ False lets one address hold several radios — see the server screen. Default true. */
   oneRadioPerIp?: boolean;
+
+  /* ★★★ THE FRONT END — DECLARED AND FORWARDED, WHICH IT WAS NOT (2026-09-20). ServerModeScreen has
+   *  been setting every one of these on the object it passes to startVibeServer(), and this type did
+   *  not name them, so nothing complained — and the forwarding below did not copy them either. The
+   *  native side stores the map it is GIVEN, verbatim, as the server's config JSON (VibeLocalSdrModule:
+   *  `JSONObject(opts.toHashMap())`), and VibeServerBoot reads ppm / directSampling / converter back
+   *  out of that same JSON. Absent in, absent out: an Android server owner could set frequency
+   *  correction, direct sampling or a converter and NONE of it reached the radio, then or after a
+   *  reboot. TypeScript only reports the FIRST unknown property of an object literal, which is why
+   *  this read as one stray field rather than seven.
+   *  ★ Exactly the shape AGENTS.md warns about: written, never read, and silent about it. */
+  /** Crystal correction in ppm. Absent = leave the radio alone. */
+  ppm?: number;
+  /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
+  directSampling?: number;
+  /** ★ Switch direct sampling on by itself below `directSamplingBelowHz` — the owner's choice, and
+   *  the reason a listener can reach HF and below at all on an unmodified RTL. */
+  autoDirectSampling?: boolean;
+  directSamplingBelowHz?: number;
+  /** ★ A converter in front of the radio. NEGATIVE for an up-converter, positive for a down-converter
+   *  — the sign the setup page stores (vibe_setup_page.h, convDown). */
+  converterOffsetHz?: number;
+  converterInputLoHz?: number;
+  converterInputHiHz?: number;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -227,6 +251,17 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     trustedProxies: cfg.trustedProxies ?? '',
     // ★ Absent = true, matching the server's own default: refuse a second radio to one address.
     oneRadioPerIp: cfg.oneRadioPerIp ?? true,
+    /* ★★ The front end. `ppm` is sent ONLY when the owner gave one: the stored config is read with
+     *  `cfg.has("ppm")`, and a 0 written here would be a real instruction to correct by nothing —
+     *  which is not the same as "leave this radio as it is". The rest are safe at their defaults:
+     *  direct sampling off, no automatic switch, no converter. */
+    ...(cfg.ppm != null && Number.isFinite(cfg.ppm) ? { ppm: Math.round(cfg.ppm) } : {}),
+    directSampling: cfg.directSampling ?? 0,
+    autoDirectSampling: cfg.autoDirectSampling ?? false,
+    directSamplingBelowHz: cfg.directSamplingBelowHz ?? 24e6,
+    converterOffsetHz: cfg.converterOffsetHz ?? 0,
+    converterInputLoHz: cfg.converterInputLoHz ?? 0,
+    converterInputHiHz: cfg.converterInputHiHz ?? 0,
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.

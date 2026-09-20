@@ -1164,6 +1164,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ The broadcast-FM treatments — four faults, four switches. Listed so the compiler
         //   checks them: this cast is the exact shape that made setAdminAuth a silent no-op for
         //   weeks, and every method added here has to be a real one.
+        /* ★ Both of these EXIST on SdrWsClient and are called from here — they were simply missing
+         *   from this hand-written cast, so the compiler could not see them (and, once tsconfig was
+         *   fixed and the checker actually ran, said so). Direct sampling is a normal listener
+         *   control on an RTL below 24 MHz; nbx is the HF noise blanker. */
+        setHwDirectSampling?: (v: 0 | 1 | 2) => void; setNoiseBlankerHf?: (on: boolean) => void;
         setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
         setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
         setAutoBw?: (on: boolean) => void;
@@ -4780,7 +4785,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ TOO OLD FOR THIS SERVER (BRIEF-v11 §6): say so, and offer the receiver's own web
          *  client as the way to listen meanwhile. Matched on the client's one sentence. */
         if (msg.includes(UPDATE_APP_MESSAGE)) {
-          const web = client.current?.updateAppWebUrl || route.params.url || '';
+          /* ★★ `route.params.url` — WHICH DOES NOT EXIST. The param is `baseUrl`, so this fallback
+           *  was `undefined` every time and the "Open in browser" button appeared ONLY when the
+           *  server itself published a web URL in its refusal. For a server too old to do that —
+           *  precisely the servers this alert is about — the listener was offered nothing but
+           *  "Back to Servers". Found by the compiler the day tsconfig started checking this file. */
+          const web = client.current?.updateAppWebUrl || route.params.baseUrl || '';
           Alert.alert('Update VibeSDR', UPDATE_APP_MESSAGE, [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
             ...(web ? [{ text: 'Open in browser', onPress: () => { Linking.openURL(web).catch(() => {}); navigation.goBack(); } }] : []),

@@ -459,7 +459,9 @@ class WatchProvider {
 
     this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.cmdSubs.push(
-      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean; lo?: number; hi?: number }) => {
+      this.emitter.addListener('VibeWatchCommand', /* ★ `index` — the DAB block picker's absolute choice. Read below, never declared here, so
+       *   the compiler could not see it once this file started being checked. */
+      (e: { cmd: string; delta?: number; index?: number; val?: unknown; armed?: boolean; lo?: number; hi?: number }) => {
         switch (e.cmd) {
           case 'tune': this.lastGestureAt = Date.now(); handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;

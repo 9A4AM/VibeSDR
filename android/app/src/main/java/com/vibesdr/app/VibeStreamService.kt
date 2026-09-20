@@ -157,6 +157,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
+    /** ★ Has this session ever been connected? A first connect states a frequency, a rejoin joins
+     *  whatever the dial is. Cleared when a new session starts — see wsUrl(). */
+    @Volatile private var wsEverConnected = false
     @Volatile private var currentMode = "usb"
     @Volatile private var currentStep = 1_000L
     private var currentBase = ""
@@ -416,6 +419,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         currentMode = mode
         currentUuid = uuid
         bypassPassword = password
+        // ★ A NEW session states its frequency again — the remembered tune being restored. Only a
+        //   reconnect WITHIN a session stays silent. See wsUrl().
+        wsEverConnected = false
         running = true
         muted = false
         // Fresh session — clear the disconnected / reconnect-failed card state.
@@ -1270,8 +1276,20 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             s.startsWith("http://") -> "ws://" + s.removePrefix("http://")
             else -> s
         }
-        var url = "$s/ws?user_session_id=$currentUuid&frequency=$currentFreq" +
-            "&mode=$currentMode&format=opus&version=2"
+        /* ★★★ A RECONNECT JOINS THE DIAL; IT DOES NOT STATE ONE. `currentFreq` is this service's own
+         *  copy, and putting it in the URL of every reconnect is a CONTROL ACTION FROM A CLIENT NOBODY
+         *  TOUCHED: the dial may have moved since, by another listener or by this user on another device.
+         *  ★★ Stuart, 2026-09-20: "I only tuned on the iPhone and the mac has fought me … There should be 0
+         *     control when nothing is touched." Measured from a third socket on the Pi 2 — two apps, each
+         *     re-asserting its own stale frequency on reconnect, ping-ponged the dial 96.5 ↔ 96.1 about
+         *     three times a second, and it stopped the instant one app was closed.
+         *  ★ The FIRST connect of a session still states a frequency: that is the remembered tune being
+         *    restored, and it is the one moment this client is entitled to move the radio. */
+        var url = if (wsEverConnected)
+            "$s/ws?user_session_id=$currentUuid&format=opus&version=2"
+        else
+            "$s/ws?user_session_id=$currentUuid&frequency=$currentFreq" +
+                "&mode=$currentMode&format=opus&version=2"
         // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client
         //     delays the spectrum socket a second to let the session register, so it is THIS one
         //     that claims the occupant slot — and it was anonymous, so the server stamped an empty
@@ -1313,6 +1331,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     if (!running || ws !== webSocket) return
                     packetCount++
                     lastPacketAt = SystemClock.elapsedRealtime()
+                    // ★ A PACKET is the proof the session is real — a 101 is equally true of a socket the
+                    //   server is about to drop. From here on, a reopen is a REJOIN: see wsUrl().
+                    wsEverConnected = true
                     if (packetCount <= 3) Log.i(TAG, "ws pkt#$packetCount len=${bytes.size}")
                     // Header rate flip → server encoder mismatched, cycle WS
                     if (bytes.size > HEADER_LEN) {

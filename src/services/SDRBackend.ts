@@ -144,6 +144,12 @@ export interface SDRBackend {
   /** Session id shared with the native audio engine. */
   readonly uuid: string;
 
+  /** ★ Where this receiver's OWN web client lives, when the server told us — the one thing we can
+   *  usefully offer a listener whose app is too old to talk to it (BRIEF-v11 §6). Set from the
+   *  refusal, so it is empty on every backend that has never been refused; read in SDRScreen's
+   *  update-app alert. Declared here because that read is real, not because every backend sets it. */
+  readonly updateAppWebUrl?: string;
+
   /** `allowServerDefault` — the caller had NO remembered tune for this instance, so the backend
    *  may land on the receiver's own published default instead of the frequency passed here.
    *  Backends that publish no such thing (OWRX profiles, FM-DX) ignore it. Precedence is always

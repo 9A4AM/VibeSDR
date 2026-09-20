@@ -1100,25 +1100,27 @@ export abstract class SdrWsClient {
    *  with the final state always delivered (trailing edge). */
   /** ★ Coalesced twin of the native tune — see the note in tune(). Same rhythm as the view sender, so a fast
    *  VFO drum sends a handful of messages rather than one per step. */
-  /** ★★★ ONE TUNE, ONE ROUTE — WHICHEVER SOCKET IS ACTUALLY THERE (Stuart, 2026-09-20: *"I knew this would
-   *  happen — 2 control routes"*). The first attempt sent the tune down BOTH the native audio socket and the
-   *  spectrum socket, on the reasoning that either might be absent. Both being present is the normal case, and
-   *  then the two raced: the dial went *"hyper erratic"* and settled back where it started, and tuning the Mac
-   *  while the iPhone was connected showed Heart's frequency while the radio sat on Flex.
+  /** ★★★ THE TUNE GOES DOWN THE NATIVE PATH. ONLY. Twice in one evening I tried to be cleverer than
+   *  that and made it worse, so the reasoning is written out here rather than rediscovered.
    *
-   *  ★★ So alternate, in Stuart's own order:
-   *    • spectrum socket open → send there. It is how the WEB CLIENT tunes, and the web client is the one that
-   *      has always behaved. This covers the AirPods case too: audio pulled to another machine, VibeSDR muted,
-   *      stream service gone — the spectrum is still flowing and still carries the tune.
-   *    • spectrum closed → the native audio path. Backgrounding deliberately cuts the spectrum to save power,
-   *      and that is the ONLY case where the audio socket is the tuning route.
-   *  Never both. The server echoes the resulting `config` on both sockets, so the native side stays in step
-   *  whichever route was used. */
+   *  ★★ Attempt 1 — send on BOTH sockets, so whichever is up carries it. Both are normally up, and they
+   *     raced: "the tuning doesnt work at all its hyper erratic", the dial snapping back to where it began.
+   *  ★★ Attempt 2 — alternate: spectrum when open, audio otherwise (Stuart's own suggestion, and it reads
+   *     right). It was worse, and the reason is a thing neither of us was looking at: VibeStreamService keeps
+   *     `currentFreq`, set ONLY by sendTuneCommand, and it puts that frequency in the URL of every audio
+   *     reconnect (VibeStreamService.kt — `"$s/ws?...&frequency=$currentFreq"`). Route the tune past the
+   *     native side and its copy goes stale, so the next reconnect RE-TUNES THE SERVER BACKWARDS. With two
+   *     apps connected, each holding a different stale value, the dial ping-ponged 96.5 ↔ 96.1 about three
+   *     times a second with nobody touching either device, and both connection meters churned with it.
+   *     Measured on the Pi 2 from a third socket, which is the only reason we know it was the clients.
+   *
+   *  ★ So: the native path owns the tune, because it owns the state that OUTLIVES the tune. The known cost
+   *    is the one Stuart found this afternoon — with the audio socket down (muted, or the AirPods moving to
+   *    another device) `ws?.send` swallows it and the server never hears. That is a real bug and it is still
+   *    open; it is not fixed by giving the tune a second way out. Whatever fixes it has to keep
+   *    `currentFreq` in step — that, not the socket, is what the reconnect reads. */
   private _routeTune(frequency: number, mode: string) {
     if (!(frequency > 0)) return;
-    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      try { this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency, mode })); return; } catch {}
-    }
     VibePowerModule?.sendTuneCommand(frequency, mode);
   }
 
@@ -1930,11 +1932,34 @@ export abstract class SdrWsClient {
         q = 3;
       }
     }
-    if (q !== this.lastLink) {
+    /* ★★★ HOLD A LEVEL BEFORE SHOWING IT — the score above has no hysteresis, and a meter with none
+     *  HUNTS. One late frame makes `stalls` 1, which is 3 bars down to 2 instantly; the sample then sits
+     *  in a 40-deep history for about eight seconds at the five frames a second a busy Pi 2 sends, so the
+     *  next late frame arrives while the last is still counted. Stuart, watching two apps do it at once:
+     *  "both connection meters going 123 321 123 321 … its constantly hunting."
+     *  ★★ What is wrong is the DISPLAY, not the score: the link really is varying, and the bars are meant
+     *     to answer "is this connection healthy", which is a question about the last few seconds, not the
+     *     last frame. So a new level has to survive three evaluations (~3 s) before it is published.
+     *  ★ EXCEPT ZERO. A closed socket is not a fluctuation and must show immediately — a meter that
+     *    politely waits three seconds to admit the connection has gone is the one lie it must never tell. */
+    if (q === 0 || q === this.lastLink) {
+      this.linkPending = q;
+      this.linkPendingN = 0;
+    } else if (q === this.linkPending) {
+      this.linkPendingN++;
+    } else {
+      this.linkPending = q;
+      this.linkPendingN = 1;
+    }
+    const settled = q === 0 || this.lastLink === -1 || this.linkPendingN >= 3;
+    if (q !== this.lastLink && settled) {
       this.lastLink = q;
+      this.linkPendingN = 0;
       this.callbacks.onLink?.(q);
     }
   }
+  private linkPending: 0 | 1 | 2 | 3 = 3;
+  private linkPendingN = 0;
 
   // ── Starvation watchdog + recovery ──────────────────────────────────────
   // See the constants block for why this exists and why detection is pong-first.

@@ -190,6 +190,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // the handshake window can be lost, which left the session on the URL's
   // freq/mode while the UI showed the restored tune.
   private var wsNeedsTuneAssert = false
+  /* ★★★ HAS THIS SESSION EVER BEEN CONNECTED? A FIRST connect carries the listener's frequency — it is
+   *  how a remembered tune is restored. A RECONNECT must not: the dial may have moved since, by another
+   *  listener or by this user on another device, and re-asserting our own stale copy is a CONTROL ACTION
+   *  FROM A CLIENT NOBODY TOUCHED.
+   *  ★★ Stuart, 2026-09-20, watching it happen: "I only tuned on the iPhone and the mac has fought me …
+   *     There should be 0 control when nothing is touched." Measured from a third socket on the Pi 2: the
+   *     dial ping-ponged 96.5 ↔ 96.1 about three times a second, two apps each re-asserting its own stale
+   *     frequency on every reconnect, and it stopped dead the moment one app was closed.
+   *  ★ So a reconnect JOINS the dial where it is. The frequency is left out of the URL and no tune is
+   *    asserted; the server's own config tells us where we landed. */
+  private var wsEverConnected = false
   // SERVER BUG WORKAROUND (FM half-speed, root-caused 2026-06-12): ubersdr
   // creates its opus encoder ONCE per WS at the then-current sample rate;
   // a mode change flips radiod to a new rate but keeps the old encoder, so
@@ -376,6 +387,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     currentMode  = mode
     currentUuid  = uuid
     bypassPassword = password
+    // ★ A NEW session states its frequency again — this is the remembered tune being restored, not a
+    //   reconnect. Only within one session does a rejoin stay silent. See wsEverConnected.
+    wsEverConnected = false
     isRunning    = true
     isMuted      = false
     // Fresh session — clear the disconnected / reconnect-failed card state.
@@ -1596,7 +1610,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     deadRevives = 0
     if wsNeedsTuneAssert {
       wsNeedsTuneAssert = false
-      sendWsJson(["type": "tune", "frequency": currentFreq, "mode": currentMode])
+      // ★ Only the FIRST connect of a session states a frequency — see wsEverConnected.
+      if !wsEverConnected { sendWsJson(["type": "tune", "frequency": currentFreq, "mode": currentMode]) }
+      wsEverConnected = true
     }
     // Header sample-rate flip → server's per-WS opus encoder is now mismatched
     // (see wsBaseSr note) — cycle the socket for a fresh encoder. 3-packet
@@ -2065,7 +2081,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if s.hasPrefix("https://") { s = "wss://" + s.dropFirst(8) }
     else if s.hasPrefix("http://") { s = "ws://" + s.dropFirst(7) }
     s = s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    var path = "/ws?user_session_id=\(uuid)&frequency=\(frequency)&mode=\(mode)&format=opus&version=2"
+    /* ★ A rejoin asks for no frequency at all: the server keeps this session on the dial it is already
+     *  on. Only a first connect states one (frequency <= 0 is the caller saying "join"). */
+    var path = wsEverConnected
+      ? "/ws?user_session_id=\(uuid)&format=opus&version=2"
+      : "/ws?user_session_id=\(uuid)&frequency=\(frequency)&mode=\(mode)&format=opus&version=2"
     // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client delays
     //     the spectrum socket a second to let the session register, so it is THIS one that claims
     //     the occupant slot — and it was anonymous, so the server stamped an empty agent and the

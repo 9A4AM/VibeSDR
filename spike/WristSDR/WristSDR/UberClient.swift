@@ -3219,13 +3219,9 @@ final class UberClient: ObservableObject {
     // ★ Int64: on arm64_32 `Int` is 32-bit and traps past 2.147e9, which a tune in Hz
     //   reaches on an SDRplay RSP (2 GHz) — uncomfortably close, and a trap is a crash.
     let msg: [String: Any] = ["type": "tune", "frequency": Int64(frequency), "mode": mode]
-    /* ★★★ ONE TUNE, ONE ROUTE — WHICHEVER SOCKET IS THERE (Stuart, 2026-09-20: *"I knew this would happen —
-     *  2 control routes"*). Sending on both the audio and the spectrum socket raced on every box where both
-     *  were up: the dial went "hyper erratic" and fell back to where it started. So alternate, in his order —
-     *  spectrum when it is open, because that is how the web client tunes and the web client has always been
-     *  right; the audio socket only when the spectrum is gone (backgrounded, where it is cut to save power).
-     *  Either way the server's `config` echo comes back on both, so nothing goes out of step. */
-    if specSock.isOpen { specSock.send(json: msg) } else { audioSock.send(json: msg) }
+    /* ★★★ THE AUDIO SOCKET, AND ONLY IT — see the long note in the phone’s SdrWsClient._routeTune.
+     *  Routing a tune past the side that holds the session’s frequency makes a reconnect re-tune backwards. */
+    audioSock.send(json: msg)
     // NOTE: we deliberately do NOT flush the audio/spectrum on tune. The buffer draining at the
     // old frequency is the "swishing through the stations" sweep as you cross signals — Stuart
     // likes it, and it keeps audio+waterfall in sync. The residual tune lag is the server
