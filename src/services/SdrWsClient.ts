@@ -785,9 +785,14 @@ export abstract class SdrWsClient {
      *  shows the frequency it believes it asked for. It goes down for ordinary reasons: audio muted, or the
      *  AirPods moving to another device and taking the stream service with them. His Mac then sat on 97.2 MHz
      *  while the receiver was on 96.6 and the iPhone was right — "the app is not working like the browser".
-     *  ★★ The spectrum socket is the one that is always up, since it draws the picture, and the server accepts
-     *     a tune on it (that is how the browser tunes). Sending on both is harmless: the same frequency twice
-     *     is idempotent, and coalescing keeps a drum spin from flooding the link. */
+     *  ★★★ AND NEITHER SOCKET IS ALWAYS UP — that is the whole reason this goes out on BOTH. The tune was moved
+     *      to the audio path deliberately, because BACKGROUNDING THE APP CUTS THE SPECTRUM to save power
+     *      (Stuart, who built it that way). So: backgrounded, only the audio socket is there; muted or with the
+     *      stream service gone, only the spectrum socket is. Each covers the other's absence, and whichever is
+     *      open carries the tune.
+     *  ★★ The server accepts a tune on the spectrum socket — it is how the browser tunes — so this needs
+     *     nothing new server-side. Sending the same frequency twice is idempotent, and the 90 ms coalescing
+     *     keeps a drum spin from flooding the link. */
     this._tuneOnSpectrum(frequency, mode ?? this.status.mode);
     // Re-centre spectrum on new frequency so waterfall follows the VFO — only
     // when locked (followVfo) or a discrete jump forces it (opts.recenter).
@@ -1121,6 +1126,7 @@ export abstract class SdrWsClient {
       const p = this.pendingTune;
       this.pendingTune = null;
       if (!p) return;
+      // ★ Backgrounded, this socket is deliberately closed — the native audio path carries the tune there.
       if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
       this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency: p.frequency, mode: p.mode }));
     }, 90);
