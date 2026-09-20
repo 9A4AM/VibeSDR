@@ -345,35 +345,6 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   }
 
   $('adminHealth').innerHTML = out.join('');
-  void renderBenchmark();
-}
-
-/* ★★ WHAT THIS BOX WAS MEASURED AT (vibe_benchmark.h). The setup page runs it; the admin page keeps the table,
- *  because "why is this server struggling" is asked here, months later, by someone who was not there when it
- *  was set up. Nothing is run from here — this only reads the saved result. */
-let benchShown = false;
-async function renderBenchmark(): Promise<void> {
-  const host = document.getElementById('adminBenchmark');
-  if (!host || benchShown) return;
-  try {
-    const r = await fetch(`${base()}/vibeserver/benchmark?${await q()}`, { cache: 'no-store' });
-    if (!r.ok) return;
-    const j = await r.json();
-    if (!j || !j.v || !Array.isArray(j.rows) || !j.rows.length) return;   // never run here
-    benchShown = true;
-    const colour = (g: string) => g === 'red' ? '#ff8a7d' : g === 'amber' ? '#ffcc66'
-                                : g === 'none' ? 'var(--text-dim)' : '#7bd88f';
-    const when = new Date((j.at || 0) * 1000);
-    const rows = j.rows.map((row: any) =>
-      `<tr><td style="padding:2px 8px 2px 0">${esc(row.label || row.id)}</td>`
-      + `<td style="text-align:right;color:${colour(row.grade)}">`
-      + `${row.grade === 'none' ? 'not measured' : Math.round(row.pct) + '% of a core'}</td></tr>`).join('');
-    const net = j.network && j.network.users
-      ? `<div class="dim">The link carried ${Math.round(j.network.uplinkKBps)} kB/s up \u2014 about ${j.network.users} listeners.</div>` : '';
-    host.innerHTML = `<h3>What this box can carry</h3>`
-      + `<div class="dim">Measured ${isFinite(when.getTime()) ? esc(when.toLocaleString()) : 'previously'}.</div>`
-      + `<table style="border-collapse:collapse;margin-top:6px;font-size:13px">${rows}</table>${net}`;
-  } catch { /* the section simply stays empty */ }
 }
 
 /** Distinct addresses per country across the WHOLE machine, newest 24h, biggest first.
