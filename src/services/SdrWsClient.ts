@@ -779,6 +779,16 @@ export abstract class SdrWsClient {
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
+    /* ★★★ AND ON THE SPECTRUM SOCKET, BECAUSE THE AUDIO ONE MAY NOT BE THERE (Stuart found this, 2026-09-20).
+     *  The native path writes to the AUDIO websocket — `ws?.send(...)` in VibeStreamService — and when that
+     *  socket is down the `?.` swallows the tune whole: nothing reaches the server, while this client happily
+     *  shows the frequency it believes it asked for. It goes down for ordinary reasons: audio muted, or the
+     *  AirPods moving to another device and taking the stream service with them. His Mac then sat on 97.2 MHz
+     *  while the receiver was on 96.6 and the iPhone was right — "the app is not working like the browser".
+     *  ★★ The spectrum socket is the one that is always up, since it draws the picture, and the server accepts
+     *     a tune on it (that is how the browser tunes). Sending on both is harmless: the same frequency twice
+     *     is idempotent, and coalescing keeps a drum spin from flooding the link. */
+    this._tuneOnSpectrum(frequency, mode ?? this.status.mode);
     // Re-centre spectrum on new frequency so waterfall follows the VFO — only
     // when locked (followVfo) or a discrete jump forces it (opts.recenter).
     // Unlocked continuous tuning leaves the view put so the user can pan freely.
@@ -1098,6 +1108,24 @@ export abstract class SdrWsClient {
 
   /** Coalesced view sender — keeps only the latest target, sends ≤1/VIEW_SEND_MS
    *  with the final state always delivered (trailing edge). */
+  /** ★ Coalesced twin of the native tune — see the note in tune(). Same rhythm as the view sender, so a fast
+   *  VFO drum sends a handful of messages rather than one per step. */
+  private pendingTune: { frequency: number; mode: string } | null = null;
+  private tuneTimer: ReturnType<typeof setTimeout> | null = null;
+  private _tuneOnSpectrum(frequency: number, mode: string) {
+    if (!(frequency > 0)) return;
+    this.pendingTune = { frequency, mode };
+    if (this.tuneTimer) return;
+    this.tuneTimer = setTimeout(() => {
+      this.tuneTimer = null;
+      const p = this.pendingTune;
+      this.pendingTune = null;
+      if (!p) return;
+      if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
+      this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency: p.frequency, mode: p.mode }));
+    }, 90);
+  }
+
   private _sendView(frequency: number, binBandwidth: number) {
     this.pendingView = { frequency, binBandwidth };
     const wait = this.lastSendAt + VIEW_SEND_MS - Date.now();
