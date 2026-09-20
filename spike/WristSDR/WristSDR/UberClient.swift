@@ -3219,29 +3219,18 @@ final class UberClient: ObservableObject {
     // ★ Int64: on arm64_32 `Int` is 32-bit and traps past 2.147e9, which a tune in Hz
     //   reaches on an SDRplay RSP (2 GHz) — uncomfortably close, and a trap is a crash.
     let msg: [String: Any] = ["type": "tune", "frequency": Int64(frequency), "mode": mode]
-    audioSock.send(json: msg)
+    /* ★★★ ONE TUNE, ONE ROUTE — WHICHEVER SOCKET IS THERE (Stuart, 2026-09-20: *"I knew this would happen —
+     *  2 control routes"*). Sending on both the audio and the spectrum socket raced on every box where both
+     *  were up: the dial went "hyper erratic" and fell back to where it started. So alternate, in his order —
+     *  spectrum when it is open, because that is how the web client tunes and the web client has always been
+     *  right; the audio socket only when the spectrum is gone (backgrounded, where it is cut to save power).
+     *  Either way the server's `config` echo comes back on both, so nothing goes out of step. */
+    if specSock.isOpen { specSock.send(json: msg) } else { audioSock.send(json: msg) }
     // NOTE: we deliberately do NOT flush the audio/spectrum on tune. The buffer draining at the
     // old frequency is the "swishing through the stations" sweep as you cross signals — Stuart
     // likes it, and it keeps audio+waterfall in sync. The residual tune lag is the server
     // round-trip + this cushion, and the cushion is wanted, so we leave it. (flush() exists on
     // WatchAudio if we ever want an instant-jump mode.)
-    /* ★★★ AND A FALLBACK, BECAUSE THE AUDIO SOCKET IS NOT ALWAYS THERE (found on the phone, on Stuart's Mac,
-     *  2026-09-20 — this app has the same shape). Every tune goes out on the AUDIO socket, and when that
-     *  socket is down the send simply vanishes: the server never hears it, while this client shows the
-     *  frequency it believes it asked for. It goes down for ordinary reasons — muted, backgrounded, or the
-     *  audio pulled to another device.
-     *  ★★ NOT A SECOND TUNE. After 250 ms the server has answered the audio path and `lastServerVfo` carries
-     *     the frequency it is really on; if that matches, this stays quiet. Only when it does not — nobody
-     *     heard us — does the spectrum socket, which this app already uses for DAB and gain, carry the tune. */
-    let want = frequency
-    let wantMode = mode
-    Task { @MainActor [weak self] in
-      try? await Task.sleep(nanoseconds: 250_000_000)
-      guard let self, self.frequency == want else { return }      // moved on since — the next tune carries it
-      guard abs(self.lastServerVfo - want) >= 1 else { return }   // the audio socket delivered it
-      self.specSock.send(json: ["type": "tune", "frequency": Int64(want), "mode": wantMode])
-      Vitals.crumb("UBER tune fallback: audio silent, sent \(Int(want)) on the spectrum socket")
-    }
   }
 
   // ── Crown-tune DEBOUNCE (100ms) — MATCH THE MAIN APP / COMPANION ──────────────

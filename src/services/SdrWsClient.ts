@@ -778,22 +778,7 @@ export abstract class SdrWsClient {
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
-    VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
-    /* ★★★ AND ON THE SPECTRUM SOCKET, BECAUSE THE AUDIO ONE MAY NOT BE THERE (Stuart found this, 2026-09-20).
-     *  The native path writes to the AUDIO websocket — `ws?.send(...)` in VibeStreamService — and when that
-     *  socket is down the `?.` swallows the tune whole: nothing reaches the server, while this client happily
-     *  shows the frequency it believes it asked for. It goes down for ordinary reasons: audio muted, or the
-     *  AirPods moving to another device and taking the stream service with them. His Mac then sat on 97.2 MHz
-     *  while the receiver was on 96.6 and the iPhone was right — "the app is not working like the browser".
-     *  ★★★ AND NEITHER SOCKET IS ALWAYS UP — that is the whole reason this goes out on BOTH. The tune was moved
-     *      to the audio path deliberately, because BACKGROUNDING THE APP CUTS THE SPECTRUM to save power
-     *      (Stuart, who built it that way). So: backgrounded, only the audio socket is there; muted or with the
-     *      stream service gone, only the spectrum socket is. Each covers the other's absence, and whichever is
-     *      open carries the tune.
-     *  ★★ The server accepts a tune on the spectrum socket — it is how the browser tunes — so this needs
-     *     nothing new server-side. Sending the same frequency twice is idempotent, and the 90 ms coalescing
-     *     keeps a drum spin from flooding the link. */
-    this._tuneOnSpectrum(frequency, mode ?? this.status.mode);
+    this._routeTune(frequency, mode ?? this.status.mode);
     // Re-centre spectrum on new frequency so waterfall follows the VFO — only
     // when locked (followVfo) or a discrete jump forces it (opts.recenter).
     // Unlocked continuous tuning leaves the view put so the user can pan freely.
@@ -929,7 +914,7 @@ export abstract class SdrWsClient {
     // bandwidth back, so mirror the exact table to stay in sync.
     const bw = MODE_BANDWIDTHS[mode];
     if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
-    VibePowerModule?.sendTuneCommand(this.status.frequency, mode);
+    this._routeTune(this.status.frequency, mode);   // ★ one route — see _routeTune
   }
 
   setBandwidth(low: number, high: number) {
@@ -1115,28 +1100,26 @@ export abstract class SdrWsClient {
    *  with the final state always delivered (trailing edge). */
   /** ★ Coalesced twin of the native tune — see the note in tune(). Same rhythm as the view sender, so a fast
    *  VFO drum sends a handful of messages rather than one per step. */
-  private pendingTune: { frequency: number; mode: string } | null = null;
-  private tuneTimer: ReturnType<typeof setTimeout> | null = null;
-  private _tuneOnSpectrum(frequency: number, mode: string) {
+  /** ★★★ ONE TUNE, ONE ROUTE — WHICHEVER SOCKET IS ACTUALLY THERE (Stuart, 2026-09-20: *"I knew this would
+   *  happen — 2 control routes"*). The first attempt sent the tune down BOTH the native audio socket and the
+   *  spectrum socket, on the reasoning that either might be absent. Both being present is the normal case, and
+   *  then the two raced: the dial went *"hyper erratic"* and settled back where it started, and tuning the Mac
+   *  while the iPhone was connected showed Heart's frequency while the radio sat on Flex.
+   *
+   *  ★★ So alternate, in Stuart's own order:
+   *    • spectrum socket open → send there. It is how the WEB CLIENT tunes, and the web client is the one that
+   *      has always behaved. This covers the AirPods case too: audio pulled to another machine, VibeSDR muted,
+   *      stream service gone — the spectrum is still flowing and still carries the tune.
+   *    • spectrum closed → the native audio path. Backgrounding deliberately cuts the spectrum to save power,
+   *      and that is the ONLY case where the audio socket is the tuning route.
+   *  Never both. The server echoes the resulting `config` on both sockets, so the native side stays in step
+   *  whichever route was used. */
+  private _routeTune(frequency: number, mode: string) {
     if (!(frequency > 0)) return;
-    this.pendingTune = { frequency, mode };
-    if (this.tuneTimer) return;
-    this.tuneTimer = setTimeout(() => {
-      this.tuneTimer = null;
-      const p = this.pendingTune;
-      this.pendingTune = null;
-      if (!p) return;
-      // ★ Backgrounded, this socket is deliberately closed — the native audio path carries the tune there.
-      if (this.spectrumWs?.readyState !== WebSocket.OPEN) return;
-      /* ★★★ A FALLBACK, NOT A SECOND TUNE (Stuart: "just gotta make sure double tunes do not happen"). By now
-       *  the server has had 250 ms to answer the native path, and every config carries the vfo it actually
-       *  sits on — so if it is already there, the audio socket did its job and this must stay quiet. Measured
-       *  on the Pi 2: sending both put one extra `config` on the wire and re-tuned nothing (the hardware has
-       *  an "already there" early-out), but a duplicate nobody needs is still a duplicate.
-       *  ★ If the echo is late we send anyway and the server no-ops — the wrong way round is silence. */
-      if (Math.abs(Number(this.lastServerVfo) - p.frequency) < 1) return;
-      this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency: p.frequency, mode: p.mode }));
-    }, 250);
+    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
+      try { this.spectrumWs.send(JSON.stringify({ type: 'tune', frequency, mode })); return; } catch {}
+    }
+    VibePowerModule?.sendTuneCommand(frequency, mode);
   }
 
   private _sendView(frequency: number, binBandwidth: number) {

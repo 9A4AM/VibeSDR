@@ -946,8 +946,13 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
-        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+        {/* ★★ minWidth 0 + shrink, OR THE CLOCK RUNS UNDER THE LINK ICONS. A row child's default
+            minWidth is its content, so `flex: 1` alone does not let this group get smaller than the
+            clock plus whatever else is in it — it overflowed instead, and on the phone the time was
+            printed straight through the icons and the rate ("the clock is clipping the status
+            icons", Stuart, 2026-09-20). Shrinking is what should give when the row is tight. */}
+        <View style={{ flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text numberOfLines={1} style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT, flexShrink: 1 }]}>
             {clock}
           </Text>
           {/* Time-limited receiver: how long before the server drops us. */}
@@ -983,8 +988,9 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             </Text>
           )}
         </View>
-        <LinkIndicator bus={bus} />
-        <View style={{ flex: 1, alignItems: 'flex-end' }}>
+        {/* ★ The stats never shrink — they are the thing being covered. */}
+        <View style={{ flexShrink: 0, marginLeft: 6 }}><LinkIndicator bus={bus} /></View>
+        <View style={{ flexShrink: 0, alignItems: 'flex-end' }}>
           {isRecording && (
             <View style={por.recRow}>
               <View style={por.recDot} />

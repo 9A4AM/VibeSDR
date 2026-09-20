@@ -330,6 +330,13 @@ final class AudioSocket {
     c.send(content: d, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
   }
 
+  /// ★ Can this socket carry a control message RIGHT NOW? Both transports, for the same reason the sends
+  ///   above check `usingURLSession`: a tune routed to a dead socket vanishes in silence.
+  var isOpen: Bool {
+    if usingURLSession { return task?.state == .running }
+    return conn?.state == .ready
+  }
+
   /// JSON control (the tune). Text frame, same as the phone.
   func send(json: [String: Any]) {
     if usingURLSession {

@@ -61,6 +61,10 @@ final class OwrxSocket: NSObject {
   }
   func sendPing() { task?.sendPing { _ in } }
 
+  /// ★ Is this socket actually carrying traffic? `cancel()` clears `task`, and a task that has finished or
+  ///   errored is `.completed`/`.canceled` — neither can deliver a tune. See the routing note in sendTune().
+  var isOpen: Bool { task?.state == .running }
+
   func cancel() {
     task?.cancel(with: .goingAway, reason: nil)
     task = nil
