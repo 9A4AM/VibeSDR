@@ -41,7 +41,7 @@ import {
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
-         onDialRefused as chatRefused, chatAvailable } from './chat';
+         onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './admin';
 import { httpBase, wsBase } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
@@ -1149,6 +1149,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       listenerCount = n; listenerMax = max;
       // ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT ON A SHARED DIAL (noobish via Stuart, 2026-09-19): "1 listening
       //    of 5" with you alone reads as one OTHER person, and a shared dial's banner now carries the count.
+      // ★ The chat strip reads the same number — see onListenerCount. It used to follow dial events only, and
+      //   went stale the moment somebody left.
+      chatListeners(n);
       const el = document.getElementById('rxUsers');
       if (el) el.textContent = n > 1 && !srvSharedDial
         ? `${n} listening${max > 1 ? ` of ${max}` : ''}`

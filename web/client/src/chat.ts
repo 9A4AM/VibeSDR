@@ -164,6 +164,17 @@ export function onDial(d: DialState) {
   strip.classList.toggle('busy', !!d.decoding);
 }
 
+/** ★★★ THE ROOM'S COUNT COMES FROM ONE PLACE (Stuart, 2026-09-20). This strip only ever redrew when a DIAL
+ *  message arrived, and a listener LEAVING does not produce one — so after the second browser closed it still
+ *  read "2 listening · User 0 is decoding" while the tuner banner had already gone back to "free to tune". Two
+ *  readers of one fact, disagreeing on screen, which is the shape this project keeps paying for.
+ *  ★ Alone in the room, nobody else can be tuning or decoding: those are cleared rather than left to rot. */
+export function onListenerCount(n: number) {
+  if (!dial) return;
+  dial = { ...dial, listeners: n, ...(n <= 1 ? { tuner: 0, decoding: false } : {}) };
+  onDial(dial);
+}
+
 /** Spectator mode said no. ★ One line, then it fades: it is an explanation, not an error. */
 export function onDialRefused() {
   const strip = $('dialStrip');

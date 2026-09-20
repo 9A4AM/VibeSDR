@@ -25305,6 +25305,19 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             rtlsdr_set_tuner_gain_mode(impl->dev, 1);
             { const int g = impl->lastGainTenthDb >= 0 ? impl->lastGainTenthDb : impl->hwGainNow;
               if (g >= 0) rtlsdr_set_tuner_gain(impl->dev, g); }
+            /* ★★★ AND EVERYTHING ELSE THE DEVICE FORGOT — THE SAME LIST AS A REPLUG (2026-09-20). This branch
+             *  set the gain and stopped, so a radio handed back after a release came up with the dongle's
+             *  DIGITAL AGC OFF however the owner had it, and no bias-T. On the Pi 2, after the benchmark, that
+             *  read as "the AGC is stuck and the gain is far too high, hiding signals lower down the band"
+             *  (Stuart) — the receiver was degraded until it was restarted.
+             *  ★★ ONE RULE, TWO READERS: the replug path above learned this exact lesson ("the digital AGC was
+             *     missing from this list — so a replug silently handed control back to the dongle") and this
+             *     twin never got the fix. Anything added there belongs here too. */
+            rtlsdr_set_agc_mode(impl->dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
+            if (const int bt = g_biasTeeWant.load(std::memory_order_relaxed); bt >= 0) {
+                rtlsdr_set_bias_tee(impl->dev, bt);
+                g_biasTeeOn.store(bt != 0);
+            }
             rtlsdr_reset_buffer(impl->dev);
             ok = true;
         }
