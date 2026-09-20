@@ -8313,6 +8313,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         bgOpacity={bgOpacity / 10}
         stationId={stationId}
         onStationIdHeight={setStationIdH}
+        // ★ Same edge as the session clock and the listener count below it — see rightInset.
+        stationIdRight={rightInset}
         specFrac={specFrac}
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
@@ -9032,7 +9034,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           onActiveLogo={setDabActiveLogo}
           lastAudioAt={() => lastAudioAtRef.current}
           audioRunStartAt={() => audioRunStartRef.current}
-          onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}

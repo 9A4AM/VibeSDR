@@ -229,6 +229,10 @@ export interface WaterfallViewProps {
   /** Station-ID overlay: "CALLSIGN - NAME" + location, top-right of the
    *  spectrum (web drawStationIdOverlay parity). */
   stationId?:   { line1: string; line2?: string; color: string } | null;
+  /** ★ How far in from the right the receiver's name sits. The session clock below it is positioned against
+   *  the SCREEN, this block against the waterfall, and two different numbers put them visibly out of line
+   *  (Stuart, 2026-09-20: "the clock seems to be slightly offset which doesnt look professional"). */
+  stationIdRight?: number;
   /** ★ How tall this overlay ended up, so the parent can put the session countdown UNDER it
    *  instead of on top of it. Measured rather than assumed: one line and two lines differ, and a
    *  constant here would have to be kept in step with a font size nobody would think to check. */
@@ -339,7 +343,7 @@ function WaterfallView({
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
-  bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight,
+  bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
@@ -2004,7 +2008,7 @@ function WaterfallView({
         {stationId != null && specShow && specH > 40 && (
           <View pointerEvents="none"
                 onLayout={(e) => onStationIdHeight?.(e.nativeEvent.layout.height)}
-                style={[styles.stationId, { top: specTop + 6 }]}>
+                style={[styles.stationId, { top: specTop + 6, right: stationIdRight }]}>
             <Text style={[styles.stationIdL1, { color: stationId.color }]} numberOfLines={1}>
               {stationId.line1}
             </Text>

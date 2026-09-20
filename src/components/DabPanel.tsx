@@ -377,7 +377,9 @@ export interface DabPanelProps {
   /** Date.now() when the current unbroken run of audio packets began (see SDRScreen). */
   audioRunStartAt?: () => number;
   /** Close the WINDOW and leave DAB running — the X. See onExit for the other one. */
-  onClose: () => void;
+  /* ★ No onClose: the ✕ is gone (see the header), so nothing closes this window while DAB is running —
+   *  EXIT DAB leaves the mode and the window together. A prop nothing uses is the dead shape this project
+   *  keeps paying for. */
   /** ★★★ TWO DOORS, AND THE DIFFERENCE MATTERS. Stuart, 2026-09-08: "the X button on the decoder
    *  box closes the decoder but leaves DAB active but when you press DAB again from the
    *  demodulator menu it deactivates DAB fully rather than restore the box." Closing a window and
@@ -812,11 +814,13 @@ export default function DabPanel(p: DabPanelProps) {
               <Text style={s.hbtnTxt}>★</Text>
             </TouchableOpacity>
           )}
+          {/* ★★★ NO ✕ (Stuart, 2026-09-20). Closing this window left the receiver IN DAB with nothing on
+              screen to control it — no station list, no way back except pressing DAB again, which reads as
+              having lost the mode rather than having hidden a panel. The web client has never offered it.
+              EXIT DAB is the honest way out: it leaves the mode as well as the window. SMALL is there for
+              anyone who wants the picture back without leaving DAB. */}
           <TouchableOpacity onPress={p.onExit} style={s.hbtn}>
             <Text style={s.hbtnTxt}>EXIT DAB</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={p.onClose} style={s.hbtn}>
-            <Text style={[s.hbtnTxt, { color: 'rgba(255,100,100,0.70)' }]}>✕</Text>
           </TouchableOpacity>
         </View>
 
