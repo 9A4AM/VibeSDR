@@ -812,7 +812,21 @@ export abstract class SdrWsClient {
      *    a person actually does changes. `mode` counts as a move too — a new demodulator wants its
      *    passband in view even at the same frequency. */
     const sameSpot = !!frequency && Math.abs(frequency - prevFreq) < 1 && !mode;
-    if ((this.followVfo || opts?.recenter) && !sameSpot) {
+    /* ★★★ OUTSIDE THE CAPTURED WINDOW THERE IS NOTHING TO PAN TO (Stuart, 2026-09-20). Unlocked means "leave
+     *  the view where it is so I can pan", and that is right INSIDE the window — but a tune beyond the captured
+     *  span asks the radio for something it is not receiving, so the server keeps its centre, the VFO sits off
+     *  the end of the view, and the waterfall goes black. On a SHARED dial it goes black for everybody: he
+     *  tuned the iPhone from 96.1 to 99.7, the capture stayed at 96.1, and both his screens emptied.
+     *  ★★ So the lock governs panning, not reachability: past the edge we always re-centre. */
+    const captureSpan = Number(this.status.bwHz) || 0;
+    const viewBb = this.view.binBandwidth || this.status.binBandwidth;
+    const viewSpan = viewBb ? viewBb * (this.status.binCount || 0) : 0;
+    const refCentre = this.view.centerHz || this.status.centerHz;
+    const beyondCapture = !!frequency && captureSpan > 0 && refCentre > 0
+                       && Math.abs(frequency - refCentre) > captureSpan * 0.45;
+    const beyondView    = !!frequency && viewSpan > 0 && refCentre > 0
+                       && Math.abs(frequency - refCentre) > viewSpan * 0.5;
+    if ((this.followVfo || opts?.recenter || beyondCapture || beyondView) && !sameSpot) {
       const bb = this.view.binBandwidth || this.status.binBandwidth;
       if (bb) this.zoom(frequency, bb);
       else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
