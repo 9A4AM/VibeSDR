@@ -1576,10 +1576,30 @@ int main(int argc, char** argv) {
                                                          [&] { return vibe::runDabRows(clip, 6.0); });
                 vsBenchSave(j);
                 if (released) {
+                    /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race
+                     *  with libusb releasing the interface — `usb_claim_interface error -6` (BUSY), and the
+                     *  server then sat there SERVING WITH NO RADIO, which is the worst of both worlds: up,
+                     *  listed, and deaf. Measured on the Pi 2, 2026-09-20.
+                     *  ★★ And if it still will not come back, RESTART rather than stay deaf: systemd (or the
+                     *     self-exec) rebuilds the radio from the saved configuration, which is proven. */
                     std::string err;
-                    if (!shim.reacquireRadio(err))
-                        std::fprintf(stderr, "VibeServer: benchmark finished but the radio did not come back: %s\n",
-                                     err.c_str());
+                    bool back = false;
+                    for (int i = 0; i < 10 && !back; ++i) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(i == 0 ? 500 : 2000));
+                        back = shim.reacquireRadio(err);
+                    }
+                    if (!back) {
+                        std::fprintf(stderr, "VibeServer: the radio did not come back after the benchmark (%s) — "
+                                             "restarting to rebuild it\n", err.c_str());
+                        vibe::benchProgress().running.store(false);
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                        if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
+                        reapRadios();
+                        const std::string me = selfExePath();
+                        if (!me.empty()) execv(me.c_str(), g_argv);
+                        execvp(g_argv[0], g_argv);
+                        _exit(0);
+                    }
                 }
                 vibe::benchProgress().running.store(false);
             }).detach();
