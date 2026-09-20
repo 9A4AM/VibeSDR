@@ -2681,6 +2681,9 @@ final class UberClient: ObservableObject {
     //   answers each of those with a config carrying the frequency we just asked for.
     // ★ Read before any decision below uses it — see `sharedView`.
     if isVibe, let sh = j["shared"] as? Bool { sharedView = sh }
+    // ★ What the server says it is ACTUALLY on, recorded before any guard below can skip it — the tune
+    //   fallback needs it to tell "the audio socket delivered" from "nobody heard me". See sendTune().
+    if let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0 { lastServerVfo = sv }
 
     if isVibe, vibeAdopted,
        let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0,
@@ -2848,6 +2851,9 @@ final class UberClient: ObservableObject {
   /// When THIS watch last moved the dial. The server confirms every tune we send as a config, so
   /// without this the shared-dial follow below would adopt our own echo and fight a held step key.
   private var lastLocalTuneAt: Double = 0
+  /// ★ The frequency the SERVER last said it was on — tells "the audio socket delivered my tune" from
+  ///   "nobody heard me". See the fallback in sendTune().
+  private var lastServerVfo: Double = 0
 
   // ── Coalesced view sends (rapid gestures) ─────────────────────────────────────
   private var pendingView: (freq: Double, binBw: Double)?
@@ -3219,6 +3225,23 @@ final class UberClient: ObservableObject {
     // likes it, and it keeps audio+waterfall in sync. The residual tune lag is the server
     // round-trip + this cushion, and the cushion is wanted, so we leave it. (flush() exists on
     // WatchAudio if we ever want an instant-jump mode.)
+    /* ★★★ AND A FALLBACK, BECAUSE THE AUDIO SOCKET IS NOT ALWAYS THERE (found on the phone, on Stuart's Mac,
+     *  2026-09-20 — this app has the same shape). Every tune goes out on the AUDIO socket, and when that
+     *  socket is down the send simply vanishes: the server never hears it, while this client shows the
+     *  frequency it believes it asked for. It goes down for ordinary reasons — muted, backgrounded, or the
+     *  audio pulled to another device.
+     *  ★★ NOT A SECOND TUNE. After 250 ms the server has answered the audio path and `lastServerVfo` carries
+     *     the frequency it is really on; if that matches, this stays quiet. Only when it does not — nobody
+     *     heard us — does the spectrum socket, which this app already uses for DAB and gain, carry the tune. */
+    let want = frequency
+    let wantMode = mode
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 250_000_000)
+      guard let self, self.frequency == want else { return }      // moved on since — the next tune carries it
+      guard abs(self.lastServerVfo - want) >= 1 else { return }   // the audio socket delivered it
+      self.specSock.send(json: ["type": "tune", "frequency": Int64(want), "mode": wantMode])
+      Vitals.crumb("UBER tune fallback: audio silent, sent \(Int(want)) on the spectrum socket")
+    }
   }
 
   // ── Crown-tune DEBOUNCE (100ms) — MATCH THE MAIN APP / COMPANION ──────────────
