@@ -296,8 +296,14 @@ public:
      *  "closed" | "kicked" | "banned" | "busy" | "timeout" | "queue-full". */
     static void noteConnectionOpened(const std::string& ip, const std::string& session,
                                      const std::string& agent, const std::string& cc = "");
+    /** ★ The trailing four are the VISIT VERDICT — how many places they settled on, how many had a
+     *  real signal, the best SNR of the visit, and (only when they parked on ONE) where. stops = -1
+     *  means "not measured", which is NOT 0 = "they stayed and found nothing"; the paths that end a
+     *  session for a reason (timeout, idle, banned) pass nothing and say so honestly. */
     static void noteConnectionClosed(const std::string& ip, const std::string& session,
-                                     const char* reason, uint64_t bytes = 0, uint64_t drops = 0);
+                                     const char* reason, uint64_t bytes = 0, uint64_t drops = 0,
+                                     int stops = -1, int heard = 0, float bestSnr = 0,
+                                     double parkedHz = 0);
 
     /** One consistent snapshot of the whole machine: load, temperature, memory, uptime, the
      *  radio, listeners, uplink rate, and the ban list. One request rather than five, so the

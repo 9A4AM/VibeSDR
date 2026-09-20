@@ -987,9 +987,120 @@ function groupVisits(list: any[]): any[] {
   return out;
 }
 
+/** ★★ The visit verdict as one glanceable cell.
+ *  "0 of 6" reads immediately as somebody who tried six places and heard nothing — which is the
+ *  row he wants to spot. The best SNR is the tooltip rather than a column: it distinguishes a
+ *  strong find from a marginal one when you care, and would be noise if it were always on screen.
+ *  ★ PARKED is called out by name, because one stop all visit is a different story from one stop
+ *    because they left immediately — and the frequency is only recorded in that case. */
+function heardCell(c: any): string {
+  const stops = Number(c.stops);
+  if (!Number.isFinite(stops) || stops < 0) {
+    return '<span class="dim" title="Not measured for this visit — nothing watched this listener\u2019s dial.">—</span>';
+  }
+  const heard = Number(c.heard) || 0;
+  const best  = Number(c.bestSnr);
+  const tip = (Number.isFinite(best) && stops > 0 ? `Best signal ${best.toFixed(1)} dB above the noise. ` : '')
+            + `${heard} of ${stops} place${stops === 1 ? '' : 's'} they settled on had a real signal.`;
+  if (stops === 1 && Number(c.parkedHz) > 0) {
+    const mhz = (Number(c.parkedHz) / 1e6).toFixed(1);
+    return `<span class="${heard ? 'heardSome' : 'heardNone'}" title="${esc(tip)}">`
+         + `${heard ? 'parked' : 'silent'} ${esc(mhz)}</span>`;
+  }
+  return `<span class="${heard ? 'heardSome' : 'heardNone'}" title="${esc(tip)}">`
+       + `${heard} of ${stops}</span>`;
+}
+
+/* ★★★ THE FILTER STATE, and it lives outside the render so a repaint does not clear what the owner
+ *  typed. This panel repaints every two seconds; anything held in the render would be unusable. */
+const connFilter = { text: '', cc: '', reason: '', heard: '' };
+
+/** ★★ Does this visit match? Free text searches the CLIENT and the ADDRESS together, because an
+ *  owner hunting a visitor does not want to think about which box to type in — "81.159." and
+ *  "VibeSDR" are the same kind of question. Case-insensitive, substring, no regex: this is a search
+ *  box on an admin page, not a query language. */
+function connMatches(c: any): boolean {
+  const t = connFilter.text.trim().toLowerCase();
+  if (t) {
+    const hay = String(c.agent || '') + ' ' + String(c.ip || '');
+    if (!hay.toLowerCase().includes(t)) return false;
+  }
+  if (connFilter.cc     && String(c.cc || '')     !== connFilter.cc)     return false;
+  if (connFilter.reason && String(c.reason || '') !== connFilter.reason) return false;
+  if (connFilter.heard) {
+    // ★ stops absent = NOT MEASURED, which is not "heard nothing". A visit we never watched must
+    //   fall out of BOTH answers rather than be counted as a disappointed listener.
+    const stops = Number(c.stops);
+    if (!Number.isFinite(stops) || stops < 0) return false;
+    const heard = Number(c.heard) || 0;
+    if (connFilter.heard === 'none' && heard !== 0) return false;
+    if (connFilter.heard === 'some' && heard === 0) return false;
+  }
+  return true;
+}
+
+/** ★ Fill the country and ending selects from what this log ACTUALLY contains, not a fixed list —
+ *  a receiver that has never seen a ban should not offer "banned" as a filter that always returns
+ *  nothing. Rebuilt only when the set changes, or the select would reset under the owner's cursor
+ *  on every two-second repaint. */
+let connFilterOptsKey = '';
+function populateConnFilterOptions(all: any[]) {
+  const ccs = Array.from(new Set(all.map((c) => String(c.cc || '')).filter(Boolean))).sort();
+  const rs  = Array.from(new Set(all.map((c) => String(c.reason || '')).filter(Boolean))).sort();
+  const key = ccs.join(',') + '|' + rs.join(',');
+  if (key === connFilterOptsKey) return;
+  connFilterOptsKey = key;
+  const fill = (id: string, vals: string[], allLabel: string, keep: string) => {
+    const el = document.getElementById(id) as HTMLSelectElement | null;
+    if (!el) return;
+    el.innerHTML = `<option value="">${allLabel}</option>`
+      + vals.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    el.value = keep;                       // ★ keep the owner's choice across the rebuild
+  };
+  fill('connFilterCc', ccs, 'All countries', connFilter.cc);
+  fill('connFilterReason', rs, 'Any ending', connFilter.reason);
+}
+
+/** Wire the filter controls once. ★ Called from the same place the panel is set up; guarded so a
+ *  repaint cannot attach a second set of listeners. */
+let connFilterWired = false;
+function wireConnFilter(onChange: () => void) {
+  if (connFilterWired) return;
+  const t  = document.getElementById('connFilterText')   as HTMLInputElement | null;
+  const cc = document.getElementById('connFilterCc')     as HTMLSelectElement | null;
+  const rs = document.getElementById('connFilterReason') as HTMLSelectElement | null;
+  const hd = document.getElementById('connFilterHeard')  as HTMLSelectElement | null;
+  const cl = document.getElementById('connFilterClear');
+  if (!t || !cc || !rs || !hd) return;
+  connFilterWired = true;
+  const upd = () => {
+    connFilter.text   = t.value;
+    connFilter.cc     = cc.value;
+    connFilter.reason = rs.value;
+    connFilter.heard  = hd.value;
+    connPage = 0;                 // ★ a new filter is a new list; page 3 of it means nothing
+    onChange();
+  };
+  t.addEventListener('input', upd);
+  for (const el of [cc, rs, hd]) el.addEventListener('change', upd);
+  cl?.addEventListener('click', () => {
+    t.value = ''; cc.value = ''; rs.value = ''; hd.value = '';
+    upd();
+  });
+}
+
 function renderConns(raw: any[]) {
-  const list = groupVisits(raw);
-  renderClientMix(list);
+  const all = groupVisits(raw);
+  renderClientMix(all);
+  // ★ The mix chart is deliberately drawn from EVERYTHING, not the filtered set: it answers "what
+  //   connects to this receiver", which a filter would turn into "what I just searched for".
+  const list = all.filter(connMatches);
+  populateConnFilterOptions(all);
+  {
+    const n = document.getElementById('connFilterCount');
+    const filtering = !!(connFilter.text || connFilter.cc || connFilter.reason || connFilter.heard);
+    if (n) n.textContent = filtering ? `${list.length} of ${all.length}` : '';
+  }
   const bytesHuman = (n: number): string =>
     n >= 1024 * 1024 * 1024 ? (n / 1073741824).toFixed(1) + ' GB'
   : n >= 1024 * 1024        ? (n / 1048576).toFixed(1) + ' MB'
@@ -1057,6 +1168,13 @@ function renderConns(raw: any[]) {
       <td class="cDrops">${c.drops ? esc(String(c.drops)) : '<span class="dim">—</span>'}</td>
       <td class="why-${esc(c.reason || '')}">${live ? '<span class="dim">connected</span>'
                                                     : esc(c.reason || '—')}</td>
+      <!-- ★★★ WHAT THEY FOUND. Stuart, 2026-09-21: "if a user has come for a couple of mins and
+           heard nothing but static and then left that I really want to know about, likewise if
+           they tuned about and heard a few stations then i know someone is gunuinely interested
+           and found stuff to listen to." Duration and Data cannot tell those apart.
+           ★ An ABSENT verdict is a dash, never "0 of 0" — a visit nobody watched is not a visit
+             that found nothing, and the difference is the whole point of the column. -->
+      <td class="cHeard">${heardCell(c)}</td>
       <td class="agent">${esc((c.agent || '').slice(0, 60) || '—')}</td>
       <td><button class="btn" data-ban="${esc(c.ip)}">BLOCK</button></td>
     </tr>`;
@@ -1197,7 +1315,12 @@ async function refresh() {
     //    the country map is still gated, so only it sits inside the `full` block below.
     renderSessions(ses);
     renderBans(st.bans ?? []);
-    renderConns(conns.connections ?? []);
+    /* ★ Wire the filter to re-render from the SAME rows rather than refetch: the owner typing in a
+     *  search box should not cost the Pi a request per keystroke, and the next two-second poll
+     *  repaints with fresh data anyway. Guarded internally, so calling it each poll is free. */
+    const connRows = conns.connections ?? [];
+    wireConnFilter(() => renderConns(connRows));
+    renderConns(connRows);
     if (full) {
       // ★★★ MACHINE-WIDE, not one radio's. `st.countries` is computed inside whichever process
       //     answered the status call, from ITS OWN connection log — so a listener on another radio

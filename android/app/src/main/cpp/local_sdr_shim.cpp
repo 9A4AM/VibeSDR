@@ -5839,6 +5839,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::atomic<bool>  squelchOn{false};
         std::atomic<float> squelchDb{-100.0f};
         std::atomic<float> sigChanDb{-200.0f};   // the per-listener channel peak sent as sig.chan
+
+        /* ★★★ WHAT THIS LISTENER ACTUALLY DID — the visit VERDICT, for the connection log.
+         *
+         *  Stuart, 2026-09-21: "if a user has come for a couple of mins and heard nothing but static
+         *  and then left that I really want to know about, likewise if they tuned about and heard a
+         *  few stations then i know someone is gunuinely interested and found stuff to listen to."
+         *
+         *  The log records how LONG someone stayed and how many bytes they took, and those two say
+         *  nothing about whether the receiver was any good to them: five minutes of static and five
+         *  minutes of a station they enjoyed are the same row today.
+         *  ★★ Everything needed is already measured — sigChanDb above is this listener's channel
+         *     peak and iqFloorDb is the noise floor, so (chan - floor) is the SNR they were actually
+         *     getting on the frequency THEY chose. We compute it for the S meter and throw it away.
+         *  ★ A STOP, not a frequency trail: he does not want a list of frequencies ("dont need exact
+         *    frequencies unless they literally only stayed on Heart FM for the session"). Counting
+         *    stops and how many had signal answers the question in ~40 bytes a row. */
+        double    stopVfoHz    = 0;      // where the current dwell is
+        long long stopSince    = 0;      // when it started (unix seconds)
+        float     stopBestSnr  = -1e9f;  // best SNR seen during THIS dwell
+        int       visitStops   = 0;      // dwells long enough to count
+        int       visitHeard   = 0;      // ...of which had a real signal
+        float     visitBestSnr = -1e9f;  // best SNR of the whole visit
+        double    firstStopHz  = 0;      // the only frequency worth recording, and only if parked
+        int       distinctStops = 0;     // >1 means they moved, so "parked" is false
+    
+        /** ★ A dwell must last this long to count as a STOP. Spinning the dial past a station is
+         *  not listening to it, and counting it would make every visit look busy. */
+        static constexpr long long kStopDwellSecs = 10;
+        /** ★★ "Heard" means the channel stood this far above the noise. Deliberately modest: the
+         *  question is "was there anything there at all", not "was it a good signal" — 6 dB is
+         *  audible on AM and a clear lock on FM, and the BEST figure is recorded separately so a
+         *  strong station is still distinguishable from a marginal one. */
+        static constexpr float kHeardSnrDb = 6.0f;
+
+        /** Close the dwell in progress and fold it into the visit's tally. Safe to call twice. */
+        void closeStop(long long now) {
+            if (stopSince <= 0) return;
+            if (now - stopSince >= kStopDwellSecs && stopBestSnr > -1e8f) {
+                ++visitStops;
+                if (stopBestSnr >= kHeardSnrDb) ++visitHeard;
+                if (stopBestSnr > visitBestSnr) visitBestSnr = stopBestSnr;
+                if (visitStops == 1) firstStopHz = stopVfoHz;
+                ++distinctStops;
+            }
+            stopSince = 0;
+            stopBestSnr = -1e9f;
+        }
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
         std::atomic<bool> stereoOn{true};
@@ -9411,6 +9458,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         }
                         mine = pk;
                         c->sigChanDb.store(pk, std::memory_order_relaxed);
+                        /* ★★★ THE VISIT VERDICT, ACCUMULATED WHERE THE NUMBERS ALREADY ARE.
+                         *  A "stop" ends when the dial moves more than this listener's own channel
+                         *  width — a real retune, not the sub-kHz wander of a drag. Everything here
+                         *  is per-listener state on their own ClientDsp, so two people on a shared
+                         *  receiver get two honest verdicts. */
+                        {
+                            const long long nowS = (long long)time(nullptr);
+                            const double moved = std::fabs(c->vfoHz - c->stopVfoHz);
+                            const double width = std::max(3000.0, c->bwHz);
+                            if (c->stopSince == 0 || moved > width) {
+                                c->closeStop(nowS);
+                                c->stopVfoHz = c->vfoHz;
+                                c->stopSince = nowS;
+                                c->stopBestSnr = -1e9f;
+                            }
+                            const float snr = pk - floorDb;
+                            if (snr > c->stopBestSnr) c->stopBestSnr = snr;
+                        }
                     }
                     /* ★★★ THE CONVERTER'S OWN FIGURES RIDE WITH THE SIGNAL ONES, AND THEY HAVE TO
                      *     BE SENT PERIODICALLY OR THEY ARE NOT A MEASUREMENT. `adcPeak` already
@@ -16622,7 +16687,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 auto d = sessionDrops.find(sess);
                 if (d != sessionDrops.end()) { drops = d->second; sessionDrops.erase(d); }
             }
-            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total, drops);
+            /* ★★★ AND THE VERDICT — what they actually did while they were here. Read from THIS
+             *  listener's ClientDsp before it is destroyed a few lines below, exactly like the
+             *  bytes above: reading it afterwards is reading nothing.
+             *  ★ dspFor() is null on a direct-mode radio (there is no per-client DSP), and that is
+             *    not a failure — it means nobody watched this listener's dial, so no verdict is
+             *    recorded and stops stays -1 ("not measured") rather than 0 ("found nothing").
+             *    Conflating those two would libel a perfectly good receiver. */
+            int vStops = -1, vHeard = 0; float vBest = 0; double vParked = 0;
+            if (auto c = dspFor(sock)) {
+                c->closeStop((long long)time(nullptr));   // fold in the dwell still in progress
+                vStops = c->visitStops;
+                vHeard = c->visitHeard;
+                vBest  = (c->visitBestSnr > -1e8f) ? c->visitBestSnr : 0.0f;
+                if (c->visitStops == 1) vParked = c->firstStopHz;
+            }
+            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total, drops,
+                                               vStops, vHeard, vBest, vParked);
           }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
@@ -21223,8 +21304,9 @@ void LocalSdrShim::noteConnectionOpened(const std::string& ip, const std::string
     g_vsConnLog.open(ip, session, agent, cc);
 }
 void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string& session,
-                                        const char* reason, uint64_t bytes, uint64_t drops) {
-    g_vsConnLog.close(ip, session, reason, bytes, drops);
+                                        const char* reason, uint64_t bytes, uint64_t drops,
+                                        int stops, int heard, float bestSnr, double parkedHz) {
+    g_vsConnLog.close(ip, session, reason, bytes, drops, stops, heard, bestSnr, parkedHz);
 }
 
 /** ★★ EVERYTHING THE MONITOR PAGE DRAWS, IN ONE REQUEST. A page that polls five endpoints once a

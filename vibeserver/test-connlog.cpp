@@ -103,6 +103,42 @@ int main() {
          "★★ a reload straight after a rotation still shows connections");
     }
   }
+  {
+    /* ★★★ THE VISIT VERDICT — "static and left" vs "tuned about and found things".
+     *  Stuart, 2026-09-21: "if a user has come for a couple of mins and heard nothing but static
+     *  and then left that I really want to know about". Duration and bytes cannot tell those apart. */
+    vibeadmin::ConnLog log;
+    log.open("1.2.3.4", "quiet", "UA", "GB");
+    log.close("1.2.3.4", "quiet", "closed", 4000000, 0, /*stops*/6, /*heard*/0, /*best*/2.1f, 0);
+    const std::string j1 = log.json();
+    ok(j1.find("\"stops\":6") != std::string::npos && j1.find("\"heard\":0") != std::string::npos,
+       "★★★ six stops, nothing heard — the visit that came for static and left");
+
+    log.open("1.2.3.5", "busy", "UA", "GB");
+    log.close("1.2.3.5", "busy", "closed", 9000000, 0, 4, 3, 28.6f, 0);
+    ok(log.json().find("\"heard\":3") != std::string::npos,
+       "★★ four stops, three with signal — somebody who found things to listen to");
+
+    // ★ PARKED: one stop all visit, so the frequency IS worth recording. "dont need exact
+    //   frequencies unless they literally only stayed on Heart FM for the session".
+    log.open("1.2.3.6", "parked", "UA", "GB");
+    log.close("1.2.3.6", "parked", "closed", 90000000, 0, 1, 1, 34.2f, 96600000.0);
+    ok(log.json().find("\"parkedHz\":96600000") != std::string::npos,
+       "★★ a parked visit records the one frequency they sat on");
+
+    // ★★★ AND THE DISTINCTION THAT MATTERS: "not measured" must not read as "found nothing".
+    log.open("1.2.3.7", "unwatched", "UA", "GB");
+    log.close("1.2.3.7", "unwatched", "closed");        // no verdict passed at all
+    const std::string j4 = log.json();
+    // ★ Isolate THAT row — the others in this log legitimately carry a verdict.
+    const size_t at     = j4.find("unwatched");
+    const size_t rowBeg = (at == std::string::npos) ? std::string::npos : j4.rfind('{', at);
+    const size_t rowEnd = (at == std::string::npos) ? std::string::npos : j4.find('}', at);
+    const std::string row = (rowBeg == std::string::npos || rowEnd == std::string::npos)
+                          ? std::string() : j4.substr(rowBeg, rowEnd - rowBeg);
+    ok(!row.empty() && row.find("\"stops\":") == std::string::npos,
+       "★★★ a close with no verdict records NO stops field — absent, not a zero");
+  }
   std::printf(fails ? "\n\033[31m%d failed\033[0m\n" : "\n\033[32mpassed\033[0m\n", fails);
   return fails ? 1 : 0;
 }

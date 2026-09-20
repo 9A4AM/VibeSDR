@@ -1536,6 +1536,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    the only value here that indicates a fault rather than a person leaving. Marked, not shouted. */
 #adminConns .zeroData { color: var(--red); opacity: .85; }
 #adminConns .cData, #adminConns .cDrops { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* ★ The verdict column. Colour carries the answer at a glance — a page of red "0 of N" is a
+   receiver that is not giving people anything, which is the thing worth noticing. */
+#adminConns .cHeard { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#adminConns .heardNone { color: var(--red); opacity: .9; }
+#adminConns .heardSome { color: var(--green, #6c6); }
+/* ★ The filter row. Wraps on a phone rather than scrolling sideways — the admin page is read on
+   one as often as on a desktop, and a control you cannot reach is the same as one that is absent. */
+.connFilter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 8px; }
+.connFilter input[type="search"] { flex: 1 1 15em; min-width: 0; padding: 4px 8px; }
+.connFilter select { padding: 4px 6px; }
+.connFilter .dim { margin-left: auto; }
 .chatWho  { color: var(--unit); margin-right: 0.5em; }
 /* ★ The owner's voice, marked but not shouted. It carries authority in a room where somebody may
    be asked to stop tuning, so it should be distinguishable at a glance — and no louder than that,
@@ -3494,12 +3505,34 @@ select.btn { padding: 6px 8px; }
     <div id="secHistory" hidden>
     <h2>CONNECTION HISTORY</h2>
     <div id="adminClientMix" class="clientMix"></div>
+    <!-- ★★★ THE FILTER. Stuart, 2026-09-21: "on my UberSDR I can say search VibeSDR and see who has
+         connected to the server from UberSDR and even what version". The log already carries the
+         agent, the country, the address and the end reason — none of it was searchable, so a
+         question like "how many people used the app this week" meant reading pages by eye.
+         ★ One text box for the free-text half (agent OR address, because an owner hunting a visitor
+           does not want to think about which field they are typing into) and selects for the
+           closed sets. Matching is done in admin.ts over the rows the page already holds. -->
+    <div class="connFilter" id="adminConnFilter">
+      <input id="connFilterText" type="search" placeholder="Search client or address — e.g. VibeSDR, Firefox, 81.159."
+             autocomplete="off" spellcheck="false">
+      <select id="connFilterCc"><option value="">All countries</option></select>
+      <select id="connFilterReason"><option value="">Any ending</option></select>
+      <select id="connFilterHeard">
+        <option value="">Any visit</option>
+        <!-- ★★ The two he actually asked about: somebody who came, found static and left, and
+             somebody who tuned around and found things. -->
+        <option value="none">Heard nothing</option>
+        <option value="some">Heard something</option>
+      </select>
+      <button id="connFilterClear" type="button" class="aBtn">Clear</button>
+      <span id="connFilterCount" class="dim"></span>
+    </div>
     <div id="adminConnsPager" class="connPager" hidden></div>
     <div class="aTblWrap"><table id="adminConns">
       <!-- ★ Data and Drops sit beside Lasted because they answer the question Lasted raises: a short
            visit that carried plenty is somebody looking; a short visit that carried NOTHING is a
            connection that never worked, and duration alone reads the same for both. -->
-      <thead><tr><th>When</th><th>Address</th><th class="cRadio">Radio</th><th>Lasted</th><th>Data</th><th>Drops</th><th>Ended</th><th>Client</th><th></th></tr></thead>
+      <thead><tr><th>When</th><th>Address</th><th class="cRadio">Radio</th><th>Lasted</th><th>Data</th><th>Drops</th><th>Ended</th><th title="What they found: how many places they settled on, and how many of those had a real signal above the noise">Heard</th><th>Client</th><th></th></tr></thead>
       <tbody></tbody>
     </table></div>
     <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>

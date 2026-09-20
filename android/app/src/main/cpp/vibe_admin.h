@@ -485,6 +485,21 @@ struct ConnRec {
     std::string agent;            ///< User-Agent, trimmed — tells an owner app-vs-browser-vs-bot
     std::string cc;               ///< ISO-3166 country, or empty when unknown. See geoip.cpp.
     std::string endReason;        ///< "closed" | "kicked" | "banned" | "queue-full" | "busy" | "timeout"
+    /* ★★★ WHAT THEY ACTUALLY DID — the visit VERDICT. Stuart, 2026-09-21: "if a user has come for a
+     *  couple of mins and heard nothing but static and then left that I really want to know about,
+     *  likewise if they tuned about and heard a few stations then i know someone is gunuinely
+     *  interested and found stuff to listen to."
+     *  Duration and bytes cannot answer that — five minutes of static and five minutes of a station
+     *  they enjoyed are the same row. stops/heard/bestSnr are computed from the SNR we already
+     *  measure for the S meter (channel peak minus noise floor) and then discard.
+     *  ★ -1 stops = not measured (an old record, or a close that never carried one), which is NOT
+     *    the same as 0 stops = they stayed and found nothing. The page must not conflate them. */
+    int         visitStops = -1;
+    int         visitHeard = 0;
+    float       visitBestSnr = 0;
+    /** ★ Only set when they PARKED — one stop for the whole visit. He asked for the frequency only
+     *  in that case: "dont need exact frequencies unless they literally only stayed on Heart FM". */
+    double      parkedHz = 0;
     uint64_t    bytes = 0;
     /** ★★★ IQ BUFFERS THIS VISIT LOST. The live monitor has always shown a drop count, but it
      *  lives on the per-listener channel and dies with them — so the number was visible only
@@ -570,11 +585,11 @@ public:
         for (const auto& r : pending_) {
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
                        "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,\"drops\":%llu,"
-                       "\"admin\":%s}\n",
+                       "\"admin\":%s%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
                     (unsigned long long)r.bytes, (unsigned long long)r.drops,
-                    r.admin ? "true" : "false");
+                    r.admin ? "true" : "false", visitJson(r).c_str());
             ++written_;
         }
         pending_.clear();
@@ -690,8 +705,12 @@ public:
         }
     }
 
+    /** ★ `stops` defaults to -1 = "no verdict with this close", which is not the same as 0 stops.
+     *  Only the path that actually watched the listener passes one; every other caller (timeout,
+     *  idle, banned) keeps its existing signature and records nothing, honestly. */
     void close(const std::string& ip, const std::string& session,
-               const char* reason, uint64_t bytes = 0, uint64_t drops = 0) {
+               const char* reason, uint64_t bytes = 0, uint64_t drops = 0,
+               int stops = -1, int heard = 0, float bestSnr = 0, double parkedHz = 0) {
         std::lock_guard<std::mutex> lk(mtx_);
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->endEpoch) continue;
@@ -702,6 +721,16 @@ public:
             //     socket that carried almost nothing overwrite a megabyte count.
             if (bytes > it->bytes) it->bytes = bytes;
             if (drops > it->drops) it->drops = drops;
+            /* ★★ A VISIT IS ONE VERDICT, NOT ONE PER SOCKET. Several sockets close for one visit
+             *  and only the spectrum one watched the dial, so the tallies are MERGED by taking the
+             *  richer answer rather than letting a later, emptier close wipe the real one — the
+             *  same reasoning as the bytes above, which had exactly this bug. */
+            if (stops >= 0 && stops >= it->visitStops) {
+                it->visitStops   = stops;
+                it->visitHeard   = heard;
+                it->visitBestSnr = bestSnr;
+                it->parkedHz     = parkedHz;
+            }
             // ★★★ CLOSE ON THE LAST SOCKET, NOT THE FIRST. A visit holds two; ending the row when
             //     the first one goes stamped the visit with the length of whichever socket died
             //     soonest, which on a reconnect is zero. A record restored from disk has live 0
@@ -768,7 +797,12 @@ public:
                + ",\"reason\":\"" + esc(it->endReason) + "\""
                + ",\"bytes\":" + std::to_string(it->bytes)
                + ",\"drops\":" + std::to_string(it->drops)
-               + ",\"admin\":" + (it->admin ? "true" : "false") + "}";
+               /* ★★★ THE VERDICT GOES TO THE PAGE TOO. THREE writers serialise a ConnRec — the
+                *  append in saveIfDue, the rewrite, and THIS, which is the one the admin page
+                *  actually reads. I patched the two file writers and not this one, and the tests
+                *  failed on all four verdict assertions: the field was on disk and invisible.
+                *  Same shape as "ONE RULE, TWO READERS" — ask who ELSE serialises this. */
+               + ",\"admin\":" + (it->admin ? "true" : "false") + visitJson(*it) + "}";
         }
         return j + "]";
     }
@@ -882,6 +916,22 @@ private:
      *  a receiver busier than any we have seen. ~48 MB and ≈ a year on Stuart's busiest radio. */
     static const long   kRotateBytes  = 4L * 1024 * 1024;
     static const int    kKeepArchives = 12;
+    /** ★★ The visit verdict, and ONLY when there is one. An absent field means "not measured",
+     *  which a 0 would not: 0 stops is a real answer (they stayed and never settled anywhere) and
+     *  the page must be able to tell those apart. Keeps the ordinary row the size it always was. */
+    static std::string visitJson(const ConnRec& r) {
+        if (r.visitStops < 0) return {};
+        char b[160];
+        std::snprintf(b, sizeof b, ",\"stops\":%d,\"heard\":%d,\"bestSnr\":%.1f",
+                      r.visitStops, r.visitHeard, (double)r.visitBestSnr);
+        std::string out = b;
+        // ★ The frequency only when they PARKED — one stop for the whole visit.
+        if (r.visitStops == 1 && r.parkedHz > 0) {
+            std::snprintf(b, sizeof b, ",\"parkedHz\":%.0f", r.parkedHz);
+            out += b;
+        }
+        return out;
+    }
     void rotateIfDueLocked() {
         if (path_.empty()) return;
         long sz = 0;
@@ -935,6 +985,15 @@ private:
             r.endReason = field(line, "\"reason\":\"");
             // ★ Absent in records written before this existed — false is the honest reading.
             r.admin     = strstr(line, "\"admin\":true") != nullptr;
+            /* ★ Absent on every record written before the verdict existed — and -1 ("not measured")
+             *  is the honest reading for those, which is the struct default. Only read one when the
+             *  field is actually there; a 0 default would claim we watched and found nothing. */
+            if (strstr(line, "\"stops\":")) {
+                r.visitStops   = (int)numField(line, "\"stops\":");
+                r.visitHeard   = (int)numField(line, "\"heard\":");
+                r.visitBestSnr = (float)numField(line, "\"bestSnr\":");
+                r.parkedHz     = (double)numField(line, "\"parkedHz\":");
+            }
             if (!r.atEpoch) continue;
             recs_.push_back(std::move(r));
             // ★ Keep only the newest in memory; the file may hold more than we display.
@@ -964,11 +1023,11 @@ private:
             if (!r.endEpoch) continue;          // still open — it will be written when it closes
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
                        "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,\"drops\":%llu,"
-                       "\"admin\":%s}\n",
+                       "\"admin\":%s%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
                     (unsigned long long)r.bytes, (unsigned long long)r.drops,
-                    r.admin ? "true" : "false");
+                    r.admin ? "true" : "false", visitJson(r).c_str());
         }
         fclose(f);
         rename(tmp.c_str(), path_.c_str());
