@@ -1305,7 +1305,18 @@ struct LearnedBm {
     bool        manual = false;  // saved by hand: never expires
     /** ★ DAB identity (mode "dab"): the service inside the multiplex at hz. -1 = not DAB. */
     int         sid = -1, eid = -1, ecc = -1;
+    /** ★★★ WHERE THE NAME CAME FROM — and it is part of the record because a name this receiver
+     *  HEARD and a name something else supplied are not the same claim (Stuart, 2026-09-20).
+     *  It also stops a WORSE name overwriting a better one: refinement only ever goes up.
+     *    0 = provisional, the label is "PI4322 93.7MHz" — no name yet, but the station is ON THE LIST
+     *    1 = a guess from a rotating PS (shown "(unverified)")
+     *    2 = heard and settled on this receiver — the classic path (shown "(RDS Verified)")
+     *    3 = the broadcaster's own name from RadioDNS SI.xml (also "(RDS Verified)")
+     *  ★ Absent in records written before this existed; 2 is the honest reading for those, since
+     *    the only way a bookmark could previously EXIST was by settling. Handled at load. */
+    int         nameSrc = 2;
 };
+enum { kNameProvisional = 0, kNameGuess = 1, kNameHeard = 2, kNameRadioDns = 3 };
 /**
  * A station we've seen but don't trust yet.
  *
@@ -1420,6 +1431,19 @@ static const int       kMinSamples  = 10;                 // PS repetitions befo
 static const long long kPiLockSecs  = 5;                  // PI must be steady this long
 static const long long kStableSecs  = 15;                 // reconstruction must hold
 static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
+/** ★★★ HOW LONG YOU MUST HAVE STAYED before a station is written with a PROVISIONAL label.
+ *
+ *  PI-first means the identity alone is enough to save, and the identity locks in kPiLockSecs (5 s)
+ *  — which is less time than it takes to spin past a station. Without this, tuning across the FM
+ *  band would leave a trail of "PI____ __MHz" entries for every station the dial rested on, and an
+ *  auto-bookmark list nobody can find anything in is its own kind of broken.
+ *  ★★ 20 s is not a new bar, it is the OLD one: the previous path needed 5 s of PI lock, then 10 PS
+ *     repetitions, then 15 s of the reconstruction holding still — a bit over 20 s before anything
+ *     was written. So this keeps "did you actually listen to it" exactly as it was, and drops only
+ *     the "did the NAME converge" test, which is the one a marquee can never pass.
+ *  ★ A station whose name settles normally is unaffected: it is written by the refinement path with
+ *    a real name, on the same timescale as before. */
+static const long long kProvisionalDwellSecs = 20;
 
 /**
  * Round so a few Hz of VFO drift can't create a second entry for one station.
@@ -1486,8 +1510,13 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
     // perfectly audible station quietly expire.
     if (it != g_bookmarks.end() && it->second.pi == pi) {
         it->second.lastHeard = now;
-        g_bmPending.erase(key);
-        return;
+        /* ★★★ BUT KEEP LEARNING IF THE LABEL IS STILL PROVISIONAL. Under PI-first the bookmark is
+         *  written the moment the identity locks, with "PI4322 93.7MHz" as a placeholder — so
+         *  returning here unconditionally (as this did) would freeze that placeholder FOR EVER and
+         *  the refinement half of the design would never run. Only a name we actually have is
+         *  reason to stop listening. */
+        if (it->second.nameSrc >= kNameHeard) { g_bmPending.erase(key); return; }
+        // Fall through and carry on voting — the identity is settled, the LABEL is not.
     }
 
     auto& p = g_bmPending[key];
@@ -1506,6 +1535,37 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
         return;
     }
     if (now - p.piSince < kPiLockSecs) return;   // identity not settled yet
+
+    /* ★★★ THE PI IS THE IDENTITY — SAVE NOW, NAME IT LATER. Stuart, 2026-09-20: "It should be the
+     *  Pi Code."
+     *
+     *  This used to require the NAME to converge and then hold still for 15 s before anything was
+     *  written. Against a station that MARQUEES its PS that can never happen: Kiko's server in
+     *  Umuarama showed "UMUARAMA" / "ALINE" / "RADIO" one second apart on 93.700 with the PI rock
+     *  steady at 4322, so every character position votes for a different word each second and any
+     *  momentary winner is reset by the next segment. The bookmark was never written AT ALL — not
+     *  a bad name, no entry, and the feature simply did not exist for those users.
+     *
+     *  ★★ The bookmark's EXISTENCE must not depend on the text settling. It is on the list and it
+     *     is tunable, which is the point of it; the label improves in place afterwards, keyed on
+     *     the same PI, so there is no duplicate and nothing to re-learn.
+     *  ★★ It also fixes a quieter UK case: a station whose PS is weak or garbled currently has to
+     *     EARN its place, so a marginal one never appears. Now it appears, then improves.
+     *  ★ "PI4322 93.7MHz" rather than a bare "4322", which would read as broken — frequency plus
+     *    PI is recognisable, obviously provisional, and still unique. */
+    if (it == g_bookmarks.end() && now - p.piSince >= kProvisionalDwellSecs) {
+        char prov[64];
+        std::snprintf(prov, sizeof prov, "PI%04X %.1fMHz", (unsigned)pi, hz / 1e6);
+        LearnedBm b;
+        b.name = prov; b.pi = pi; b.hz = (long long)llround(hzRaw); b.lastHeard = now;
+        b.nameSrc = kNameProvisional;
+        g_bookmarks[key] = b;
+        bmSaveLocked();
+        it = g_bookmarks.find(key);
+        // ★ Deliberately NOT returning: if a good PS is already in hand this same call can go
+        //   straight on to vote on it, so a well-behaved station is never slowed down by this.
+    }
+
     if (ps.empty()) return;                      // locked on, but no text yet
 
     // Tally this repetition, character by character.
@@ -1541,8 +1601,16 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
     if (best != p.lastBest) { p.lastBest = best; p.settledSince = now; return; }
     if (now - p.settledSince < kStableSecs) return;
 
+    /* ★★★ REFINE IN PLACE — same identity, better label, no duplicate. The key never depended on
+     *  the text, so this is an UPDATE of the row the PI lock already created.
+     *  ★ Never downgrade: a name we heard and settled (kNameHeard) must not be overwritten by a
+     *    weaker source later, which is what the provenance field is for. */
     LearnedBm b;
+    if (it != g_bookmarks.end()) b = it->second;      // keep hz, mode, manual, DAB ids
+    if (b.nameSrc > kNameHeard) { g_bmPending.erase(key); return; }
     b.name = best; b.pi = pi; b.lastHeard = now;
+    b.nameSrc = kNameHeard;
+    if (b.hz <= 0) b.hz = (long long)llround(hzRaw);
     b.manual = (it != g_bookmarks.end()) ? it->second.manual : false;
     g_bookmarks[key] = b;
     g_bmPending.erase(key);
@@ -1683,6 +1751,12 @@ static void bmLoadJson(const std::string& json) {
             size_t ms = mdp + 8, me = json.find('"', ms);
             if (me != std::string::npos) b.mode = json.substr(ms, me - ms);
         }
+        /* ★ Absent in every record written before provenance existed — and for those, "heard and
+         *  settled" is the honest reading, because settling was the ONLY way a bookmark could come
+         *  into existence at all. That is the struct default, so an absent field needs no branch;
+         *  this only reads one when it IS there. */
+        const size_t nsp = json.find("\"nameSrc\":", p);
+        if (within(nsp)) b.nameSrc = atoi(json.c_str() + nsp + 10);
         if (within(sp)) b.sid = atoi(json.c_str() + sp + 6);
         if (within(ep)) b.eid = atoi(json.c_str() + ep + 6);
         if (within(cp)) b.ecc = atoi(json.c_str() + cp + 6);
@@ -1717,6 +1791,13 @@ static std::string bmJsonLocked() {
            + (kv.second.sid >= 0 ? ",\"sid\":" + std::to_string(kv.second.sid)
                                    + ",\"eid\":" + std::to_string(kv.second.eid)
                                    + ",\"ecc\":" + std::to_string(kv.second.ecc) : std::string())
+           /* ★★ THE PROVENANCE GOES ON THE WIRE, because the client must be able to say "(RDS
+            *  Verified)" versus "(unverified)" — a name this receiver HEARD and a name something
+            *  else supplied are not the same claim, and the listener must tell them apart at a
+            *  glance. Omitted when it is the ordinary heard-and-settled case, so the common row
+            *  does not grow and an older client reading no field assumes exactly that. */
+           + (kv.second.nameSrc != kNameHeard
+                ? ",\"nameSrc\":" + std::to_string(kv.second.nameSrc) : std::string())
            + ",\"source\":\"server\"}";
     }
     return j + "]";
