@@ -61,6 +61,11 @@ const SPEC_MAGIC = 0x43455053, FLAG_FULL_U8 = 0x03, U8_OFF = -256;
 let frames = [];            // Float32Array of dBFS, low→high
 let binHz = 0, centreHz = 0;
 let adcPeak = null, adcClip = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
+/* ★★★ THE SAME TWO LIES AS agc-sweep — see the long note there. This tool HOLDS a gain rather than
+ *  sweeping one, so a refused `gain` write is even easier to miss: the scan runs at whatever the
+ *  radio was already on and every row is honestly measured, just not at the gain in the heading. */
+let agcLocked = null;
+let adcSeen = [];
 
 const url = `${base.replace(/\/+$/, '')}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024${AUTH}`;
 const ws = new WebSocket(url);
@@ -79,16 +84,19 @@ const audio = new WebSocket(`${base.replace(/\/+$/, '')}/ws/audio?user_session_i
 audio.on('error', () => {});      // ★ the audio itself is of no interest; only its side effect is
 audio.on('message', () => {});
 
+/* ★★★ TOUCH NOTHING UNTIL THE PREFLIGHT HAS PASSED — see the identical note in agc-sweep. A run that
+ *  was going to be refused had already taken the dial and the sample rate before saying so. */
 ws.on('open', () => {
-  console.log(`connected → ${base}`);
+  console.log(`connected → ${base} — reading hwinfo before touching anything`);
+});
+
+/** Take the dial. Called ONLY after the preflight has cleared this receiver. */
+function seizeRadio() {
   send({ type: 'zoom', frequency: FREQ, binBandwidth: 1200 });
   send({ type: 'rdsx', on: true });
   send({ type: 'tune', frequency: FREQ, mode: 'wfm' });
-  // ★ The whole point is to drive the gain by hand. A `gain` with a VALUE is itself the switch to
-  //   manual on an RTL — `{type:'agc'}` is the RSP's IF AGC and does nothing here, which is how an
-  //   earlier run "turned the AGC off" and left it on.
   if (RATE > 0) send({ type: 'sampleRate', value: RATE });
-});
+}
 
 ws.on('message', (d, isBin) => {
   // ★★ RECOGNISE A SPECTRUM FRAME BY ITS MAGIC, NOT BY THE OPCODE. The shim sends these with the
@@ -113,6 +121,7 @@ ws.on('message', (d, isBin) => {
     if (Array.isArray(j.gains) && j.gains.length) gains = j.gains.slice();
     if (Number.isFinite(j.gainNow)) gainNow = j.gainNow;
     if (Number.isFinite(j.adcPeak)) adcPeak = j.adcPeak;
+    if (typeof j.agcLocked === 'boolean') agcLocked = j.agcLocked;
   }
   /* ★ The server sends this ~once a second now (it used to send nothing of the sort, so this
    *   handler sat here waiting for a message that did not exist and the column read a stale
@@ -188,6 +197,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   await sleep(2500);
   if (!gains.length) { console.error('no gain list from hwinfo — is this an RTL radio?'); process.exit(1); }
+
+  // ★ Declared BEFORE the preflight, which names it in the refusal it prints.
+  const GAIN = Number(opt('gain', '125'));
+
+  /* ★★★ REFUSE ON A GAIN-LOCKED RADIO — see agc-sweep for the measurement that prompted this.
+   *  Here the damage is subtler: the scan still produces a CORRECT band picture, but at the radio's
+   *  existing gain rather than the one in the header, so two scans "at different gains" agree and
+   *  read as proof the gain does not matter. */
+  if (agcLocked === true) {
+    console.error(
+      `\nREFUSING TO SCAN — this receiver's AGC is LOCKED ON by its owner (hwinfo agcLocked=true).\n`
+    + `The server refuses the \`gain ${GAIN}\` this tool sends, so the scan would run at whatever gain\n`
+    + `the radio is already on while the header claimed ${(GAIN / 10).toFixed(1)} dB. Two such scans\n`
+    + `"at different gains" then agree — which reads as proof that gain does not matter.\n\n`
+    + `To scan: set radios[N].agcLock = 0, restart that radio, and PUT IT BACK afterwards.\n`);
+    process.exit(2);
+  }
+  if (agcLocked === null) {
+    console.error('\nREFUSING TO SCAN — no hwinfo arrived, so whether the gain can be set is UNKNOWN.\n');
+    process.exit(2);
+  }
   if (RATE) console.log(`  ${(RATE / 1e6).toFixed(1)} MS/s`);
   /* ★★★ STUART'S LABELS, 2026-08-24 — the ground truth this is scored against. His words kept
    *     verbatim, because "very very barely there" is a measurement and paraphrasing it loses
@@ -214,7 +244,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     { hz: 105.7e6, real: true,  note: 'Smooth — buried by 104.2 intermod until the AGC came down' },
     { hz: 106.0e6, real: true,  note: 'Greatest Hits — very strong with enough gain' },
   ];
-  const GAIN = Number(opt('gain', '125'));
+  // ★ Cleared. NOW take the dial.
+  seizeRadio();
+  /* ★ A sampleRate change RESTARTS the IQ stream, so the first measurement window must not open
+   *  during the restart — that is a frame count, not a signal. Longer when the rate is being set. */
+  await sleep(RATE > 0 ? 2500 : 1200);
   send({ type: 'adcstats', seconds: 300 });
   send({ type: 'gain', value: GAIN });
   await sleep(800);
@@ -232,6 +266,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (!m) { console.log(`  ${(b.hz/1e6).toFixed(1)} — no spectrum`); continue; }
     const ber = rds && Number.isFinite(rds.ber) ? rds.ber : -1;
     const stereo = rds ? (rds.stereo === true) : null;
+    adcSeen.push(adcPeak);
     scored.push({ ...b, ...m });
     console.log(`  ${(b.hz/1e6).toFixed(1).padStart(6)}  ${m.channelDb.toFixed(1).padStart(6)}  `
       + `${m.shoulderDb.toFixed(1).padStart(7)}  ${(m.channelDb-m.shoulderDb).toFixed(1).padStart(5)}  `
@@ -256,6 +291,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   /* ★★★ PUT THE AGC BACK — a tool that changes a receiver's configuration hands it back as it
    *     found it. An earlier sweep left it off and the next test recorded four stations sitting at
    *     the resting gain, which read as a loop that had stopped working. */
+  /* ★★★ WERE pk / clip% EVER REAL? Same check, same reasoning as agc-sweep: the server measures the
+   *  converter only while its own automation runs or somebody has asked, and this tool turns the
+   *  automation off. A peak identical at every FREQUENCY across the band is a dead latch, not a
+   *  flat band — and here it is even easier to believe, because a flat band is plausible. */
+  {
+    const seen = adcSeen.filter((v) => typeof v === 'number');
+    const uniq = new Set(seen.map((v) => v.toFixed(1)));
+    if (!seen.length) {
+      console.log('\n  ✗ pk / clip% ARE NOT VALID — the converter never reported (no `adc` message).');
+      console.log('    The `adcstats` latch did not take. Both columns are blank, not zero.');
+    } else if (uniq.size === 1 && adcSeen.length > 2) {
+      console.log(`\n  ✗ pk / clip% ARE NOT VALID — the peak read ${seen[0].toFixed(1)} dBFS at EVERY`
+                + ` frequency (${adcSeen.length} stops).`);
+      console.log('    That is a latch that never took, not a flat band. Do not quote these columns.');
+    }
+  }
+
   send({ type: 'gain', auto: true });     // ★ VibeAGC back on — `gain:auto`, not `agc:on`
   await sleep(500);
   ws.close(); audio.close();

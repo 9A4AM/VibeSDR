@@ -67,6 +67,14 @@ const SPEC_MAGIC = 0x43455053, FLAG_FULL_U8 = 0x03, U8_OFF = -256;
 let frames = [];            // Float32Array of dBFS, low→high
 let binHz = 0, centreHz = 0;
 let adcPeak = null, adcClip = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
+/* ★★★ THE TWO THINGS THAT MAKE THIS TOOL LIE. Both are now refusals, not footnotes — a table of
+ *  plausible numbers that means nothing is worse than no table, because it gets BELIEVED.
+ *  ★★ Measured 2026-09-20: three scans at 0 / 29.7 / 49.6 dB on a gain-LOCKED radio came out
+ *     identical, and I reported a knee from them. The server refuses a manual gain outright when
+ *     the owner has locked the AGC ("manual gain refused — the owner has locked the AGC on",
+ *     local_sdr_shim.cpp) and says so on hwinfo as `agcLocked` — which this tool never read. */
+let agcLocked = null;         // from hwinfo; true = every gain write below is silently refused
+let adcSeen = [];             // adcPeak at each step, to catch a latch that never took
 
 const url = `${base.replace(/\/+$/, '')}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024${AUTH}`;
 const ws = new WebSocket(url);
@@ -85,8 +93,17 @@ const audio = new WebSocket(`${base.replace(/\/+$/, '')}/ws/audio?user_session_i
 audio.on('error', () => {});      // ★ the audio itself is of no interest; only its side effect is
 audio.on('message', () => {});
 
+/* ★★★ TOUCH NOTHING UNTIL THE PREFLIGHT HAS PASSED. This used to tune, zoom and set the sample rate
+ *  the instant the socket opened — so a run that was going to be REFUSED had already taken somebody's
+ *  dial and changed their sample rate before it said so. A refusal that still moves the radio is not
+ *  a refusal; see third_party_receiver_etiquette.
+ *  ★ We only listen here. hwinfo arrives unasked, which is all the preflight needs. */
 ws.on('open', () => {
-  console.log(`connected → ${base}`);
+  console.log(`connected → ${base} — reading hwinfo before touching anything`);
+});
+
+/** Take the dial. Called ONLY after the preflight has cleared this receiver. */
+function seizeRadio() {
   send({ type: 'zoom', frequency: FREQ, binBandwidth: 1200 });
   send({ type: 'rdsx', on: true });
   send({ type: 'tune', frequency: FREQ, mode: 'wfm' });
@@ -94,7 +111,7 @@ ws.on('open', () => {
   //   manual on an RTL — `{type:'agc'}` is the RSP's IF AGC and does nothing here, which is how an
   //   earlier run "turned the AGC off" and left it on.
   if (RATE > 0) send({ type: 'sampleRate', value: RATE });
-});
+}
 
 ws.on('message', (d, isBin) => {
   // ★★ RECOGNISE A SPECTRUM FRAME BY ITS MAGIC, NOT BY THE OPCODE. The shim sends these with the
@@ -119,6 +136,8 @@ ws.on('message', (d, isBin) => {
     if (Array.isArray(j.gains) && j.gains.length) gains = j.gains.slice();
     if (Number.isFinite(j.gainNow)) gainNow = j.gainNow;
     if (Number.isFinite(j.adcPeak)) adcPeak = j.adcPeak;
+    // ★ The owner's lock. Read BEFORE the sweep starts — see the preflight refusal below.
+    if (typeof j.agcLocked === 'boolean') agcLocked = j.agcLocked;
   }
   /* ★ The server sends this ~once a second now (it used to send nothing of the sort, so this
    *   handler sat here waiting for a message that did not exist and the column read a stale
@@ -194,6 +213,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   await sleep(2500);
   if (!gains.length) { console.error('no gain list from hwinfo — is this an RTL radio?'); process.exit(1); }
+
+  /* ★★★ REFUSE ON A GAIN-LOCKED RADIO. Every `gain` message below would be refused by the server
+   *  and every row would be the SAME MEASUREMENT under a different heading — which is exactly what
+   *  happened on 2026-09-20, and I read a knee off it. The tool must not produce that table.
+   *  ★ Not a warning. A warning at the top of 30 plausible rows is read once and forgotten; the
+   *    rows are what get quoted afterwards. */
+  if (agcLocked === true) {
+    console.error(
+      '\nREFUSING TO SWEEP — this receiver\'s AGC is LOCKED ON by its owner (hwinfo agcLocked=true).\n'
+    + 'The server refuses every manual `gain` this tool sends ("manual gain refused — the owner has\n'
+    + 'locked the AGC on"), so the gain would never move and all 30-odd rows would be the SAME\n'
+    + 'measurement under different headings. That table has already been mistaken for a real knee.\n\n'
+    + 'To sweep: set radios[N].agcLock = 0 in the server config, restart that radio, and PUT IT BACK\n'
+    + 'afterwards — it is somebody\'s receiver.\n');
+    process.exit(2);
+  }
+  if (agcLocked === null) {
+    console.error('\nREFUSING TO SWEEP — no hwinfo arrived, so whether the gain can move is UNKNOWN.\n'
+                + 'Sweeping blind is how the last meaningless table got made.\n');
+    process.exit(2);
+  }
+  // ★ Cleared. NOW take the dial — and from here the tool owes it back (see the `gain auto` at the end).
+  seizeRadio();
+  /* ★ A sampleRate change RESTARTS the IQ stream, so the first measurement window must not open
+   *  during the restart — that is a frame count, not a signal. Longer when the rate is being set. */
+  await sleep(RATE > 0 ? 2500 : 1200);
+
   console.log(`sweeping ${gains.length} gain steps at ${(FREQ / 1e6).toFixed(3)} MHz`
             + (RATE ? ` @ ${(RATE / 1e6).toFixed(1)} MS/s` : '') + `, ${DWELL / 1000}s per step\n`);
   console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR   pk    clip%  wobble  skew  RDS   ST  station');
@@ -214,6 +260,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const mpxDb = mpx && mpx.ok ? mpx.db : null;
     const stereo = rds ? (rds.stereo === true) : null;
     const ps  = rds && rds.ps ? String(rds.ps).trim() : '';
+    adcSeen.push(adcPeak);
     rows.push({ g, ...m, ber, ps, adcPeak, mpxDb, stereo });
     console.log(`  ${(g/10).toFixed(1).padStart(5)}  `
       + `${m.channelDb.toFixed(1).padStart(6)}  ${m.shoulderDb.toFixed(1).padStart(7)}  `
@@ -224,6 +271,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // ★ The point of the exercise: where do the candidate objectives actually peak?
   const best = (key, cmp) => rows.reduce((a, b) => (cmp(b[key], a[key]) ? b : a), rows[0]);
   const withRds = rows.filter((r) => r.ber >= 0);
+  /* ★★★ WERE THE pk / clip% COLUMNS EVER REAL? The server only measures the converter when its own
+   *  automation is running OR somebody has asked (`adcstats`), and this tool switches the automation
+   *  OFF to take the gain — so the latch is exactly the thing most likely to have silently not
+   *  taken. A peak that never moved across the WHOLE gain range is not a flat radio; it is a dead
+   *  sensor, and those two readings look identical in a table.
+   *  ★ Said AFTER the rows, where it is read, and in the terms that matter: do not quote these. */
+  {
+    const seen = adcSeen.filter((v) => typeof v === 'number');
+    const uniq = new Set(seen.map((v) => v.toFixed(1)));
+    if (!seen.length) {
+      console.log('\n  ✗ pk / clip% ARE NOT VALID — the converter never reported at all (no `adc` message).');
+      console.log('    The `adcstats` latch did not take. Ignore both columns; they are blank, not zero.');
+    } else if (uniq.size === 1 && adcSeen.length > 2) {
+      console.log(`\n  ✗ pk / clip% ARE NOT VALID — the peak read ${seen[0].toFixed(1)} dBFS at EVERY gain`
+                + ` (${adcSeen.length} steps).`);
+      console.log('    A converter peak that does not move while the gain sweeps its whole range is a');
+      console.log('    latch that never took, not a flat radio. Do not quote these two columns.');
+    }
+  }
+
   console.log('\n  ── where each candidate says the gain should be ──────────────────────────');
   console.log(`  best SNR          ${(best('snr', (x, y) => x > y).g / 10).toFixed(1)} dB`);
   console.log(`  best contrast     ${(best('contrast', (x, y) => x > y).g / 10).toFixed(1)} dB`);
