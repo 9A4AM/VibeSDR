@@ -490,6 +490,11 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   /* ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19) — the web client's #mShared, here. A box of its
    *  own above the frequency and mode boxes, spanning both; the text steps down ~20 % so the pill still fits the
    *  meter frame. Shared-VFO radios only. */
+  /* ★★ IT GROWS WITH THE PILL, NOT WITH A GUESS (Stuart, 2026-09-20: "room to increase the font by a tiny
+   *  amount" on a Mac, then "not enough room" on the phone — both true of the same fixed number). The pill's
+   *  own frequency size already knows how much width this layout has, so the banner takes a share of it and
+   *  is clamped at both ends: never smaller than the 9 it shipped at, never bigger than a phone can hold. */
+  const sharedFontSize = Math.max(9, Math.min(13, Math.round(freqFontSize * 0.34)));
   if (sharedTuner) {
     freqFontSize = Math.round(freqFontSize * 0.8); modeFontSize = Math.round(modeFontSize * 0.8);
     unitFontSize = Math.round(unitFontSize * 0.85); pillPadV = Math.max(1, Math.round(pillPadV * 0.6));
@@ -527,8 +532,9 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
             accessibilityRole="text"
             accessibilityLabel={sharedTuner.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
               : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
-        <Text style={[pm.sharedTxt, { fontFamily: t.font, color: sharedTuner.alone ? '#7bd88f' : t.snrColor }]}
-              numberOfLines={1} adjustsFontSizeToFit>
+        <Text style={[pm.sharedTxt, { fontFamily: t.font, fontSize: sharedFontSize,
+                      color: sharedTuner.alone ? '#7bd88f' : t.snrColor }]}
+              numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
           {sharedTuner.alone ? 'SHARED TUNER · FREE TO TUNE'
             : `SHARED TUNER · ASK TO TUNE · ${sharedTuner.listeners}${sharedTuner.max > 1 ? `/${sharedTuner.max}` : ''} 👤`}
         </Text>
@@ -603,7 +609,9 @@ const pm = StyleSheet.create({
   sharedBox:{ borderRadius: 5, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 3, alignItems: 'center',
               borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)',
               shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 3 },
-  sharedTxt:{ fontSize: 9, letterSpacing: 1.6, fontWeight: '700' },
+  /* ★ The SIZE comes from the pill (see sharedFontSize) — a fixed 11 fitted a Mac and crowded a phone, and a
+   *  fixed 9 wasted the room a Mac has. Only the constants that do not depend on width live here. */
+  sharedTxt:{ letterSpacing: 1.1, fontWeight: '700' },
   linkWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, alignSelf: 'center', flexShrink: 0 },
   linkBar:  { width: 3, borderRadius: 1 },
   linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
