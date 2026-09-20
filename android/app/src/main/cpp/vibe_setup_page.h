@@ -178,6 +178,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <span class="note" id="benchWhen"></span>
       </div>
       <div class="note" id="benchMsg"></div>
+      <!-- ★★ THE BAR. Two minutes of nothing looks like a hang (Stuart, 2026-09-20: "us humans need to see
+           things working"), and it names the test it is on, not just a percentage.
+           ★ These three ids are what benchBar() writes to — it returns quietly when they are missing, which is
+             how the first cut shipped with the script running and no bar on the page at all. -->
+      <div id="benchBarWrap" class="hide" style="margin-top:10px">
+        <div style="height:10px;border-radius:5px;background:#241a10;overflow:hidden;border:1px solid var(--line)">
+          <div id="benchBar" style="height:100%;width:0%;background:var(--amber);transition:width .4s ease"></div>
+        </div>
+        <div class="note" id="benchStep" style="margin-top:5px"></div>
+      </div>
       <table id="benchTable" class="hide" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
         <tbody id="benchRows"></tbody>
       </table>
@@ -1336,7 +1346,9 @@ async function benchLoad() {
 let benchPoll = 0;
 function benchBar(pct, label) {
   const wrap = $("benchBarWrap");
-  if (!wrap) return;
+  // ★ LOUD, NOT SILENT. This returned quietly when the markup was missing, so the first cut ran the whole
+  //   measurement with no bar on the page and nothing anywhere said why (see scripts/check-setup-page.mjs).
+  if (!wrap || !$("benchBar") || !$("benchStep")) { console.warn("benchBar: the progress bar markup is missing"); return; }
   wrap.classList.remove("hide");
   $("benchBar").style.width = Math.max(0, Math.min(100, pct)) + "%";
   $("benchStep").textContent = label;
