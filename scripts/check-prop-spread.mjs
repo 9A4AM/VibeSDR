@@ -31,8 +31,30 @@ const fail = (msg) => { console.error('  ✗ ' + msg); bad = 1; };
 const spreadTxt = src.match(/const shared = \{([\s\S]*?)\n  \};/)[1];
 /* Each entry is either shorthand (`snrText,` — the name is both key and value) or renamed
  * (`bus: meterBus,` — the KEY is what the bar destructures, the VALUE is what must be in scope here). */
-const entries = [...strip(spreadTxt).matchAll(/(^|[,{\s])([a-zA-Z_]\w*)\s*(:\s*([a-zA-Z_]\w*))?\s*[,}]/g)]
-  .map((m) => ({ key: m[2], value: m[4] || m[2] }));
+/* ★★ SPLIT THE OBJECT INTO ENTRIES AT DEPTH ZERO, rather than pattern-matching names. Values are arbitrary
+ *  expressions (`modeLabel: dabOn ? 'DAB' : modeDisplay(mode) + ...`), and three regex attempts at this each
+ *  mis-read those and reported a key as missing when it was right there — a checker that cries wolf is one
+ *  nobody runs. Depth counting is dull and correct. */
+function entriesOf(objText) {
+  const out = [];
+  let depth = 0, start = 0;
+  const txt = strip(objText);
+  for (let i = 0; i < txt.length; i++) {
+    const c = txt[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === ',' && depth === 0) { out.push(txt.slice(start, i)); start = i + 1; }
+  }
+  out.push(txt.slice(start));
+  return out.map((e) => e.trim()).filter(Boolean).map((e) => {
+    const colon = e.indexOf(':');
+    if (colon < 0) return { key: e.trim(), value: e.trim() };        // shorthand
+    const key = e.slice(0, colon).trim();
+    const value = e.slice(colon + 1).trim();
+    return { key, value: /^[a-zA-Z_]\w*$/.test(value) ? value : null };   // null = an expression, tsc's job
+  }).filter((e) => /^[a-zA-Z_]\w*$/.test(e.key));
+}
+const entries = entriesOf(spreadTxt);
 const spreadKeys = entries.map((e) => e.key);
 
 // ── 1. everything `shared` names must be in ControlsBar's scope (a prop, or a local it defines) ──
@@ -42,6 +64,7 @@ const cbProps = namesIn(src.slice(cbStart, cbEnd + 1));
 const cbBody = src.slice(cbEnd, src.indexOf('const shared = {'));
 const cbLocals = new Set([...strip(cbBody).matchAll(/(?:const|let|function)\s+([a-zA-Z_]\w*)/g)].map((m) => m[1]));
 for (const { key, value } of entries) {
+  if (value === null) continue;            // an expression — tsc checks those
   if (!cbProps.has(value) && !cbLocals.has(value))
     fail(`shared passes \`${key}\` from \`${value}\`, which ControlsBar neither takes as a prop nor defines`);
 }
