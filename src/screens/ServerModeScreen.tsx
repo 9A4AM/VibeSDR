@@ -557,6 +557,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
 
+  /** ★ Did the saved settings actually load? False after a storage failure — the controls below are then
+   *  DEFAULTS, not the owner's choices, and must not be written back over what is still on disk. */
+  const [prefsRead, setPrefsRead] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
   /** The mDNS hostname the responder actually TOOK — "vibesdr-moto-g35", or with a "-2"
@@ -692,7 +696,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (r != null && Number.isFinite(Number(r))) setRate(Number(r));
         if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp);
         if (cp != null) setCompress(cp !== '0');
-      } catch {}
+        setPrefsRead(true);
+      } catch (e: any) {
+        /* ★★★ A READ THAT FAILS MUST NOT LOOK LIKE A SERVER WITH NO SETTINGS (Stuart's Sony, 2026-09-20: "for
+         *  some reason the sony lost all my preferences today"). This swallowed everything, so one failed
+         *  AsyncStorage open — its database had an unflushed 512 kB write-ahead log — left every control at its
+         *  default with nothing said. His settings were still on disk, untouched; the screen simply could not
+         *  read them.
+         *  ★★ AND THE REAL DAMAGE WAS THE NEXT SAVE: starting the server would have written those defaults over
+         *     the settings that were still there, turning a failed read into a genuine loss. Now the screen says
+         *     so and refuses to persist until it has actually read them — see prefsRead. */
+        setPrefsError(e?.message ? String(e.message) : 'the settings could not be read');
+      }
     })();
   }, []);
 
@@ -1044,6 +1059,16 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   };
 
   const start = useCallback(async () => {
+    /* ★★★ NEVER WRITE DEFAULTS OVER SETTINGS WE COULD NOT READ. If the load failed, every control on this
+     *  screen is a default rather than the owner's choice, and this multiSet would make that permanent — which
+     *  is how "it lost my preferences" becomes true instead of merely looking true. */
+    if (!prefsRead) {
+      Alert.alert('Your saved settings could not be read',
+        (prefsError ? prefsError + '\n\n' : '')
+        + 'Everything here is a default, so starting now would overwrite what is still stored on this device. '
+        + 'Close the app and open it again; if it keeps happening, say so before saving.');
+      return;
+    }
     if (!(await checkBackgroundAllowed())) return;
     setError(null);
     setStarting(true);
@@ -1539,6 +1564,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             device will have to do (Stuart, 2026-09-19). Lite measures ITSELF the first time; the main app
             offers the button, since a phone big enough to run the app is assumed to cope.
             ★★ It costs the radio about two minutes off the air, so the panel says so before it is pressed. */}
+        {!!prefsError && (
+          <View style={{ borderLeftWidth: 3, borderLeftColor: '#ff8a7d', paddingLeft: 10, marginBottom: 12 }}>
+            <Text style={[styles.hint, { color: '#ff8a7d', fontFamily: F, marginBottom: 0 }]}>
+              {`Your saved settings could not be read (${prefsError}). What you see below are DEFAULTS — your `
+               + `settings are still stored on this device, so do not start the server until this is fixed, or `
+               + `they will be overwritten. Closing and reopening the app usually clears it.`}
+            </Text>
+          </View>
+        )}
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHAT THIS DEVICE CAN CARRY</Text>
         {benchRows.length > 0 && (
           <View style={{ marginBottom: 8 }}>
