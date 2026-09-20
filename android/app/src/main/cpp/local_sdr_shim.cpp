@@ -886,6 +886,23 @@ static std::string vsDabBlockNow() {
 }
 
 static std::atomic<int>    g_dabChannel{-1};
+/** ★★★ THE DIAL POSITION DAB LEAVES BEHIND — the receiver's remembered state, not a listener's.
+ *
+ *  Every other mode already persists on a shared dial: the landing is deliberately skipped, so a
+ *  receiver keeps whatever it was left on ("I've gone back to a server and been met with static
+ *  because someone has left the dial between 2 stations" — Stuart, 2026-09-21). DAB was the one
+ *  exception: the last listener leaving tore it down, so a receiver left on a multiplex greeted the
+ *  next person with FM.
+ *
+ *  ★★ INTENT SURVIVES, HARDWARE DOES NOT HAVE TO. The ensemble is torn down when the last listener
+ *     goes — which is what lets the radio park, or be RELEASED to another app entirely — and this
+ *     says where to go back to when somebody arrives. Stuart: "on a new user reconnecting that
+ *     previously saved state gets resumed as if the radio never powered down or handed over. Yes I
+ *     know DAB will need to reacquire but that is seconds."
+ *  ★ -1 = the receiver is not a DAB receiver just now. Set when the last listener leaves DAB,
+ *    CLEARED when somebody deliberately switches DAB off — because that is a person saying "I do
+ *    not want this", which is exactly the distinction the old teardown could not draw. */
+static std::atomic<int>    g_dabWantChannel{-1};
 /* ★★★ THE GAIN EACH BLOCK LAST DECODED AT, in AGC steps below the ceiling. DAB enters at the
  *  AGC's resting gain (12.5 dB on the V4) and a weak block then waits the entry settle plus one
  *  climb per 0.4 s before the first FIB — 3 to 6 s on 10D, which wants ~36 dB. A block that has
@@ -12047,6 +12064,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   a guard; leaving DAB now has none either. */
                 std::vector<std::shared_ptr<net::Socket>> socks;   // everyone is told DAB is off
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                /* ★ A PERSON SAID NO. Clear the remembered multiplex, or the next listener would
+                 *  be put straight back on the ensemble this one just chose to leave. That is the
+                 *  distinction the old unconditional teardown could not draw: leaving on purpose
+                 *  and simply going away are different answers. */
+                g_dabWantChannel.store(-1, std::memory_order_relaxed);
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
@@ -16398,6 +16420,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool sharedDialNow = vsSharedDial();
             if (sharedDialNow && firstOfSession && landedSession != session)
                 LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
+
+            /* ★★★ AND IF THE DIAL IT WAS LEFT ON IS A MULTIPLEX, GO BACK TO IT.
+             *
+             *  The ensemble is torn down when the last listener leaves so the radio can park or be
+             *  released; g_dabWantChannel is the note it leaves behind. Re-entering here is what
+             *  makes DAB behave like every other mode — the receiver is where it was left, and the
+             *  reacquire costs the few seconds Stuart already accepted ("Yes I know DAB will need
+             *  to reacquire but that is seconds").
+             *  ★★ Through handleControl, not by reaching into the DAB entry: that path sets the
+             *     sample rate, the centre, the gain memory, the IF filter, the clock and the
+             *     priming flag in one carefully ordered block, and a second caller that did four
+             *     of those six is exactly how this subsystem got broken before.
+             *  ★ Only when nobody is already in DAB, and only for the first socket of a session —
+             *    a second socket joining must not re-enter a mode it is already in. */
+            if (g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+                && !g_dabMode.load(std::memory_order_relaxed)
+                && firstOfSession && landedSession != session) {
+                const int want = g_dabWantChannel.load(std::memory_order_relaxed);
+                LOGI("[DAB] a listener arrived and this receiver was left on block %d — resuming it", want);
+                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(want) + "}");
+            }
             if (firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && !sharedDialNow) {
                 landedSession = session;
@@ -16779,12 +16822,44 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bool stillEmpty;
             // ★ specExtra included here too — this site armed parks while extra viewers watched.
             { std::lock_guard<std::mutex> lk(clientMtx); stillEmpty = nobodyWatchingLocked(); }
-            /* ★★★ AND END DAB. It is a listener's mode, not a receiver setting — nobody is left to
-             *  hear it, and leaving it on hands the next person a radio whose every control is
-             *  inert. See dabRestore. */
+            /* ★★★ DAB IS A DIAL POSITION, NOT A LISTENER'S MODE — LEAVE IT WHERE IT WAS LEFT.
+             *
+             *  This used to end DAB the moment the last listener left, reasoning that it is "a
+             *  listener's mode, not a receiver setting". Every OTHER mode already persists: on a
+             *  shared dial the landing is deliberately skipped ("the radio keeps the dial it was
+             *  left on"), so someone who leaves a receiver on medium wave hands the next person
+             *  medium wave. DAB was the single exception, and it read as a fault.
+             *  ★★ Stuart, 2026-09-21: "Can we leave it running DAB like it would for any other
+             *     mode. If I was to do the same and say tune to MW and listen to caroline it would
+             *     remember it for the next user. DAB is the only mode where it doesnt."
+             *  ★★ The old worry — "it hands the next person a radio whose every control is inert" —
+             *     is answered by the 2026-09-14 change: leaving DAB now has no guard at all, so the
+             *     next person simply switches it off, exactly as they would leave any other mode.
+             *
+             *  ★★★ A RELEASE IS DIFFERENT FROM A PARK, AND THAT IS WHY THIS IS NOT A PLAIN DELETE.
+             *      Parking only stops consuming samples, and the locked centre and rate are the
+             *      MULTIPLEX's while DAB holds the lock, so a resume comes back on the ensemble by
+             *      itself. A RELEASE is a device teardown — Uninit / ReleaseDevice / Open / Init —
+             *      and the DAB pipeline does not survive it, so there we still hand the receiver
+             *      back as we found it rather than leave a half-built ensemble behind. */
             // ★ Not during teardown — see stopLocked: a restore here raced the shutdown into an abort.
             if (stillEmpty && !stopping.load() && g_dabMode.load(std::memory_order_relaxed)) {
-                LOGI("[DAB] last listener left — restoring the receiver");
+                /* ★★★ REMEMBER THE DIAL, THEN HAND THE HARDWARE BACK CLEANLY.
+                 *  Stuart, 2026-09-21: "It should be a case of the radio remembers its last left
+                 *  state and then idles or hands over to another app if that option is set and
+                 *  then on a new user reconnecting that previously saved state gets resumed as if
+                 *  the radio never powered down or handed over. Yes I know DAB will need to
+                 *  reacquire but that is seconds."
+                 *  ★★ So the INTENT survives and the HARDWARE does not have to. That is strictly
+                 *     safer than leaving a half-built ensemble up while the radio is parked — or
+                 *     released, which is a full device teardown the DAB pipeline cannot survive —
+                 *     and it is how every other mode already behaves: the VFO is server state,
+                 *     re-applied when somebody arrives. */
+                g_dabWantChannel.store(g_dabChannel.load(std::memory_order_relaxed),
+                                       std::memory_order_relaxed);
+                LOGI("[DAB] last listener left — remembering block %d and restoring the receiver; "
+                     "the next listener is put back on it",
+                     g_dabWantChannel.load(std::memory_order_relaxed));
                 dabRestore();
             }
             if (stillEmpty && !stopping.load()) armIdlePark();
