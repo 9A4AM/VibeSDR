@@ -39,11 +39,18 @@ namespace vsradiodns {
  *          most stations are not in RadioDNS, and that must degrade quietly to the name search).
  *  ★ Cached in memory per service, including NEGATIVE results: a station that is not in RadioDNS
  *    must not cost a DNS query and an HTTP fetch every time somebody tunes past it. */
-std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz);
+/** ★★★ `nameOut`, when given, also returns the BROADCASTER'S OWN STATION NAME from the same SI.xml
+ *  <service> block — mediumName, else shortName, else longName. It costs NOTHING: the document is
+ *  already fetched and already cached for the logo, and the name was previously parsed past and
+ *  discarded. It is authoritative and PI-keyed, so it beats reassembling a rotating PS.
+ *  ★ Optional so every existing caller keeps compiling and keeps its current behaviour. */
+std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz,
+                    std::string* nameOut = nullptr);
 /** ★ The same lookup for a DAB service: <scids>.<sid>.<eid>.<gcc>.dab.radiodns.org, bearer
  *  dab:<gcc>.<eid>.<sid>.<scids> (RadioDNS TS 103 270). This is how a DAB radio gets its logos
  *  when the multiplex carries no slideshow — and neither multiplex here does (2026-09-07). */
-std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids);
+std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids,
+                       std::string* nameOut = nullptr);
 
 /**
  * The ECC a station's country and PI nibble imply — for the stations that never send one.
@@ -74,9 +81,10 @@ std::vector<std::string> eccCandidates(const std::string& piHex, const std::stri
 /** The logo for a service, working the ECC out when the station transmits none — which is most of
  *  them. Prefer this over logoFor(): deriving from the receiver's configured country fails
  *  whenever that country is unset, which on the demo server meant the whole feature did nothing.
- *  @param preferIso the receiver's own country, tried first; may be empty. */
+ *  @param preferIso the receiver's own country, tried first; may be empty.
+ *  @param nameOut  if given, also receives the broadcaster's own station name — see logoFor(). */
 std::string logoForAuto(const std::string& piHex, const std::string& ecc, double freqHz,
-                        const std::string& preferIso);
+                        const std::string& preferIso, std::string* nameOut = nullptr);
 
 /** ★★ Empty the lookup cache. Answers are remembered — hits for a day, misses for an hour — so a
  *  WRONG logo is remembered exactly as confidently as a right one, and there is otherwise no way

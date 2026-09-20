@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- testdata-si.xml — a REAL SI.xml service block (Global's Capital Birmingham, fetched
+     2026-09-21 from epg.musicradio.com), trimmed to what the parser must handle.
+     ★★ The <serviceProvider> and <serviceGroupMember> around it are here ON PURPOSE: both start
+        with the characters "<service", and a prefix match would scope the lookup to one of them
+        and hand back the PROVIDER's name instead of the station's. -->
+<serviceInformation xmlns="http://www.worlddab.org/schemas/spi/31">
+  <services>
+    <serviceProvider>
+      <shortName>Global</shortName>
+      <longName>Global Media &amp; Entertainment</longName>
+    </serviceProvider>
+    <serviceGroup id="decoy">
+      <serviceGroupMember>
+        <shortName>NotThis</shortName>
+        <mediumName>Wrong Station</mediumName>
+      </serviceGroupMember>
+    </serviceGroup>
+<service>
+      <shortName>Capital</shortName>
+      <mediumName>Capital</mediumName>
+      <longName>Capital Birmingham</longName>
+      <mediaDescription>
+        <shortDescription>Birmingham's No.1 Hit Music Station</shortDescription>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="32" url="http://owdo.thisisglobal.com/2.0/id/145/logo/32x32.png" width="32" mimeValue="image/png"/>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="32" url="http://owdo.thisisglobal.com/2.0/id/145/logo/112x32.png" width="112" mimeValue="image/png"/>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="128" url="http://owdo.thisisglobal.com/2.0/id/145/logo/128x128.png" width="128" mimeValue="image/png"/>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="240" url="http://owdo.thisisglobal.com/2.0/id/145/logo/320x240.jpg" width="320" mimeValue="image/jpg"/>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="600" url="http://owdo.thisisglobal.com/2.0/id/145/logo/600x600.jpg" width="600" mimeValue="image/jpg"/>
+      </mediaDescription>
+      <mediaDescription>
+        <multimedia height="800" url="http://owdo.thisisglobal.com/2.0/id/145/logo/800x800.jpg" width="800" mimeValue="image/jpg"/>
+      </mediaDescription>
+      <link mimeValue="text/html" uri="http://www.capitalfm.com/birmingham/"/>
+      <link uri="http://www.tunein.com/radio/s-s25008"/>
+      <link mimeValue="text/html" uri="http://en.wikipedia.org/wiki/Capital_Birmingham"/>
+      <bearer bitrate="48" cost="70" id="https://media-ssl.musicradio.com/CapitalBirmingham" mimeValue="audio/aacp" offset="16000"/>
+      <bearer bitrate="128" cost="73" id="https://media-ssl.musicradio.com/CapitalBirminghamMP3" mimeValue="audio/mpeg" offset="10000"/>
+      <bearer cost="30" id="fm:ce1.c670.10220"/>
+      <bearer cost="20" id="dab:ce1.c183.c670.0" mimeValue="audio/mpeg" offset="2500"/>
+      <bearer cost="20" id="dab:ce1.c18b.c670.0" mimeValue="audio/mpeg" offset="2500"/>
+      <genre href="urn:tva:metadata:cs:ContentCS:2004:3.6.10">Hit-Chart/Song Requests</genre>
+      <genre href="urn:tva:metadata:cs:ContentCS:2004:3.6.8">Electronic/Club/Urban/Dance</genre>
+      <genre href="urn:tva:metadata:cs:ContentCS:2004:3.1.1.11">Local/Regional</genre>
+      <genre href="urn:tva:metadata:cs:ContentCS:2004:3.6.8.14">Dance/Dance-pop</genre>
+      <genre href="urn:tva:metadata:cs:ContentCS:2004:3.1.4.12">Showbiz</genre>
+      <radiodns fqdn="rdns.musicradio.com" serviceIdentifier="capitalbirmingham"/>
+      <serviceGroupMember id="capital"/>
+    </service>
+  </services>
+</serviceInformation>

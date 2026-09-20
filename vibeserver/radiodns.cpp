@@ -27,7 +27,10 @@ namespace {
 std::mutex g_mtx;
 std::string g_dir = "/var/lib/vibeserver";
 
-struct Entry { std::string url; time_t at = 0; bool transient = false; };
+/** ★ `name` rides along with the url because they come from the SAME SI.xml fetch and the same
+ *  <service> block — caching one and not the other would mean a second identical lookup for a
+ *  value we already had in hand, and the two could then disagree. */
+struct Entry { std::string url; std::string name; time_t at = 0; bool transient = false; };
 /** ★ Set by the resolvers when the NETWORK answered nothing at all — a DoH query that returned no
  *  document is not "this station has no logo", it is "we could not ask". Remembering that for an
  *  hour as a miss is exactly the unreliability Stuart has always seen on the Xcover: one slow
@@ -178,11 +181,64 @@ std::string resolveCname(const std::string& fqdn) {
  *     the file would hand back a SIBLING STATION'S logo — Radio 1's artwork on Radio 4. The bearer
  *     id is what says which service is ours, so the search is scoped to the <service> block that
  *     contains it. */
-std::string logoFromSpi(const std::string& xml, const std::string& bearerId) {
+/** ★★★ AND THE BROADCASTER'S OWN NAME, WHICH WE FETCHED ALL ALONG AND THREW AWAY.
+ *
+ *  SI.xml carries <shortName>/<mediumName>/<longName> in the same <service> block as the logo, and
+ *  this function parsed straight past them. That is the whole of the "we already query radiodns for
+ *  the logos anyway" fix (Stuart, 2026-09-20): for any station whose logo resolves we are one return
+ *  value away from an AUTHORITATIVE station name, PI-keyed, already cached, no extra network call
+ *  and no third-party terms.
+ *  ★★ It is why a marquee PS need not be reassembled at all for these stations — the broadcaster has
+ *     already told us what they are called, in the right word order.
+ *  ★ mediumName first: shortName is 8 characters (the same cramped field as PS, often "MASSA"),
+ *    longName can be a legal entity ("Radio Massa Umuarama Ltda"). mediumName (≈16) is the one
+ *    humans would write on the tin. Fall back in both directions rather than return nothing. */
+static std::string nameFromServiceBlock(const std::string& block) {
+    auto tagText = [&](const char* tag) -> std::string {
+        const std::string openTag = std::string("<") + tag;
+        size_t i = block.find(openTag);
+        if (i == std::string::npos) return {};
+        // ★ Tolerate attributes and namespace prefixes: match "<mediumName" then its own '>'.
+        const size_t gt = block.find('>', i);
+        if (gt == std::string::npos) return {};
+        const std::string closeTag = std::string("</") + tag + ">";
+        const size_t e = block.find(closeTag, gt);
+        if (e == std::string::npos) return {};
+        std::string t = block.substr(gt + 1, e - gt - 1);
+        // Trim whitespace the pretty-printers leave behind.
+        const size_t a = t.find_first_not_of(" \t\r\n");
+        const size_t z = t.find_last_not_of(" \t\r\n");
+        if (a == std::string::npos) return {};
+        t = t.substr(a, z - a + 1);
+        // ★ An empty or entity-only name is not a name; let the caller fall down the ladder.
+        return t.find('<') == std::string::npos ? t : std::string();
+    };
+    for (const char* tag : { "mediumName", "shortName", "longName" }) {
+        const std::string n = tagText(tag);
+        if (!n.empty()) return n;
+    }
+    return {};
+}
+
+std::string logoFromSpi(const std::string& xml, const std::string& bearerId, std::string* nameOut) {
     const size_t b = xml.find(bearerId);
     if (b == std::string::npos) return {};
-    // Walk back to this service's opening tag, forward to its close.
-    const size_t open = xml.rfind("<service", b);
+    /* Walk back to this service's opening tag, forward to its close.
+     * ★★ THE TAG MUST MATCH EXACTLY. "<service" is a PREFIX of "<serviceProvider",
+     *    "<serviceGroup" and "<serviceGroupMember", and a plain rfind would happily stop on any of
+     *    them — handing back the PROVIDER's name ("Global Media & Entertainment") instead of the
+     *    station's ("Capital Birmingham"), which is the sibling-station mix-up this scoping exists
+     *    to prevent, one level up. Measured on Global's real SI.xml (411 KB, 1159 bearers): none
+     *    would misresolve today, so this is latent rather than live — but it costs one predicate. */
+    size_t open = std::string::npos;
+    for (size_t k = b; k != std::string::npos; ) {
+        k = xml.rfind("<service", k);
+        if (k == std::string::npos) break;
+        const char after = (k + 8 < xml.size()) ? xml[k + 8] : '\0';
+        if (after == '>' || after == ' ' || after == '\t' || after == '\r' || after == '\n') { open = k; break; }
+        if (k == 0) break;
+        k--;
+    }
     size_t close = xml.find("</service>", b);
     if (open == std::string::npos) return {};
     if (close == std::string::npos) close = xml.size();
@@ -216,6 +272,9 @@ std::string logoFromSpi(const std::string& xml, const std::string& bearerId) {
         if (wp != std::string::npos) w = atoi(tag.c_str() + wp + 7);
         if (w > bestW) { bestW = w; best = url; }
     }
+    // ★ The name is taken from the SAME <service> block as the logo, so it can never be a sibling
+    //   station's — the bearer id scoped both.
+    if (nameOut) *nameOut = nameFromServiceBlock(block);
     return best;
 }
 
@@ -348,19 +407,21 @@ void setDir(const std::string& dir) {
 
 /** The shared half: cache, CNAME, SRV, SPI document, bearer match. FM and DAB differ only in
  *  the name they ask for and the bearer they look for. */
-static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer);
+static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer,
+                               std::string* nameOut = nullptr);
 
-std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids) {
+std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids,
+                       std::string* nameOut) {
     if (ecc.size() < 2 || eidHex.size() != 4 || (sidHex.size() != 4 && sidHex.size() != 8) || scids < 0 || scids > 15) return {};
     const std::string sid = lower(sidHex), eid = lower(eidHex);
     // ★ The GCC is the SId's country nibble plus the ECC, exactly as for FM (see fqdnFor).
     const std::string gcc = std::string(1, sid[0]) + lower(ecc.substr(ecc.size() - 2));
     char sc[4]; std::snprintf(sc, sizeof sc, "%x", scids);
     const std::string fqdn = std::string(sc) + "." + sid + "." + eid + "." + gcc + ".dab.radiodns.org";
-    return logoViaFqdn(fqdn, "dab:" + gcc + "." + eid + "." + sid + "." + std::string(sc));
+    return logoViaFqdn(fqdn, "dab:" + gcc + "." + eid + "." + sid + "." + std::string(sc), nameOut);
 }
 
-std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz) {
+std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz, std::string* nameOut) {
     const std::string fqdn = fqdnFor(piHex, ecc, freqHz);
     if (fqdn.empty()) return {};
     const std::string pi = lower(piHex);
@@ -368,21 +429,25 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
     char f[16];
     std::snprintf(f, sizeof f, "%05d", (int)std::llround(freqHz / 10000.0));
     // fm:<gcc>.<pi>.<freq> — the same three fields, in the order the SPI uses.
-    return logoViaFqdn(fqdn, "fm:" + gcc + "." + pi + "." + std::string(f));
+    return logoViaFqdn(fqdn, "fm:" + gcc + "." + pi + "." + std::string(f), nameOut);
 }
 
-static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer) {
+static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer,
+                               std::string* nameOut) {
     const time_t now = time(nullptr);
     {
         std::lock_guard<std::mutex> lk(g_mtx);
         auto it = g_cache.find(fqdn);
         if (it != g_cache.end()) {
             const time_t ttl = it->second.transient ? kTransientTtl : it->second.url.empty() ? kMissTtl : kHitTtl;
-            if (now - it->second.at < ttl) return it->second.url;
+            if (now - it->second.at < ttl) {
+                if (nameOut) *nameOut = it->second.name;
+                return it->second.url;
+            }
         }
     }
 
-    std::string url;
+    std::string url, name;
     g_lastQueryTransient = false;
     const std::string anchor = resolveCname(fqdn);
     // ★ _radiospi first (the modern name for this service), _radioepg as the older fallback —
@@ -400,11 +465,12 @@ static std::string logoViaFqdn(const std::string& fqdn, const std::string& beare
                                      : "http://" + hostPort;
         const std::string xml = httpGet(base + "/radiodns/spi/3.1/SI.xml", "");
         if (xml.empty()) g_lastQueryTransient = true;     // the broadcaster's server did not answer
-        else url = logoFromSpi(xml, bearer);
+        else url = logoFromSpi(xml, bearer, &name);
     }
 
     std::lock_guard<std::mutex> lk(g_mtx);
-    g_cache[fqdn] = Entry{ url, now, url.empty() && g_lastQueryTransient };
+    g_cache[fqdn] = Entry{ url, name, now, url.empty() && g_lastQueryTransient };
+    if (nameOut) *nameOut = name;
     return url;
 }
 
@@ -422,11 +488,11 @@ static std::string logoViaFqdn(const std::string& fqdn, const std::string& beare
  *    across a BORDER now works too, which the country-derived version refused by design.
  */
 std::string logoForAuto(const std::string& piHex, const std::string& ecc, double freqHz,
-                        const std::string& preferIso) {
+                        const std::string& preferIso, std::string* nameOut) {
     const bool haveEcc = ecc.size() >= 2 && ecc != "00" && ecc != "0";
-    if (haveEcc) return logoFor(piHex, ecc, freqHz);
+    if (haveEcc) return logoFor(piHex, ecc, freqHz, nameOut);
     for (const auto& cand : eccCandidates(piHex, preferIso)) {
-        const std::string url = logoFor(piHex, cand, freqHz);
+        const std::string url = logoFor(piHex, cand, freqHz, nameOut);
         if (!url.empty()) return url;
     }
     return {};

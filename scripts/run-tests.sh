@@ -45,6 +45,9 @@ deps_for() {
     test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all
+    #    call vibeproc::run. It was missing, so those three "did not build" — and a suite that does
+    #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
@@ -52,9 +55,10 @@ deps_for() {
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     test-connlog)       echo "" ;;
     test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
-    test-radiodns-ecc)  echo "$SRC/radiodns.cpp" ;;
-    test-geoip)         echo "$SRC/geoip.cpp" ;;
-    test-asndb)         echo "$SRC/asndb.cpp" ;;
+    test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
+    test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
+    test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
+    test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
     *)                  echo "" ;;
   esac
