@@ -9,6 +9,10 @@
 #   scripts/check-deb.sh path/to/vibeserver_x.y.z_arch.deb
 set -u
 deb=${1:?usage: check-deb.sh <package.deb>}
+# ★ ABSOLUTE, because the ar path below runs from a temp directory — a RELATIVE path silently became
+#   "cannot read", which is a checker that fails open. The one thing this script must never do.
+case "$deb" in /*) ;; *) deb="$PWD/$deb" ;; esac
+[ -f "$deb" ] || { echo "no such package: $deb"; exit 2; }
 # ★ Works where the package is BUILT as well as where it is installed: a Mac has no dpkg-deb, and a check that
 #   only runs on Debian is a check I would skip exactly when I am building by hand on the Mac.
 if command -v dpkg-deb >/dev/null 2>&1; then
