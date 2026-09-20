@@ -579,9 +579,18 @@ public:
         }
         pending_.clear();
         fclose(f);
-        // ★ Rewrite rather than grow for ever. Only when it is well past the cap, so the common
-        //   case stays a cheap append.
-        if (written_ > kMax * 2) { rewriteLocked(); written_ = 0; }
+        /* ★★★ ROTATE, DO NOT TRUNCATE. This called rewriteLocked(), whose own comment says it writes
+         *  the in-memory tail back out "discarding whatever the file held beyond it" — so history was
+         *  permanently cut to kMax (2000) rows every time the file passed 4000.
+         *  ★★ MEASURED on the Pi 500, 2026-09-20: the busiest radio takes 465 connections a day, so
+         *     2000 rows is about FOUR DAYS. Stuart believed he had months, and on the QUIET radios he
+         *     did (19/day → 105 days) — which is exactly why this was never noticed.
+         *  ★★ A year is not expensive: ~170k rows at ~150 bytes is ~25 MB, well inside the 200 MB the
+         *     journal is now capped at. The in-RAM deque stays at kMax because that is the LIVE VIEW;
+         *     the file is the LOG, and the two had quietly become the same thing here.
+         *  ★ Rotation rather than one huge file so retention drops a whole archive with an unlink
+         *    instead of rewriting 25 MB on a Pi. */
+        if (written_ > kMax * 2) { rotateIfDueLocked(); written_ = 0; }
     }
 
     void open(const std::string& ip, const std::string& session, const std::string& agent,
@@ -867,6 +876,30 @@ public:
 
 private:
     static const size_t kMax = 2000;
+    /** ★★ THE FILE IS THE LOG; kMax above is only the LIVE VIEW's depth. Rotate the current file,
+     *  then let the oldest archive fall off the end. A count of fixed-size archives bounds BOTH the
+     *  bytes and, on any real receiver, the time — where an age rule alone would have no ceiling on
+     *  a receiver busier than any we have seen. ~48 MB and ≈ a year on Stuart's busiest radio. */
+    static const long   kRotateBytes  = 4L * 1024 * 1024;
+    static const int    kKeepArchives = 12;
+    void rotateIfDueLocked() {
+        if (path_.empty()) return;
+        long sz = 0;
+        if (FILE* f = fopen(path_.c_str(), "rb")) { fseek(f, 0, SEEK_END); sz = ftell(f); fclose(f); }
+        if (sz < kRotateBytes) return;
+        char buf[1200], buf2[1200];
+        std::snprintf(buf, sizeof buf, "%s.%d", path_.c_str(), kKeepArchives);
+        remove(buf);                                   // the oldest falls off the end
+        for (int i = kKeepArchives - 1; i >= 1; --i) { // .11 <- .10 <- … <- .1
+            std::snprintf(buf,  sizeof buf,  "%s.%d", path_.c_str(), i);
+            std::snprintf(buf2, sizeof buf2, "%s.%d", path_.c_str(), i + 1);
+            rename(buf, buf2);                         // a no-op when `buf` is absent
+        }
+        std::snprintf(buf, sizeof buf, "%s.1", path_.c_str());
+        rename(path_.c_str(), buf);
+        // ★ The next append recreates the current file. Nothing is lost — recs_ is the live view and
+        //   the archive holds the history.
+    }
     /** ★ Far smaller than the connection log: this is a curiosity, not a record to keep, and it is
      *  filled by whoever is scanning rather than by people using the receiver. */
     static const size_t kMaxScans = 200;
@@ -876,7 +909,17 @@ private:
         std::lock_guard<std::mutex> lk(mtx_);
         recs_.clear();
         if (path_.empty()) return;
-        FILE* f = fopen(path_.c_str(), "r");
+        /* ★★ READ THE NEWEST ARCHIVE FIRST, THEN THE CURRENT FILE, so the deque ends up holding the
+         *  newest kMax rows across a rotation boundary. Without this, a restart just after the file
+         *  rotated would show an almost EMPTY connection page — which reads exactly like "the log
+         *  was wiped", the very fault this rotation was added to stop. One archive is enough: it is
+         *  4 MB (~28k rows), far more than kMax. */
+        char prev[1200];
+        std::snprintf(prev, sizeof prev, "%s.1", path_.c_str());
+        for (const char* which : { (const char*)prev, path_.c_str() }) loadFileLocked(which);
+    }
+    void loadFileLocked(const char* which) {
+        FILE* f = fopen(which, "r");
         if (!f) return;
         char line[1024];
         while (fgets(line, sizeof line, f)) {
@@ -898,7 +941,18 @@ private:
             while (recs_.size() > kMax) recs_.pop_front();
         }
         fclose(f);
-        written_ = recs_.size();
+        /* ★ How many rows are in the CURRENT file — the rotation trigger counts appends since the
+         *  last rotate, so an archive's rows must not inflate it. recs_ may hold rows from the
+         *  archive too, which is why this is not simply recs_.size() any more. */
+        if (path_ == which) {
+            size_t n = 0;
+            if (FILE* g = fopen(which, "r")) {
+                char l[1024];
+                while (fgets(l, sizeof l, g)) ++n;
+                fclose(g);
+            }
+            written_ = n;
+        }
     }
 
     /** Write the in-memory tail back out, discarding whatever the file held beyond it. */
