@@ -36,6 +36,40 @@
 
 namespace vibe {
 
+/** ★★★ WHERE IT HAS GOT TO, live (Stuart, 2026-09-20: "us humans need to see things working"). Two minutes of a
+ *  blank screen is indistinguishable from a hang, and the one thing an owner must not do is power-cycle the box
+ *  in the middle of it. runBenchmark keeps this up to date as it goes; a host reads it from another thread —
+ *  the HTTP server is still answering while the measurement runs, because only the RADIO is stopped.
+ *  ★ Steps, not seconds: each scenario takes about as long as the next, so a step count is an honest bar. A
+ *    remaining-time estimate would be a guess dressed up as a fact. */
+struct BenchProgress {
+    std::atomic<bool> running{false};
+    std::atomic<int>  step{0}, steps{0};
+    std::mutex        m;
+    std::string       label;
+};
+inline BenchProgress& benchProgress() { static BenchProgress p; return p; }
+
+/** Move to the next step and name it. */
+inline void benchStep(const std::string& label) {
+    auto& p = benchProgress();
+    p.step.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(p.m);
+    p.label = label;
+}
+/** {"running":bool,"step":n,"steps":n,"label":"..."} — what a progress bar needs and nothing more. */
+inline std::string benchProgressJson() {
+    auto& p = benchProgress();
+    std::string label;
+    { std::lock_guard<std::mutex> lk(p.m); label = p.label; }
+    std::string esc;
+    for (char c : label) { if (c == '"' || c == '\\') esc += '\\'; esc += c; }
+    return std::string("{\"running\":") + (p.running.load() ? "true" : "false")
+         + ",\"step\":" + std::to_string(p.step.load())
+         + ",\"steps\":" + std::to_string(p.steps.load())
+         + ",\"label\":\"" + esc + "\"}";
+}
+
 namespace benchdetail {
 using vibedsp::cf32;
 using vibedsp::RxPipeline;
@@ -314,6 +348,16 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     // ★ moreRows: rows a host adds that need more than vibedsp — DAB (vibe_benchmark_dab.h: runDabRows), which
     //   pulls in the DAB service and its audio decoder. A row graded "none" (pct -1) could not be measured.
     // -2 = measure it here (desktop/Linux); an Android host passes its own figure, or -1 for "could not".
+    /* ★ The step count is fixed before anything runs so the bar never jumps backwards: the network probe, the
+     *  scenarios, the four locked-range listeners, and the two DAB rows when a host supplies them. */
+    {
+        auto& p = benchProgress();
+        p.running.store(true);
+        p.step.store(0);
+        p.steps.store(1 + 7 + 4 + (moreRows ? 2 : 0));
+        { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
+    }
+    benchStep("network uplink");
     if (uplinkKBps == -2) { if (progress) progress(0, 1, "network uplink"); uplinkKBps = measureUplinkKBps(); }
     using namespace benchdetail;
     using M = RxPipeline::Mode;
@@ -339,6 +383,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     std::vector<Result> res;
     std::map<double, std::vector<cf32>> fmCache, nbCache;
     for (int i = 0; i < N; ++i) {
+        benchStep(sc[i].label);
         if (progress) progress(i, N, sc[i].label);
         auto& cache = sc[i].fm ? fmCache : nbCache;
         if (!cache.count(sc[i].fs))
@@ -372,6 +417,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         int fftSize = 4096; while (fftSize < (int)(fs / 75.0) && fftSize < 32768) fftSize *= 2;
         const auto wide = fmStation(fs, 1.0, 200000.0);
         for (const auto& l : lk) {
+            benchStep(l.label);
             if (progress) progress(N, N, l.label);
             int chanBins = 64;
             const double need = std::max(l.bw * 2.5, 24000.0);
@@ -384,6 +430,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");
+    { auto& p = benchProgress(); p.step.store(p.steps.load()); { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; } }
     // ★ The recommended rate: the highest WFM rate that grades green, never below 1.024 MS/s.
     double rec = 1024000;
     for (const auto& r : res)
@@ -419,6 +466,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         char nb[96]; snprintf(nb, sizeof nb, ",\"network\":{\"uplinkKBps\":%.0f,\"users\":%d}", uplinkKBps, (int)std::floor(uplinkKBps / 100.0));
         j += nb;
     } else j += ",\"network\":null";
+    benchProgress().running.store(false);
     j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
        + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}}";
     return j;

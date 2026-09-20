@@ -147,7 +147,10 @@ inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, 
     std::vector<benchdetail::Result> out;
     DabClip clip;
     if (clipPath.empty() || !loadDabClip(clipPath, clip)) return out;
+    // ★ These are the slowest rows (each is fed in real time, warm-up included), so they say so — see benchStep.
+    benchStep("DAB+");
     out.push_back(runDabRow("dab",      "DAB+ @ 2.048 MS/s",                   clip, false, seconds));
+    benchStep("DAB+ with the station label scan");
     out.push_back(runDabRow("dab_scan", "DAB+ + station label scan @ 2.048 MS/s", clip, true,  seconds));
     return out;
 }

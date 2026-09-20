@@ -104,6 +104,7 @@
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
+#include "vibe_benchmark.h"   // ★ benchProgressJson — the live progress a page draws its bar from
 #include "fd_passing.h"
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
@@ -14215,6 +14216,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             g_vsAuthState.recordOk(ip);
             if (!isPost) {
+                /* ★ ?progress=1 — where a RUNNING measurement has got to, for the page's bar. Answered while the
+                 *  run is in flight: only the RADIO is stopped, the HTTP server is still serving. */
+                if (reqLine.find("progress=1") != std::string::npos) {
+                    reply(200, "OK", vibe::benchProgressJson());
+                    return;
+                }
                 const std::string j = getFn();
                 reply(200, "OK", j.empty() ? "{\"v\":0}" : j);
                 return;

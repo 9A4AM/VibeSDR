@@ -1537,9 +1537,18 @@ int main(int argc, char** argv) {
      *  ★ The result is saved beside the config, so the admin page can show it without re-running. */
     LocalSdrShim::setBenchmarkHandlers(
         [](bool force, std::string& err) -> std::string {
-            static std::mutex runMtx;
-            std::unique_lock<std::mutex> lk(runMtx, std::try_to_lock);
-            if (!lk.owns_lock()) { err = "a benchmark is already running"; return ""; }
+            /* ★★★ START IT AND ANSWER AT ONCE — NEVER MEASURE ON THE HTTP THREAD (2026-09-20). Two separate
+             *  faults, one cause:
+             *   1. `shim.stop()` closes the client sockets and JOINS the per-listener and radio threads. This
+             *      request is served ON one of the server's own connection threads, so stopping from here made
+             *      it wait for itself: the whole server wedged and answered nothing until it was restarted.
+             *      The repo's own "shim gets stuck" note in stopLocked() is the same shape.
+             *   2. Even without that, a reply held for two minutes cannot cross a Cloudflare tunnel — the origin
+             *      timeout returns an HTML error page at ~100 s, which is what the setup page choked on.
+             *  So: validate here, hand the work to a thread of its own, and report progress separately. The page
+             *  follows vibe::benchProgressJson() and picks the result up when it is saved. */
+            auto& p = vibe::benchProgress();
+            if (p.running.load()) { err = "a benchmark is already running"; return ""; }
             auto& shim = LocalSdrShim::instance();
             const int listeners = shim.listenerCount();
             if (listeners > 0 && !force) {
@@ -1547,27 +1556,32 @@ int main(int argc, char** argv) {
                     + " connected — the radio goes off the air for the measurement";
                 return "";
             }
-            const bool wasRunning = shim.isRunning();
-            if (wasRunning) shim.stop();
-            // ★ The DAB rows need the clip; without it they are simply absent (never a guessed figure).
-            const std::string clip = vibe::ensureDabClip(vsBenchDir());
-            std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
-                                               [&] { return vibe::runDabRows(clip, 6.0); });
-            vsBenchSave(j);
-            if (wasRunning) {
-                // ★★ Same restart as the settings save: reply first, then come back. A detached thread so the
-                //    HTTP reply is already on the wire — see the "Save and reboot" path.
-                std::thread([] {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                    if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
-                    reapRadios();
-                    const std::string me = selfExePath();
-                    if (!me.empty()) execv(me.c_str(), g_argv);
-                    execvp(g_argv[0], g_argv);
-                    _exit(0);
-                }).detach();
-            }
-            return j;
+            // ★ Claimed HERE, before the thread starts, so a second press cannot slip past the check above.
+            p.running.store(true);
+            p.step.store(0); p.steps.store(0);
+            { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
+            std::thread([] {
+                auto& shim = LocalSdrShim::instance();
+                const bool wasRunning = shim.isRunning();
+                if (wasRunning) shim.stop();          // safe here: this thread is not one stop() joins
+                const std::string clip = vibe::ensureDabClip(vsBenchDir());
+                const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
+                                                         [&] { return vibe::runDabRows(clip, 6.0); });
+                vsBenchSave(j);
+                vibe::benchProgress().running.store(false);
+                if (!wasRunning) return;              // nothing was taken off the air; nothing to put back
+                /* ★★ The radio comes back by restarting the process, as a settings save does — rebuilding a
+                 *  driver-specific start here would be a second implementation of what main() already does.
+                 *  ★ A moment's grace so the page can read the finished progress and the saved result first. */
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
+                reapRadios();
+                const std::string me = selfExePath();
+                if (!me.empty()) execv(me.c_str(), g_argv);
+                execvp(g_argv[0], g_argv);
+                _exit(0);
+            }).detach();
+            return "{\"started\":true}";
         },
         []() -> std::string { return vsBenchLoad(); });
 

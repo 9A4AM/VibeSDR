@@ -1330,26 +1330,95 @@ async function benchLoad() {
   } catch (e) { /* the card simply stays empty */ }
 }
 
+/** ★★ A BAR, BECAUSE TWO MINUTES OF NOTHING LOOKS LIKE A HANG (Stuart, 2026-09-20: "us humans need to see
+ *  things working"). It names what is being measured as well as how far along it is. The server answers this
+ *  while the run is in flight — only the RADIO is stopped, the HTTP side keeps serving. */
+let benchPoll = 0;
+function benchBar(pct, label) {
+  const wrap = $("benchBarWrap");
+  if (!wrap) return;
+  wrap.classList.remove("hide");
+  $("benchBar").style.width = Math.max(0, Math.min(100, pct)) + "%";
+  $("benchStep").textContent = label;
+}
+
+/** ★★★ WATCH, DO NOT WAIT. The measurement used to be the POST's own reply, which broke twice over: it wedged
+ *  the server (stop() joins the thread serving the request) and it outlived the tunnel's ~100 s origin timeout,
+ *  so the page was handed a Cloudflare HTML page and reported a JSON parse error. Now the POST only STARTS it;
+ *  this follows the progress and picks the result up at the end.
+ *  ★ The server RESTARTS itself when it finishes, so fetches failing near the end is expected, not an error —
+ *    keep trying until it answers again, then read the saved result. */
+async function benchFollow() {
+  const msg = $("benchMsg");
+  let sawRunning = false, misses = 0;
+  return new Promise(resolve => {
+    benchPoll = setInterval(async () => {
+      let p = null;
+      try {
+        const r = await fetch("/vibeserver/benchmark?progress=1&" + await authQuery(), {cache:"no-store"});
+        if (r.ok) p = await r.json();
+      } catch (e) { /* the server is restarting — see above */ }
+      if (!p) {
+        misses++;
+        if (sawRunning) benchBar(100, "Finishing \u2014 the server is restarting to put the radio back on the air\u2026");
+        // ★ Two minutes of silence with nothing ever started means something else is wrong.
+        if (!sawRunning && misses > 20) { clearInterval(benchPoll); benchPoll = 0; resolve(false); }
+        return;
+      }
+      misses = 0;
+      if (p.running) {
+        sawRunning = true;
+        const pct = p.steps > 0 ? Math.round(p.step / p.steps * 100) : 0;
+        benchBar(pct, p.label && p.label !== "done" ? `${pct}% \u00b7 testing ${p.label}` : `${pct}%`);
+        return;
+      }
+      if (!sawRunning && misses === 0 && p.steps === 0) return;   // not started yet
+      clearInterval(benchPoll); benchPoll = 0;
+      benchBar(100, "Done.");
+      if (msg) msg.textContent = "Done. The server restarts to put the radio back on the air.";
+      resolve(true);
+    }, 1000);
+  });
+}
+
 async function benchRun(force) {
   const btn = $("benchRun"), msg = $("benchMsg");
-  if (btn) { btn.disabled = true; btn.textContent = "Measuring…"; }
-  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes about two minutes.";
+  if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
+  if (btn) { btn.disabled = true; btn.textContent = "Measuring\u2026"; }
+  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes about two minutes. "
+    + "Leave it be \u2014 do not switch the machine off while it runs.";
+  benchBar(0, "Starting\u2026");
   try {
     const r = await fetch("/vibeserver/benchmark?" + await authQuery() + (force ? "&force=1" : ""), {
       method: "POST", cache: "no-store"
     });
-    const j = await r.json();
+    // ★ r.ok FIRST, and the body read defensively: a tunnel error page is HTML, and parsing it as JSON is what
+    //   produced "The string did not match the expected pattern" instead of something anyone could act on.
+    const body = await r.text();
+    let j = {};
+    try { j = JSON.parse(body); } catch (e) { j = {}; }
     if (!r.ok) {
-      // ★ 409 = somebody is listening. Offer the override rather than refusing flatly — it is the owner's radio.
       if (r.status === 409 && !force && confirm((j.error || "Busy") + ".\n\nRun it anyway?")) return benchRun(true);
-      if (msg) msg.textContent = j.error || "The benchmark could not run.";
+      if (msg) msg.textContent = j.error || `The benchmark could not start (HTTP ${r.status}).`;
+      benchBar(0, "");
+      $("benchBarWrap").classList.add("hide");
       return;
     }
-    renderBench(j);
-    if (msg) msg.textContent = "Done. The server is restarting to put the radio back on the air.";
+    // Started. Follow it, then read the result the server saved.
+    const ok = await benchFollow();
+    if (!ok) { if (msg) msg.textContent = "The benchmark did not report any progress \u2014 check the server log."; return; }
+    // ★ The server is restarting; keep asking until it answers, then show what it measured.
+    for (let i = 0; i < 40; i++) {
+      try {
+        const rr = await fetch("/vibeserver/benchmark?" + await authQuery(), {cache:"no-store"});
+        if (rr.ok) { const res = await rr.json(); if (res && res.v) { renderBench(res); break; } }
+      } catch (e) { /* still coming back */ }
+      await new Promise(res => setTimeout(res, 2000));
+    }
   } catch (e) {
-    if (msg) msg.textContent = "The benchmark did not finish: " + (e && e.message ? e.message : e);
+    if (msg) msg.textContent = "The benchmark did not start: " + (e && e.message ? e.message : e);
   } finally {
+    if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
     if (btn) { btn.disabled = false; btn.textContent = "Run benchmark"; }
   }
 }
