@@ -9858,6 +9858,8 @@ const styles = StyleSheet.create({
   ownerNoticeX:    { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
   ownerNoticeXTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 20, lineHeight: 22,
                      opacity: 0.85 },
+  // ★ paddingHorizontal + borderWidth here = the receiver name's paddingRight in WaterfallView
+  //   (styles.stationId). They share a right-hand text column; change one, change both.
   rxClock:     { position: 'absolute', zIndex: 210,
                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },

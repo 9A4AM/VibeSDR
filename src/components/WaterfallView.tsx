@@ -2029,7 +2029,14 @@ function WaterfallView({
 
 const styles = StyleSheet.create({
   root: { overflow: 'hidden', backgroundColor: '#000' },
-  stationId: { position: 'absolute', right: 6, alignItems: 'flex-end' },
+  /* ★★ paddingRight MATCHES THE SESSION CLOCK'S INNER EDGE (12 padding + 1 border, SDRScreen's
+     rxClock). Both blocks are pinned to the same `rightInset`, so their BOXES lined up — but the
+     clock's numerals sit 13px inside its border while the receiver name ran to the very edge, and
+     the eye reads the two text columns, not the invisible box: "the clock seems to be slightly
+     offset which doesnt look professional" (Stuart). Indenting the name by the clock's own inset
+     puts the name, the locator and the countdown on ONE right-hand column.
+     ★ If rxClock's padding or border ever changes, this changes with it — see the note there. */
+  stationId: { position: 'absolute', right: 6, alignItems: 'flex-end', paddingRight: 13 },
   stationIdL1: {
     fontSize: 13, fontWeight: 'bold',
     textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 0,
