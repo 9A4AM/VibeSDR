@@ -558,9 +558,26 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
     install(FILES "${_vibe_cf_src}/LICENSE" DESTINATION share/doc/vibeserver
             RENAME LICENSE.cloudflared)
     message(STATUS "bundling cloudflared: ${_vibe_cf}")
+  elseif(VIBESERVER_ALLOW_NO_TUNNEL)
+    # ★ The documented escape hatch: a fresh clone that has not run fetch.sh still builds and runs, and the
+    #   person asking for it has said out loud that they know the tunnel will be missing.
+    message(WARNING "cloudflared not bundled (VIBESERVER_ALLOW_NO_TUNNEL) — the public listing will need one "
+                    "on PATH, and installing this package REMOVES any cloudflared a previous one installed")
   else()
-    message(WARNING "cloudflared not bundled (run tools/cloudflared-desktop/fetch.sh) — "
-                    "the public listing will need one on PATH")
+    # ★★★ FATAL BY DEFAULT, BECAUSE A PACKAGE WITHOUT IT TAKES SERVERS OFF THE PUBLIC MAP. On 2026-09-20 I
+    #     built an amd64 package on Stuart's Lenovo from a tree with no tools/ directory; this branch printed a
+    #     WARNING, the package installed, and it DELETED /usr/lib/vibeserver/cloudflared. The machine served
+    #     perfectly on the LAN while its public address was dark for forty minutes. Stuart noticed. I did not,
+    #     because I had filtered the build output down to "error:".
+    # ★★ VIBESERVER_STRICT_RADIOS was no help: only the apt publish scripts pass it, and the packages that go
+    #    on Stuart's own machines are built by hand without it. A guard that is off exactly when a human is
+    #    driving is not a guard. So the DEFAULT is refusal, and the escape hatch has to be asked for by name.
+    message(FATAL_ERROR
+            "cloudflared not found at ${_vibe_cf}.\n"
+            "A package built now would REMOVE the tunnel from every machine that installs it, and a server\n"
+            "behind CGNAT would lose the only address it has.\n"
+            "Fix: run tools/cloudflared-desktop/fetch.sh (or copy tools/cloudflared-desktop/bin/ into this\n"
+            "tree). To build without it on purpose: -DVIBESERVER_ALLOW_NO_TUNNEL=ON.")
   endif()
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
