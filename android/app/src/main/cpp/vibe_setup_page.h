@@ -172,7 +172,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <h2>What this box can carry</h2>
       <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
          can actually keep up with. The radio is off the air while it runs (about two minutes) and the server
-         restarts when it finishes.</p>
+         comes back by itself when it finishes.</p>
       <div class="row">
         <button id="benchRun" type="button">Run benchmark</button>
         <span class="note" id="benchWhen"></span>
@@ -1357,10 +1357,10 @@ async function benchFollow() {
       try {
         const r = await fetch("/vibeserver/benchmark?progress=1&" + await authQuery(), {cache:"no-store"});
         if (r.ok) p = await r.json();
-      } catch (e) { /* the server is restarting — see above */ }
+      } catch (e) { /* a poll that fails changes nothing — the run carries on */ }
       if (!p) {
         misses++;
-        if (sawRunning) benchBar(100, "Finishing \u2014 the server is restarting to put the radio back on the air\u2026");
+        if (sawRunning) benchBar(100, "Finishing\u2026");
         // ★ Two minutes of silence with nothing ever started means something else is wrong.
         if (!sawRunning && misses > 20) { clearInterval(benchPoll); benchPoll = 0; resolve(false); }
         return;
@@ -1375,7 +1375,7 @@ async function benchFollow() {
       if (!sawRunning && misses === 0 && p.steps === 0) return;   // not started yet
       clearInterval(benchPoll); benchPoll = 0;
       benchBar(100, "Done.");
-      if (msg) msg.textContent = "Done. The server restarts to put the radio back on the air.";
+      if (msg) msg.textContent = "Done \u2014 the radio is back on the air.";
       resolve(true);
     }, 1000);
   });
@@ -1407,7 +1407,7 @@ async function benchRun(force) {
     // Started. Follow it, then read the result the server saved.
     const ok = await benchFollow();
     if (!ok) { if (msg) msg.textContent = "The benchmark did not report any progress \u2014 check the server log."; return; }
-    // ★ The server is restarting; keep asking until it answers, then show what it measured.
+    // ★ Read what it measured. Tolerant of a fetch or two failing: the radio is being taken back as this runs.
     for (let i = 0; i < 40; i++) {
       try {
         const rr = await fetch("/vibeserver/benchmark?" + await authQuery(), {cache:"no-store"});

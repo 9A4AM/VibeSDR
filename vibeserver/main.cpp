@@ -1561,25 +1561,27 @@ int main(int argc, char** argv) {
             p.step.store(0); p.steps.store(0);
             { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
             std::thread([] {
+                /* ★★★ RELEASE THE RADIO, DO NOT STOP THE SERVER (2026-09-20). shim.stop() takes the HTTP server
+                 *  down with it, so the page had nothing left to ask for progress — it went silent for the whole
+                 *  run and then the process restarted. releaseRadio() is built for exactly this: it quiesces the
+                 *  source and stops the DSP while the HTTP server, admin page and config stay up, and
+                 *  reacquireRadio() takes it back. No restart, so nobody has to wait for the server to come home.
+                 *  ★ What stops is anything needing IQ — that is the honest cost of measuring, and it is why this
+                 *    refuses to run while somebody is listening. */
                 auto& shim = LocalSdrShim::instance();
-                const bool wasRunning = shim.isRunning();
-                if (wasRunning) shim.stop();          // safe here: this thread is not one stop() joins
+                const bool held = shim.isRunning() && !shim.radioIsReleased();
+                const bool released = held && shim.releaseRadio();
                 const std::string clip = vibe::ensureDabClip(vsBenchDir());
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
                                                          [&] { return vibe::runDabRows(clip, 6.0); });
                 vsBenchSave(j);
+                if (released) {
+                    std::string err;
+                    if (!shim.reacquireRadio(err))
+                        std::fprintf(stderr, "VibeServer: benchmark finished but the radio did not come back: %s\n",
+                                     err.c_str());
+                }
                 vibe::benchProgress().running.store(false);
-                if (!wasRunning) return;              // nothing was taken off the air; nothing to put back
-                /* ★★ The radio comes back by restarting the process, as a settings save does — rebuilding a
-                 *  driver-specific start here would be a second implementation of what main() already does.
-                 *  ★ A moment's grace so the page can read the finished progress and the saved result first. */
-                std::this_thread::sleep_for(std::chrono::seconds(3));
-                if (haveServiceManager()) { std::fflush(nullptr); _exit(0); }
-                reapRadios();
-                const std::string me = selfExePath();
-                if (!me.empty()) execv(me.c_str(), g_argv);
-                execvp(g_argv[0], g_argv);
-                _exit(0);
             }).detach();
             return "{\"started\":true}";
         },
