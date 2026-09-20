@@ -2225,6 +2225,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── UI overlay state ──────────────────────────────────────────────────────
 
   const [menuOpen,      setMenuOpen]      = useState(false);
+  /* ★★ HOW FAR IN FROM THE RIGHT THE HEADER BLOCKS SIT (Stuart, 2026-09-20: "the clock seems to be moved over
+   *  too much in landscape"). The safe-area inset on the notch side of a landscape iPhone is ~50pt, and taking
+   *  it whole pushed the clock and the receiver name a long way inside an edge nothing was covering — the
+   *  waterfall already draws under there. Enough of it to clear a rounded corner, not all of it. */
+  const rightInset = Math.max(12, Math.min(insets.right, 20) + 8);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
@@ -8910,7 +8915,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           <View pointerEvents="none" style={[styles.rxListeners, {
             top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0)
                  + (sessionLeftMs != null && !adminOk ? 52 : 0),
-            right: Math.max(12, insets.right + 8),
+            right: rightInset,
           }]}>
             {/* ★★ "OF N" IS THE HALF THAT MAKES THE NUMBER MEAN ANYTHING. "2 listening" says
                    nothing about whether there is room; "2 listening of 10" does — and it is what
@@ -8928,7 +8933,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {sessionLeftMs != null && !adminOk && (
         <View pointerEvents="none" style={[styles.rxClock, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
-          right: Math.max(12, insets.right + 8),
+          right: rightInset,
           /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
                  "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
                  happened, which is worse than saying nothing: it tells the listener they have been
@@ -8964,7 +8969,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View pointerEvents="none" style={[styles.adminNote, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
           left: Math.max(12, insets.left + 8),
-          right: Math.max(12, insets.right + 8),
+          right: rightInset,
         }]}>
           <Text style={styles.adminNoteTxt}>{adminNote}</Text>
         </View>
