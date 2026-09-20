@@ -1562,6 +1562,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #chatPhrases .btn { flex: 1 1 100%; }
   #chatLog { max-height: 30vh; }
 }
+/* ★★ THE "CHECK OUT" COMPOSER — a number, a unit and a mode, on one row that wraps on a phone. It is the only
+   place in this panel where something is typed, and what is typed is a NUMBER: the vocabulary stays closed. */
+.chatCheckOut { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; margin-top: 4px; }
+.chatCheckOut .chatFreq { flex: 1 1 7em; min-width: 6em; }
+.chatCheckOut input, .chatCheckOut select {
+  background: #120c05; color: var(--amber); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 7px; font: inherit; font-size: 0.86em;
+}
+.chatCheckOut .btn { flex: 1 1 auto; }
+/* ★ A frequency somebody found is a place you can go — say so with the pointer. */
+.chatGoTo { text-decoration: underline dotted; cursor: pointer; }
+.chatGoTo:hover { color: var(--amber); }
 /* ★★★ THE BUTTON BREATHES WHILE SOMETHING IS UNREAD, because a small amber count in a row of
    controls is easy to miss entirely — on a shared dial the whole point of a message is that
    somebody is waiting on an answer (Stuart, 2026-08-23: "the button needs to breathe for a little

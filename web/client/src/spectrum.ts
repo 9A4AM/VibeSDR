@@ -433,7 +433,9 @@ export interface SpectrumCallbacks {
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   /** `admin` is what the sender WAS when they said it — the server records it per line, so it
    *  does not change when the lock changes hands. */
-  onSaid?: (from: number, id: string, admin?: boolean) => void;
+  /** ★ `extra` carries the check-out payload (a frequency and a mode) — see chat.ts. Nothing else travels
+   *  with a phrase, and the server validates both before it broadcasts them. */
+  onSaid?: (from: number, id: string, admin?: boolean, extra?: { hz?: number; mode?: string }) => void;
   onYourTurn?: (withinSec: number) => void;
   /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
   onSessionWarning?: (secs: number) => void;
@@ -1019,7 +1021,8 @@ export class SpectrumClient {
       case 'said':
         // ★ An id we do not know how to draw is DROPPED, not shown raw — the client half of the
         //   rule that keeps free text off this channel in both directions.
-        this.cb.onSaid?.(Number(msg.from) || 0, String(msg.id || ''), msg.admin === true);
+        this.cb.onSaid?.(Number(msg.from) || 0, String(msg.id || ''), msg.admin === true,
+                         { hz: Number(msg.hz) || 0, mode: typeof msg.mode === 'string' ? msg.mode : undefined });
         break;
       case 'users':
         this.cb.onUsers?.(Number(msg.n) || 0, Number(msg.max) || 0);

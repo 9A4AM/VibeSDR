@@ -45,14 +45,36 @@ export const PHRASES: Array<{ id: string; text: string }> = [
 
 const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, p.text]));
 
+/* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced RDS". A shared
+ *  receiver is a room of people finding things, and the canned vocabulary let them agree who tunes but never
+ *  say WHAT they found — the one thing worth saying on a radio.
+ *  ★★ Still not free text: a NUMBER and a mode from this receiver's own list, both validated by the server. */
+const MODE_LABEL: Record<string, string> = {
+  wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
+  dab: 'DAB', rds: 'Advanced RDS', rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX',
+  sstv: 'SSTV', ft8: 'FT8 / FT4', time: 'Time signal',
+};
+function checkOutText(hz: number, mode?: string): string {
+  const mhz = hz >= 1e6 ? `${(hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MHz`
+            : `${Math.round(hz / 1e3)} kHz`;
+  const m = mode ? MODE_LABEL[mode] || mode.toUpperCase() : '';
+  return `Hey, check out ${mhz}${m ? ' ' + m : ''}`;
+}
+
 export type DialState = {
   mode: string; tuner: number; mine: boolean; you: number;
   listeners: number; decoding?: boolean;
 };
 
 type Deps = {
-  /** Send a phrase id to the server. */
-  say: (id: string) => void;
+  /** Send a phrase id to the server. `extra` carries the check-out payload — see checkOutText. */
+  say: (id: string, extra?: { hz: number; mode?: string }) => void;
+  /** The modes and decoders this receiver actually offers, so the picker cannot suggest a dead one. */
+  modes?: () => string[];
+  /** Where the dial is now — the frequency box starts there, because "check out" usually means "here". */
+  freqHz?: () => number;
+  /** Tune there, for when somebody taps what another listener found. */
+  tuneTo?: (hz: number, mode?: string) => void;
   /** Raise the unread count on whatever button opens this. */
   onUnread: (n: number) => void;
 };
@@ -100,6 +122,40 @@ export function initChat(d: Deps) {
       };
       list.appendChild(b);
     }
+    /* ★★ THE COMPOSER, at the end of the canned buttons: a frequency box, its unit, and the modes this
+     *  receiver offers. Everything a listener can say here is still chosen from a list or typed as a number —
+     *  no sentence can get through. Defaults to where the dial is now, which is what "check out" usually
+     *  means, so the common case is two taps. */
+    const wrap = document.createElement('div');
+    wrap.className = 'chatCheckOut';
+    const freq = document.createElement('input');
+    freq.type = 'text'; freq.inputMode = 'decimal'; freq.placeholder = 'frequency';
+    freq.className = 'chatFreq';
+    const unit = document.createElement('select');
+    for (const u of ['MHz', 'kHz', 'Hz']) { const o = document.createElement('option'); o.value = u; o.textContent = u; unit.appendChild(o); }
+    const mode = document.createElement('select');
+    const none = document.createElement('option'); none.value = ''; none.textContent = '(mode)'; mode.appendChild(none);
+    for (const m of (deps?.modes?.() ?? Object.keys(MODE_LABEL))) {
+      const o = document.createElement('option'); o.value = m; o.textContent = MODE_LABEL[m] || m.toUpperCase(); mode.appendChild(o);
+    }
+    const send = document.createElement('button');
+    send.className = 'btn'; send.textContent = 'Hey, check out…';
+    const fill = () => {
+      const hz = deps?.freqHz?.() ?? 0;
+      if (hz > 0 && !freq.value) { unit.value = 'MHz'; freq.value = (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, ''); }
+    };
+    freq.onfocus = fill;
+    send.onclick = () => {
+      fill();
+      const n = parseFloat(freq.value.replace(',', '.'));
+      if (!Number.isFinite(n) || n <= 0) { freq.focus(); return; }
+      const hz = Math.round(n * (unit.value === 'MHz' ? 1e6 : unit.value === 'kHz' ? 1e3 : 1));
+      deps?.say('check_out', { hz, mode: mode.value || undefined });
+      send.disabled = true;
+      setTimeout(() => { send.disabled = false; }, 3000);
+    };
+    wrap.append(freq, unit, mode, send);
+    list.appendChild(wrap);
   }
 }
 
@@ -110,8 +166,13 @@ export function chatOpened(open: boolean) {
 }
 
 /** A line arrived. */
-export function onSaid(from: number, id: string, admin = false) {
-  const text = TEXT[id];
+export function onSaid(from: number, id: string, admin = false, extra?: { hz?: number; mode?: string }) {
+  /* ★ "check out" writes its own sentence from the payload; every other phrase is a fixed string. A check-out
+   *  with no usable frequency is dropped rather than drawn as a bare "Hey, check out" — see the server, which
+   *  refuses to send one. */
+  const text = id === 'check_out'
+    ? (extra && Number(extra.hz) > 0 ? checkOutText(Number(extra.hz), extra.mode) : '')
+    : TEXT[id];
   if (!text) return;                       // an id this build cannot draw — see the header note
   const log = $('chatLog');
   if (log) {
@@ -133,6 +194,13 @@ export function onSaid(from: number, id: string, admin = false) {
     if (admin) who.classList.add('chatAdmin');
     const what = document.createElement('span');
     what.textContent = text;               // textContent, never innerHTML — see the header note
+    /* ★★ A frequency somebody found is worth a tap. On a shared dial this moves the room, so it asks the same
+     *  way any other tune does — through the host's own tuneTo, which obeys the etiquette and the limits. */
+    if (id === 'check_out' && extra && Number(extra.hz) > 0 && deps?.tuneTo) {
+      what.classList.add('chatGoTo');
+      what.title = 'Tune this receiver there';
+      what.onclick = () => deps?.tuneTo?.(Number(extra.hz), extra.mode);
+    }
     row.append(who, what);
     log.appendChild(row);
     while (log.children.length > 40) log.removeChild(log.firstChild!);

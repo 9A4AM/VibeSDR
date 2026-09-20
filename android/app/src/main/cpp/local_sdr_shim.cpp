@@ -7257,6 +7257,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "all_yours",       // Done — all yours
             "thanks",          // Thanks!
             "sorry",           // Sorry, didn't realise!
+            /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced
+             *  RDS". A shared receiver is a room of people finding things, and until now they could agree who
+             *  tunes but never say WHAT they found — the one thing worth saying on a radio.
+             *  ★★ STILL NOT FREE TEXT, and that is the point: the payload is a NUMBER and a mode chosen from
+             *     this receiver's own list. Both are validated here, so the vocabulary stays closed and a
+             *     client cannot smuggle a sentence through a frequency field. */
+            "check_out",       // Hey, check out <hz> <mode>
         };
         return v;
     }
@@ -12436,7 +12443,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *    what is the whole point of having handles at all. */
                 line = "{\"type\":\"said\",\"from\":" + std::to_string(from)
                      + (isAdmin ? ",\"admin\":true" : "")
-                     + ",\"id\":\"" + id + "\"}";
+                     + ",\"id\":\"" + id + "\"";
+                /* ★★ "check out" carries a frequency and a mode, and NOTHING ELSE travels with it. The number
+                 *  must be one this receiver can actually reach — pointing the room at a frequency outside the
+                 *  tuning range is worse than saying nothing — and the mode must be one it offers. A bad
+                 *  payload drops the whole message rather than sending a half-sentence. */
+                if (id == "check_out") {
+                    double hz = 0;
+                    if (!jsonNum(msg, "hz", hz)) return;
+                    if (!(hz > 0)) return;
+                    /* ★ The owner's allow/block ranges, the same ones a tune obeys — pointing the room at a
+                     *  frequency this receiver refuses to visit is worse than saying nothing. An unrestricted
+                     *  receiver has no ranges and accepts anything the hardware can reach. */
+                    { const auto& perm = vsPermittedRanges(vibebands::Ranges{});
+                      if (!perm.empty() && !vibebands::allows(perm, hz)) return; }
+                    std::string md = jsonStr(msg, "mode");
+                    for (auto& ch : md) ch = (char)tolower((unsigned char)ch);
+                    if (!md.empty() && vsModeBlocked(md)) return;   // a mode this owner switched off
+                    char b[64]; snprintf(b, sizeof b, ",\"hz\":%.0f", hz);
+                    line += b;
+                    if (!md.empty()) line += ",\"mode\":\"" + jsonEscape(md) + "\"";
+                }
+                line += "}";
             }
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
             return;

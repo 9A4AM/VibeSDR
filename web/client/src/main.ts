@@ -1180,7 +1180,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
-    onSaid: (from, id, admin) => chatSaid(from, id, admin),
+    onSaid: (from, id, admin, extra) => chatSaid(from, id, admin, extra),
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it
     //     chose none of them. Without this the audio followed and the screen did not.
@@ -7923,7 +7923,14 @@ function initDecoders(host: string, auth: AuthState) {
   $('chatBtn').onclick = () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); };
   $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
   initChat({
-    say: (id) => spec?.send({ type: 'say', id }),
+    say: (id, extra) => spec?.send(extra ? { type: 'say', id, hz: extra.hz, mode: extra.mode }
+                                          : { type: 'say', id }),
+    // ★ Only what this receiver actually offers — see capsOf on the directory, same idea: never suggest a mode
+    //   the owner has switched off, or a decoder this build cannot run.
+    // ★ The same list the mode picker offers — anything the owner switched off is already gone from it.
+    modes: () => MODES.filter((m) => !isModeBlocked(m)) as unknown as string[],
+    freqHz: () => spec?.frequency ?? 0,
+    tuneTo: (hz, mode) => { if (mode && mode !== 'rds') setMode(mode as any, true); spec?.tune(hz); },
     onUnread: (n) => {
       for (const id of ['chatUnread', 'mChatUnread']) {
         const el = document.getElementById(id);
