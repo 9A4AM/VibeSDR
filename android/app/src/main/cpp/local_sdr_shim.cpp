@@ -12735,9 +12735,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (type == "directSampling") {
-            if (!adminGate("direct sampling")) return;
-            if (jsonNum(msg,"value",v)) { LocalSdrShim::instance().setDirectSampling((int)v);
-                                          vsPersist("{\"directSampling\":" + std::to_string((int)v) + "}"); }
+            /* ★★★ A LISTENER CONTROL, NOT AN ADMIN ONE (Stuart, 2026-09-20). This was admin-gated, and the
+             *  consequence was a receiver that ADVERTISES 500 kHz - 1766 MHz while no ordinary visitor can
+             *  reach anything below 24 MHz: on an RTL the whole of HF arrives through the Q branch, so
+             *  gating it is gating the band. "Direct sampling shouldn't be an admin control as users will
+             *  need to enable direct sampling in normal use."
+             *  ★★ WHERE THE LISTENER ALREADY DRIVES THE HARDWARE. On a shared dial (and a single-user radio)
+             *     they move the real tuner, so the front end that dial needs is theirs to switch. On a LOCKED
+             *     CENTRE the owner pinned the window and nobody moves the radio — there it stays the owner's,
+             *     because one listener's switch would deafen everyone else's private VFO.
+             *  ★★ AND A LISTENER'S CHOICE IS NOT WRITTEN TO THE CONFIG. Persisting belongs to the owner: the
+             *     trap Stuart described is exactly a setting that outlives the person who made it. */
+            const bool ownerTunes = perClientDsp();          // locked centre: the listener never moves the radio
+            if (ownerTunes && !adminGate("direct sampling")) return;
+            if (jsonNum(msg,"value",v)) {
+                LocalSdrShim::instance().setDirectSampling((int)v);
+                if (adminNow(sock)) vsPersist("{\"directSampling\":" + std::to_string((int)v) + "}");
+            }
             return;
         }
         // ── Audio DSP (squelch / NR / notch / de-emphasis / stereo) ───────────
@@ -21974,6 +21988,26 @@ static std::string vsTunableJson() {
         j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
     }
+    /* ★★★ DIRECT SAMPLING, SAID OUT LOUD (Stuart, 2026-09-20). Two different questions, both answered here:
+     *  ★★ `autoDs` — does this receiver reach HF BY ITSELF? On a Nooelec and its kin, everything below the
+     *     crossover needs the Q branch, so a listing that does not say so is hiding the whole of HF. The
+     *     directory badges it.
+     *  ★★★ `ds` — is the tuner bypassed RIGHT NOW? This is the trap Stuart described: on a shared dial an
+     *      admin switches direct sampling on for HF, tunes back up to FM, leaves — and the next visitor finds
+     *      a receiver that hears nothing above 30 MHz and concludes the server is broken. It is worse than a
+     *      transient, because the setting is PERSISTED. Published so every client can say so plainly. */
+    {
+        j += std::string(",\"autoDs\":") + (g_autoDs.load(std::memory_order_relaxed) ? "true" : "false");
+        j += ",\"dsBelowHz\":" + std::to_string((long long)g_dsBelowHz.load(std::memory_order_relaxed));
+        // ★ What the hardware is actually doing: 0 = tuner, 2 = Q branch. -1 while nothing has been applied.
+        j += ",\"ds\":" + std::to_string(g_dsNow.load(std::memory_order_relaxed));
+        /* ★★ AND THE UPCONVERTER, for the same reason (Stuart, 2026-09-20). A Ham It Up or SpyVerter is the
+         *  OTHER way this receiver reaches HF, and it changes what every frequency on the card means: the
+         *  radio is really listening `offset` higher than the dial says. A listing that does not mention it
+         *  cannot explain why the numbers look wrong to somebody comparing receivers. 0 = none. */
+        j += ",\"convOffsetHz\":"
+           + std::to_string((long long)LocalSdrShim::instance().converterOffsetHz());
+    }
     {
         // ★ RAW IQ OUT: the owner's mode, the cap and what is free — the audio panel's row reads these.
         static const char* kModes[] = { "off", "local", "public" };
@@ -25449,6 +25483,12 @@ void LocalSdrShim::setDirectSampling(int mode) {
     if (p->useTcp()) { p->sendTcpCmd(0x09, (uint32_t)mode); return; }
     if (!p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
+    /* ★★ RECORD WHAT THE HARDWARE IS NOW DOING. g_dsNow was written only by the AUTOMATIC crossover, so a
+     *  MANUAL switch left it stale — and the state we publish to clients and to the directory would have said
+     *  "tuner" while the tuner was bypassed. That is the one thing this field exists to prevent: an admin
+     *  leaving direct sampling on, wandering up to FM and away, and the next visitor finding a receiver that
+     *  hears nothing with nothing on screen to say why (Stuart, 2026-09-20). */
+    g_dsNow.store(mode, std::memory_order_relaxed);
 }
 std::string LocalSdrShim::deviceModel() const {
     if (!p) return "";

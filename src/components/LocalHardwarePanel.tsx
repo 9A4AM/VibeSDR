@@ -53,8 +53,12 @@ const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000];
  *     that all did the same thing. */
 const TUNER_BWS = [-1, 0, 1_500_000, 1_000_000, 700_000, 500_000, 350_000];
 
+/* ★★ OFF / ON, NOT OFF / I / Q (Stuart, 2026-09-20: "I cannot think of a time I branch is needed"). On an RTL
+ *  the whole of HF arrives on the Q branch; the I branch is a curiosity whose only effect here is a deaf
+ *  receiver, so offering it offers a way to break your own reception. ON is 2 — what every real use means —
+ *  and the server still accepts 0/1/2, so nothing older breaks. */
 const DS_MODES: { label: string; value: number }[] = [
-  { label: 'Off', value: 0 }, { label: 'I', value: 1 }, { label: 'Q', value: 2 },
+  { label: 'Off', value: 0 }, { label: 'On', value: 2 },
 ];
 
 export interface LocalHardwarePanelProps {
@@ -1156,7 +1160,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Text style={styles.section}>DIRECT SAMPLING</Text>
           <Seg slot={slot} options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
                fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
-          <Text style={styles.note}>Not needed on RTL-SDR Blog V4 (HF is covered directly).</Text>
+          <Text style={styles.note}>
+            To receive HF and below — short wave, medium wave and long wave — this radio needs this ON:
+            the tuner is switched out and those bands come straight off the ADC, so the gain controls go with
+            it. Leave it on and the VHF and UHF bands stay deaf, so turn it off when you come back up. Not
+            needed on an RTL-SDR Blog V4, which covers them directly.
+          </Text>
           </>}
           {p.isSpy && <Text style={[styles.note, { marginTop: 16 }]}>
             Frequency correction, bias-T, digital AGC and direct sampling are not part

@@ -902,7 +902,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
    The bars and chips never shrink: they are the whole point of the row. */
 #mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#mStatus #linkBars, #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
+#mStatus #linkBars, #mStatus #initChip, #mStatus #dsChip, #mStatus #ovlChip { flex: 0 0 auto; }
 /* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
    1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
    the signal and AGC meters wobbled twice a second beside a bouncing fps figure (Stuart,
@@ -1105,6 +1105,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
            border-radius: 3px; border: 1px solid rgba(255,120,60,0.8); color: #ff8a3d;
            line-height: 1.2; animation: sqlBreathe 1.2s ease-in-out infinite; }
 #ovlChip.set { display: inline-block; }
+/* ★ The same shape as OVERLOAD but amber and still: this is a STATE somebody chose, not a fault, and it must
+   not shout like one. It appears only when the dial is above the crossover, where it is costing you. */
+#dsChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+          border-radius: 3px; border: 1px solid rgba(255,180,60,0.8); color: var(--amber);
+          line-height: 1.2; }
+#dsChip.set { display: inline-block; }
 /* ★ RECOVERING IS GOOD NEWS, so it must not wear the fault's colours or its urgency: the gain is
    going back UP because the band calmed down. Same chip, quieter voice — and it stops breathing,
    because nothing needs attention any more. */
@@ -3354,7 +3360,13 @@ select.btn { padding: 6px 8px; }
                    warning nobody sees is not a warning. Overload is the one condition that
                    silently ruins reception (it is what has been destroying RDS all evening),
                    so it belongs where the user is already looking (Stuart, 2026-07-26). -->
-              <span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
+              <!-- ★★★ THE TUNER IS BYPASSED AND YOU MAY NOT HAVE DONE IT (Stuart, 2026-09-20). On a shared dial
+                   anyone may switch direct sampling on to reach HF; if they wander back up to FM and leave, the
+                   next visitor meets a receiver that hears nothing above 30 MHz and concludes the SERVER is
+                   broken. It is not — it is in HF mode, and this says so where the fault would otherwise be
+                   blamed. Only shown when the dial is ABOVE the crossover, where it is actually costing you. -->
+              <span id="dsChip" title="Direct sampling is on: the tuner is switched out and this receiver is listening to HF and below only (short wave, medium wave, long wave). Turn it off in the hardware panel to hear the VHF and UHF bands again.">DIRECT SAMPLING (HF AND BELOW)</span><!--
+              --><span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
                 ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
                   overload and the chip reports which way the gain went (see onOverload). On an RSP
                   the hardware raises the flag and we only report it, so it keeps this wording. -->
@@ -4250,12 +4262,23 @@ select.btn { padding: 6px 8px; }
     <label>DIGITAL AGC</label>
     <div class="seg"><button class="btn" id="agc">OFF</button></div>
   </div>
-  <div class="mrow rtlOnly">
+  <div class="mrow rtlOnly" style="display:block">
     <label>DIRECT SAMPLING</label>
+    <!-- ★★ SAY WHAT IT IS FOR, WHERE IT IS OFFERED (Stuart, 2026-09-20). Without this the control is a piece
+         of jargon, and the listing's "500 kHz - 1766 MHz" is a promise nobody knows how to collect. The gain
+         warning is the honest other half: the tuner is switched OUT, so its gain stages go with it. -->
+    <div class="mnote" style="margin:2px 0 6px;opacity:.75">
+      To receive HF and below &mdash; the short wave bands, medium wave and long wave &mdash; this radio needs
+      direct sampling ON. The tuner is bypassed, so the gain controls go with it, and the VHF and UHF bands stay
+      quiet until you switch it back off.
+    </div>
+    <!-- ★★ OFF / ON, NOT OFF / I / Q (Stuart, 2026-09-20: "I cannot think of a time I branch is needed").
+         On an RTL, HF arrives on the Q branch; the I branch is a curiosity that simply leaves the receiver
+         deaf, so offering it is offering a way to break your own reception. ON sends 2, which is what every
+         real use of this control means. The server still accepts 0/1/2, so an older client is unaffected. -->
     <div class="seg" id="dsSeg">
       <button class="btn on" data-ds="0">OFF</button>
-      <button class="btn" data-ds="1">I</button>
-      <button class="btn" data-ds="2">Q</button>
+      <button class="btn" data-ds="2">ON</button>
     </div>
   </div>
 

@@ -1607,6 +1607,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  ★ `agcInit` now spans all of it (see the note at its send site); `settling` keeps its
        *    narrower meaning for the sliders, which is what they want. */
       $('initChip').classList.toggle('set', Number(m.agcInit) === 1 || settling);
+      /* ★★★ THE TUNER IS SWITCHED OUT AND YOU MAY NOT BE THE ONE WHO DID IT (Stuart, 2026-09-20). Anyone on a
+       *  shared dial may turn direct sampling on to reach HF; wander back up to FM, leave, and the next
+       *  visitor meets a receiver that hears nothing and blames the SERVER. Shown only above the crossover,
+       *  where it is actually costing reception — on HF it is simply how this radio works. */
+      if (typeof m.ds === 'number' || typeof m.dsBelowHz === 'number') {
+        if (typeof m.ds === 'number') dsMode = Number(m.ds);
+        if (typeof m.dsBelowHz === 'number') dsBelowHz = Number(m.dsBelowHz);
+      }
+      const hzNow = spec?.frequency ?? 0;
+      $('dsChip').classList.toggle('set', dsMode === 2 && hzNow > (dsBelowHz || 24e6) + 6e6);
       /* ★★★ THE GAIN READOUTS HAVE STOPPED BEING READINGS — SAY SO, AND OFFER THE REPAIR.
        *
        *  The server sets `gainStuck` when its own gain writes stop landing, which freezes every
@@ -7612,6 +7622,9 @@ function locLine(): string {
 // ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
 // hold, not the remaining seconds.
 let listenerCount = 0, listenerMax = 0;
+/** ★ Direct sampling as the RADIO reports it (2 = tuner bypassed, HF only) and the crossover it uses. Reported
+ *  by the server so every listener sees the same state, not only whoever switched it. */
+let dsMode = 0, dsBelowHz = 24e6;
 let sessionDeadline = 0;      // epoch ms, 0 = no limit
 let sessionTicker: ReturnType<typeof setInterval> | null = null;
 

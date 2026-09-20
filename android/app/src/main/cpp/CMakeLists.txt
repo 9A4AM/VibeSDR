@@ -158,6 +158,14 @@ target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/opu
 #     wrong for months and nothing would complain.
 #   ★ Hard failure if the pattern ever stops matching: an EMPTY version string is worse than none,
 #     because a client is told "" instead of being told nothing and correctly saying "unknown".
+# ★★★ AND RE-CONFIGURE WHEN THAT FILE CHANGES. The version is read HERE, at configure time, and then baked
+#     into the library — so a cached configure keeps handing out an old number however many times the C++ is
+#     rebuilt. On 2026-09-20 the Sony TV took a freshly compiled Lite APK that announced itself as 5.6.22 while
+#     the tree said 5.6.31: the engine was new, the version was three weeks old, and only the number a person
+#     reads was wrong — which is the worst kind of wrong, because it makes a good build look like a stale one
+#     (and would make a genuinely stale one look fine).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/CMakeLists.txt")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/CMakeLists.txt" _vs_cmakelists)
 string(REGEX MATCH "project\\(vibeserver VERSION ([0-9]+\\.[0-9]+\\.[0-9]+)" _vs_unused "${_vs_cmakelists}")
 set(VIBESERVER_VERSION "${CMAKE_MATCH_1}")

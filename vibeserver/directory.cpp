@@ -388,6 +388,15 @@ std::string buildStatus(int port) {
                             if (!iq.empty()) j += ",\"rawIq\":\"" + iq + "\"";
                             if (ri.find("\"rdsx\":") != std::string::npos)
                                 j += std::string(",\"rdsx\":") + (jsonBool(ri, "rdsx") ? "true" : "false");
+                            /* ★★ HOW THIS RECEIVER REACHES HF (Stuart, 2026-09-20). A card can advertise
+                             *  "500 kHz - 1766 MHz" while an RTL hears nothing below the crossover unless the
+                             *  Q branch is switched in — so the listing must say whether the radio does that
+                             *  BY ITSELF (autoDs), or is on an upconverter (convOffsetHz), or neither. Without
+                             *  it the range is a promise a visitor cannot collect. */
+                            if (ri.find("\"autoDs\":") != std::string::npos)
+                                j += std::string(",\"autoDs\":") + (jsonBool(ri, "autoDs") ? "true" : "false");
+                            { const long long co = jsonNum(ri, "convOffsetHz", 0);
+                              if (co != 0) j += ",\"convOffsetHz\":" + std::to_string(co); }
                             { const std::string k2 = "\"modes\":";
                               size_t a = ri.find(k2);
                               if (a != std::string::npos) {

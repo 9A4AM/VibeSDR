@@ -907,6 +907,21 @@ function cleanRadioName(n) {
   if (m && m[1].toLowerCase().endsWith(m[2].toLowerCase())) return `${m[1]} ${m[3]}`;
   return String(n);
 }
+/* ★★ "HF AUTO" / "UPCONVERTER" — how this receiver reaches the low bands (Stuart, 2026-09-20). A card that
+ *  says 500 kHz - 1766 MHz is making a promise about HF, and on an RTL that promise is only kept when the Q
+ *  branch is switched in. `autoDs` means the radio does it by itself as you tune down; an upconverter means it
+ *  is there in hardware. Neither badge means a visitor may have to switch direct sampling on themselves. */
+function hfBadge(r) {
+  if (r && Number(r.convOffsetHz)) {
+    const mhz = (Number(r.convOffsetHz) / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+    return `<span class="capIq" title="An upconverter is in line (${mhz} MHz), so HF and below \u2014 short wave, medium wave and long wave \u2014 arrive within the tuner's own range">UPCONVERTER</span>`;
+  }
+  if (!r || r.autoDs !== true) return '';
+  // ★ "HF" alone would read as "medium wave needs something else" — the whole point is that everything BELOW
+  //   the crossover, long wave and medium wave included, arrives without the visitor doing anything.
+  return `<span class="capIq" title="Reaches HF and below by itself \u2014 short wave, medium wave and long wave: this receiver switches direct sampling in as you tune down, and back out again above the crossover">LW\u2013HF AUTO</span>`;
+}
+
 function iqBadge(r) {
   if (!r || r.rawIq !== 'public') return '';
   return `<span class="capIq" title="Raw IQ out at 48 kS/s through the tunnel — pair VibeIQ or rtl_tcp software with this receiver">IQ48</span>`;
@@ -1055,7 +1070,7 @@ function radioLine(r, s) {
   //   of its own at the bottom (Stuart, 2026-09-15).
   const card = `<div class="rcard">
       <div class="rcTop"><span class="rcName">${esc(cleanRadioName(r.name || r.driver || 'Radio'))}</span>
-        <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
+        <span class="rcRight">${modesTag(modesOf(r))}${hfBadge(r)}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
       <div class="rcSub" title="${esc(kindTitle)}">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
       ${etiquette}
