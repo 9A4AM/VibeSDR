@@ -4845,12 +4845,17 @@ export default function SDRScreen({ route, navigation }: Props) {
        *    recoverable loss on a configuration nobody runs yet — where the cost the other way is
        *    moving a room full of listeners off their station without being asked.
        */
+      /* ★★ DECLARED OUT HERE BECAUSE IT IS READ OUT HERE. It was `const occ` INSIDE this if, while the
+       *  assert-tune decision below reads it after the block closes — "Cannot find name 'occ'", a
+       *  ReferenceError on the very path that decides whether we may retune a room full of listeners. Invisible
+       *  because tsc was checking nothing at all (see tsconfig.json, 2026-09-20). */
+      let occ: { maxUsers: number } | null = null;
       if (isVibeServer && !chosenRadio) {
         // ★ 1.5s, not the 2.5 default: this now sits IN FRONT of the first socket, and a server
         //   that is slow to answer a status probe must not delay somebody's audio. Unknown means
         //   "behave as before" — the saved tune is restored — because a receiver that says nothing
         //   about listener counts is almost certainly a private one.
-        const occ = await fetchOccupancy(connectBase, 1500).catch(() => null);
+        occ = await fetchOccupancy(connectBase, 1500).catch(() => null);
         sharedNoDoorRef.current = !!occ && occ.maxUsers > 1;
       } else {
         sharedNoDoorRef.current = false;
@@ -9231,7 +9236,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAdminUnlock={onAdminUnlockPw}
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
-        visualGain={visualGain}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}

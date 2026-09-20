@@ -3,10 +3,23 @@
   "compilerOptions": {
     "strict": true
   },
+  // ★★★ THE BUILD DIRECTORIES MUST BE EXCLUDED, OR NOTHING IS TYPE-CHECKED AT ALL (2026-09-20).
+  //     CMake writes `compiler_depend.ts` — a MAKEFILE — into android/**/build*/CMakeFiles, and TypeScript
+  //     dutifully parsed it: 578 syntax errors, after which it reported NO semantic errors for the real
+  //     sources. A deliberate `const x: number = "nope"` in ControlsBar.tsx was not flagged. So `tsc --noEmit`
+  //     was answering "clean" while checking nothing, and three crashes shipped in one afternoon that it would
+  //     have caught by name: `sharedDial`, `readOnly` and their siblings used without being declared.
+  // ★★ Named broadly on purpose: any cxx/CMake output under android/ or ios/, wherever a build puts it.
   "exclude": [
     "node_modules",
     "Reference",
     "scripts",
-    "vibeserver"
+    "vibeserver",
+    "android/**/build",
+    "android/**/.cxx",
+    "android/app/src/main/cpp",
+    "lite/**/build",
+    "ios/build",
+    "**/CMakeFiles"
   ]
 }

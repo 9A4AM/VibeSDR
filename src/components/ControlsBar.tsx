@@ -1209,6 +1209,16 @@ function ControlsBar({
   onZoomSweep,
   vfoSweepRate,
   onControlRects,
+  /* ★★★ AND THE FIVE THE BARS NEED. They are declared in ControlsBarProps and were arriving from SDRScreen,
+   *  but this destructure never took them — so `shared` could not pass them on, and my first attempt at that
+   *  fix referenced names that were not in scope, which threw "Property 'readOnly' doesn't exist" and bounced
+   *  the app to the server list (Stuart, 2026-09-20). Three layers each keep their own hand-written copy of
+   *  the prop list; a name has to appear in ALL of them or it is either dead or fatal. */
+  readOnly,
+  sessionLeft,
+  sharedDial,
+  storms,
+  adminMode,
 }: ControlsBarProps) {
   // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
   const handback = useRegionHandback();
