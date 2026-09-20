@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>   // getenv — the VIBE_VERBOSE gate below
 #include <chrono>
 /* ★★★ AT THE TOP, NOT BESIDE THE FUNCTION THAT USES THEM. An #include inside `namespace vibe {`
  *  drops every declaration it carries INTO that namespace: ::getrandom then does not exist and the
@@ -123,7 +124,49 @@
   #define LOGE(...) do { fprintf(stderr, "[" LOG_TAG " E] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
 #endif
 
+/* ★★★ LOGV — THE PER-SECOND HOUSEKEEPING CHATTER, OFF UNLESS ASKED FOR.
+ *
+ * Every line in this file was LOGI, which is fine on Android (logcat is a fixed RING BUFFER — it
+ * costs no disk and throws its own oldest away) and quietly ruinous on a Linux server, where the
+ * same lines land in the journal and stay. MEASURED on the Pi 500, 2026-09-20: 21 MB in 8h19m,
+ * ~60 MB/day, of which ~40,000 lines out of ~45,000 were EIGHT repeating housekeeping shapes —
+ * the ghost observer, the DSP-load triplet, and the front door's route/hand-off/adopt trio. None
+ * of them records an EVENT; they each restate a level that was fine.
+ *
+ * ★★ Stuart, 2026-09-20: "the shipping versions to the end user need to be trim" — and the point
+ *    of a gate rather than a deletion is that NOTHING is lost. These lines are how the AGC, the
+ *    intermod work and the hand-off were all diagnosed. Our own boxes run --verbose and still have
+ *    them; an end user's receiver does not write 60 MB a day to say everything is normal.
+ *
+ * ★ Android keeps them ON: the buffer is free, and turning them off would change how the APP is
+ *   debugged, which is not what this is for.
+ * ★ The env var is the escape hatch — a user we are helping can turn it on without a new build,
+ *   and vibeserver's --verbose sets it before the shim's first log. */
+#ifdef __ANDROID__
+  #define VIBE_LOGV_DEFAULT true
+#else
+  #define VIBE_LOGV_DEFAULT false
+#endif
+namespace vibe { bool vibeLogVerbose(); void vibeSetLogVerbose(bool on); }
+#define LOGV(...) do { if (::vibe::vibeLogVerbose()) LOGI(__VA_ARGS__); } while (0)
+
 namespace vibe {
+
+/** ★ Read ONCE, not per line: this sits in the DSP's per-block path and a getenv() per log call is
+ *  a syscall-shaped cost on a Pi. std::atomic because --verbose may flip it from the main thread
+ *  while the DSP threads are already reading it. */
+static std::atomic<int> g_logVerbose{-1};   // -1 = not yet resolved
+bool vibeLogVerbose() {
+    int v = g_logVerbose.load(std::memory_order_relaxed);
+    if (v < 0) {
+        const char* e = std::getenv("VIBE_VERBOSE");
+        v = e ? (*e != '0' && *e != '\0') : (VIBE_LOGV_DEFAULT ? 1 : 0);
+        g_logVerbose.store(v, std::memory_order_relaxed);
+    }
+    return v != 0;
+}
+void vibeSetLogVerbose(bool on) { g_logVerbose.store(on ? 1 : 0, std::memory_order_relaxed); }
+
 namespace {
 
 // V5: the on-device DSP is now the clean-room GPL-free engine. These local
@@ -13496,11 +13539,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         // ★ Routing decisions are invisible when they go wrong: the listener just
                         //   gets an answer from the wrong process, or none. Say what was decided.
                         if (path.rfind("/r/", 0) == 0)
-                            LOGI("route %s -> %s", path.c_str(),
+                            LOGV("route %s -> %s", path.c_str(),
                                  dest.empty() ? "(here)" : dest.c_str());
                         if (!dest.empty()) {
                             std::string err;
-                            LOGI("handing fd %d to %s", sock->rawFd(), dest.c_str());
+                            LOGV("handing fd %d to %s", sock->rawFd(), dest.c_str());
                             if (vibe::sendFdTo(dest, sock->rawFd(), err)) {
                                 // ★★★ RELEASE, DO NOT CLOSE. close() calls shutdown(), which acts
                                 //     on the SOCKET rather than on our descriptor — so it tore down
@@ -13531,7 +13574,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         while (serverRunning.load()) {
             const int fd = vibe::fdAccept(handoffFd, 500);
             if (fd < 0) continue;
-            LOGI("adopted a handed-over connection");
+            LOGV("adopted a handed-over connection");
             auto sock = std::make_shared<net::Socket>(fd);
             std::lock_guard<std::mutex> lk(connMtx);
             reapConnThreadsLocked();
@@ -17515,7 +17558,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 static double lastHb = 0;
                 if (now - lastHb >= 10.0) {
                     lastHb = now;
-                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u (0 dBFS = on the rail)",
+                    LOGV("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u (0 dBFS = on the rail)",
                          g_adcPeakDbfs.load(std::memory_order_relaxed), clipPct,
                          (unsigned)adcMax_, (unsigned)adcMin_);
                 }
@@ -18274,17 +18317,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     // ★ >100% means the DSP cannot keep up and the backlog will grow until
                     //   something drops — the audible symptom is everyone stuttering at once.
                     dspLoadPct = (dspWideMs_ + dspPerMs_) / dspRealMs_ * 100.0;
-                    LOGI("dsp load: wide %.0f%% + per-client %.0f%% = %.0f%% of real time "
+                    LOGV("dsp load: wide %.0f%% + per-client %.0f%% = %.0f%% of real time "
                          "(backlog %.0f ms)",
                          dspWideMs_ / dspRealMs_ * 100.0, dspPerMs_ / dspRealMs_ * 100.0,
                          (dspWideMs_ + dspPerMs_) / dspRealMs_ * 100.0,
                          (double)q / sampleRate * 1000.0);
                     if (chanN_ > 0) {
-                        LOGI("  split: forward FFT %.0f%%, wide emit %.0f%%, fan-out %.0f%% "
+                        LOGV("  split: forward FFT %.0f%%, wide emit %.0f%%, fan-out %.0f%% "
                              "for %.1f listeners",
                              chanFftMs_ / dspRealMs_ * 100.0, chanWideMs_ / dspRealMs_ * 100.0,
                              chanFanMs_ / dspRealMs_ * 100.0, chanClients_ / chanN_);
-                        LOGI("  input: %d..%d samples/call, %d..%d blocks/call, %.2f blocks/call avg",
+                        LOGV("  input: %d..%d samples/call, %d..%d blocks/call, %.2f blocks/call avg",
                              chanInMin_ == INT_MAX ? 0 : chanInMin_, chanInMax_,
                              chanBlocksMin_ == INT_MAX ? 0 : chanBlocksMin_, chanBlocksMax_,
                              (double)chanBlocksTot_ / chanN_);
@@ -24482,7 +24525,7 @@ void LocalSdrShim::overloadTick() {
      *  ★ The ratio test (channel against gain) is unaffected and still walks 103.0 down on its own;
      *    this was to be the faster path, not the only one. */
     static constexpr bool kGhostMayCut = false;
-    if (ghost) LOGI("would call this manufactured — wobbles %.1f dB, %.1f dB lopsided "
+    if (ghost) LOGV("would call this manufactured — wobbles %.1f dB, %.1f dB lopsided "
                     "(observing only, see kGhostMayCut)", wob, skw);
 
     // ★ EXPIRE THE ARM. If the widening did not actually make anything hot, there is nothing to

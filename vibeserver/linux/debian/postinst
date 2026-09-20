@@ -129,6 +129,14 @@ case "$1" in
       WAS_ACTIVE=""
       systemctl is-active --quiet vibeserver.service && WAS_ACTIVE="yes"
       systemctl daemon-reload >/dev/null 2>&1 || true
+      # ★★★ THE JOURNAL CAP ONLY EXISTS ONCE journald HAS RE-READ ITS CONFIG. Shipping
+      #     50-vibeserver.conf and not doing this leaves the cap inert until the next reboot — and
+      #     "installed but not in effect" is the shape of fault that costs a disk. An /etc drop-in
+      #     of the operator's own still wins; this only makes our DEFAULT take hold now.
+      # ★ A RESTART, not a signal: SIGUSR1 is journald's FLUSH and SIGUSR2 its ROTATE — neither
+      #   re-reads the config, and `systemctl reload systemd-journald` only exists on systemd 253+.
+      #   Restarting it is safe on every version: it is socket-activated, so nothing loses a message.
+      systemctl restart systemd-journald.service >/dev/null 2>&1 || true
       systemctl enable vibeserver.service >/dev/null 2>&1 || true
       # ★★ THE WATCHER MUST BE ENABLED OR THE MAINTENANCE BUTTONS DO NOTHING. The daemon writes
       #    its request happily; without this unit running, nothing is watching for it, and the

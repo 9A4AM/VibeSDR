@@ -520,6 +520,11 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
   # ★★★ And keep the kernel's DVB driver off the dongles — see the file for the wedge it caused.
   install(FILES linux/vibeserver-blacklist-dvb.conf DESTINATION lib/modprobe.d)
+  # ★★★ A CAP ON THE JOURNAL, or a receiver fills the disk it was installed on. /usr, not /etc —
+  #     so it is a DEFAULT the operator overrides from /etc rather than a policy that fights them.
+  #     See the file for the measurement that prompted it.
+  install(FILES linux/vibeserver-journald.conf
+          DESTINATION lib/systemd/journald.conf.d RENAME 50-vibeserver.conf)
   # ★★ THE MAINTENANCE BUTTONS' PRIVILEGE. The service runs unprivileged AND with
   #    NoNewPrivileges=yes, so it cannot elevate at all — sudo is impossible by design here. The
   #    daemon writes a request file instead; the .path unit notices it and runs the helper as

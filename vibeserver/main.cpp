@@ -240,6 +240,8 @@ void usage() {
         "  --pin SECRET      require a PIN from NETWORK clients (this machine never needs it)\n"
         "  --max-bw HZ       server-enforced bandwidth ceiling\n"
         "  --max-fps N       server-enforced spectrum-rate ceiling\n"
+        "  --verbose         log the per-second DSP/hand-off housekeeping too. Off by default:\n"
+        "                    it is ~60 MB of journal a day. Turn it on when diagnosing.\n"
         "  --lock-rate HZ    pin the capture rate (clients cannot change it)\n"
         "  --lock-freq HZ    pin the CENTRE frequency. Listeners tune freely inside the\n"
         "                    captured window but cannot move the radio for everybody.\n"
@@ -366,6 +368,13 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--rate")      o.rate     = std::atof(need(i));
         else if (a == "--gain")      o.gain     = std::atoi(need(i));
         else if (a == "--mode")      o.mode     = need(i);
+        /* ★★★ THE HOUSEKEEPING CHATTER, BACK ON. Off by default since 2026-09-20: the per-second
+         *     DSP-load, ghost-observer and hand-off lines were ~89% of a measured 60 MB/day on the
+         *     Pi 500, and an end user's receiver must not spend its disk saying everything is
+         *     normal. Our own debug boxes put --verbose in VIBESERVER_ARGS and keep the lot.
+         * ★ setenv, not a direct call: the shim reads VIBE_VERBOSE once, lazily, at its first log
+         *   — and this runs before any of it. Keeps one owner of the default (the shim). */
+        else if (a == "--verbose")   { ::setenv("VIBE_VERBOSE", "1", 1); }
         else if (a == "--fft")       o.fftSize  = std::atoi(need(i));
         else if (a == "--fps")       o.fftRate  = std::atof(need(i));
         else if (a == "--port")      { o.port = std::atoi(need(i)); o.portGiven = true; }
