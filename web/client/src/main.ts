@@ -5669,6 +5669,7 @@ function dabGoTo(hz: number, sid: number) {
     spec?.dabService(svc);
   }
   dabRender();
+  syncDialTips();
 }
 
 function dabTune(delta: number) {
@@ -5679,6 +5680,7 @@ function dabTune(delta: number) {
   dabState = null;
   spec?.dab(true, dabChannel);
   dabRender();
+  syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
 }
 
 /** ★★★ ZOOM IS BLOCKED IN DAB MODE — DISABLED, not merely ignored (AGENTS.md: a control that does
@@ -7106,10 +7108,27 @@ function initSearch() {
 function syncDialTips() {
   const st = formatStep(step);
   const t = (id: string, s: string) => { const e = document.getElementById(id); if (e) e.title = s; };
+  const cap = (id: string, s: string) => { const e = document.getElementById(id); if (e) e.textContent = s; };
+  /* ★★ IN DAB THE ARROWS STEP THE MULTIPLEX, so they say WHICH ONE they will take you to rather than a step
+   *  size that means nothing there (Stuart, 2026-09-20: "for DAB could we show the block number in its place").
+   *  ★ Blank at the ends of Band III: dabTune clamps rather than wrapping, so there is nowhere to go and a name
+   *    promising otherwise would be a lie. */
+  if (dabOn) {
+    const prev = dabChannel > 0 ? DAB_BLOCKS[dabChannel - 1] : null;
+    const next = dabChannel >= 0 && dabChannel < DAB_BLOCKS.length - 1 ? DAB_BLOCKS[dabChannel + 1] : null;
+    cap('mStepCapD', prev ? prev.name : '');
+    cap('mStepCapU', next ? next.name : '');
+    t('mVfoDown', prev ? `Previous multiplex — ${prev.name} (${(prev.hz / 1e6).toFixed(3)} MHz)` : 'The bottom of Band III');
+    t('mVfoUp',   next ? `Next multiplex — ${next.name} (${(next.hz / 1e6).toFixed(3)} MHz)` : 'The top of Band III');
+    t('mStep', 'Tuning step — not used in DAB, where the arrows step the multiplex');
+    t('mZoomOut', 'Zoom is held in DAB — the multiplex is the whole view');
+    t('mZoomIn',  'Zoom is held in DAB — the multiplex is the whole view');
+    return;
+  }
   t('mVfoDown', `Tune down ${st}`);
   t('mVfoUp',   `Tune up ${st}`);
   // ★ And ON the arrows, where a phone can see it too — a tooltip is desktop-only.
-  for (const id of ['mStepCapD', 'mStepCapU']) { const e = document.getElementById(id); if (e) e.textContent = st; }
+  cap('mStepCapD', st); cap('mStepCapU', st);
   t('mStep',    `Tuning step (now ${st}) — tap to change`);
   t('mZoomOut', 'Zoom out — show more of the band');
   t('mZoomIn',  'Zoom in — show less of the band, in more detail');
