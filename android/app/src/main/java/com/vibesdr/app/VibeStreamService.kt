@@ -157,9 +157,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
-    /** ★ Has this session ever been connected? A first connect states a frequency, a rejoin joins
-     *  whatever the dial is. Cleared when a new session starts — see wsUrl(). */
-    @Volatile private var wsEverConnected = false
     @Volatile private var currentMode = "usb"
     @Volatile private var currentStep = 1_000L
     private var currentBase = ""
@@ -419,9 +416,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         currentMode = mode
         currentUuid = uuid
         bypassPassword = password
-        // ★ A NEW session states its frequency again — the remembered tune being restored. Only a
-        //   reconnect WITHIN a session stays silent. See wsUrl().
-        wsEverConnected = false
         running = true
         muted = false
         // Fresh session — clear the disconnected / reconnect-failed card state.
@@ -1285,11 +1279,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
          *     three times a second, and it stopped the instant one app was closed.
          *  ★ The FIRST connect of a session still states a frequency: that is the remembered tune being
          *    restored, and it is the one moment this client is entitled to move the radio. */
-        var url = if (wsEverConnected)
-            "$s/ws?user_session_id=$currentUuid&format=opus&version=2"
-        else
-            "$s/ws?user_session_id=$currentUuid&frequency=$currentFreq" +
-                "&mode=$currentMode&format=opus&version=2"
+        /* ★★★ THE URL NEVER STATES A FREQUENCY. NOT EVEN ON THE FIRST CONNECT.
+         *  This used to state one when `wsEverConnected` was false, and the flag was reset by every
+         *  startAudioEngine — so an ENGINE RESTART (a credential arriving, a forced restart, the
+         *  watchdog) re-imposed this client's stale copy on a dial somebody else was using. That is
+         *  the hole the reconnect fix did not close, and it is what Stuart measured: his tune to 97.2
+         *  snapped back to the Mac's stale 96.6 within 10 ms, twice.
+         *  ★★ Stuart, 2026-09-20: "The app should have always taken the servers word as gospel and
+         *     never tried to force itself." So the server owns the dial and we ADOPT it. The only
+         *     thing that moves the radio is a USER ACTION, which is sendTuneCommand/tuneByStep.
+         *  ★ `currentFreq` is now a CACHE written by the server's config (see onMessage), kept for
+         *    the lock-screen metadata and the skip grid. It is never transmitted on our behalf. */
+        var url = "$s/ws?user_session_id=$currentUuid&format=opus&version=2"
         // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client
         //     delays the spectrum socket a second to let the session register, so it is THIS one
         //     that claims the occupant slot — and it was anonymous, so the server stamped an empty
@@ -1331,9 +1332,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     if (!running || ws !== webSocket) return
                     packetCount++
                     lastPacketAt = SystemClock.elapsedRealtime()
-                    // ★ A PACKET is the proof the session is real — a 101 is equally true of a socket the
-                    //   server is about to drop. From here on, a reopen is a REJOIN: see wsUrl().
-                    wsEverConnected = true
                     if (packetCount <= 3) Log.i(TAG, "ws pkt#$packetCount len=${bytes.size}")
                     // Header rate flip → server encoder mismatched, cycle WS
                     if (bytes.size > HEADER_LEN) {
@@ -1387,6 +1385,35 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 }
             })
         ws = socket
+    }
+
+    /** ★★★ THE SERVER SAID WHERE THE DIAL IS — WRITE IT DOWN, SAY NOTHING BACK.
+     *
+     *  The ONLY non-user-action writer of `currentFreq`, and it is a pure copy. Before this, native's
+     *  copy was written solely by our own sendTuneCommand, so when anyone else moved a shared dial
+     *  our value silently went stale — and every reconnect and engine restart then re-imposed it.
+     *
+     *  ★★★ CALLED FROM JS, NOT FROM OUR OWN SOCKET, AND THAT IS NOT LAZINESS. The server sends
+     *      `config` to SPECTRUM clients only — `for (auto& c : allSpecClients()) sendConfig(c)` in
+     *      local_sdr_shim.cpp. This service owns the AUDIO socket, which never receives one, so
+     *      parsing our own text frames for it would be a handler that can never fire.
+     *  ★★ A STALE CACHE IS NOW HARMLESS, which is what makes this enough. It used to matter because
+     *     the value was TRANSMITTED on every reconnect; now nothing but a user action transmits, so
+     *     the worst a stale copy can do is mislabel the lock screen until the next config arrives.
+     *     That is why it is fine that JS goes quiet when the spectrum socket sleeps in the background.
+     *  ★ IT MUST NOT TRANSMIT. Adopting and then confirming would make us an owner again, and two
+     *    owners ping-ponged the Pi 2's dial 96.5 ↔ 96.1 about three times a second with nobody
+     *    touching a device.
+     *  ★ `vfo`, not `centerFreq`: the config carries BOTH, and centreFreq is the radio's tuned centre
+     *    while vfo is THIS listener's dial. They differ by the whole span on a wide capture. */
+    fun noteServerFreq(frequency: Long, mode: String) {
+        var changed = false
+        if (frequency > 0 && frequency != currentFreq) { currentFreq = frequency; changed = true }
+        if (mode.isNotEmpty() && mode != currentMode) { currentMode = mode; changed = true }
+        if (!changed) return
+        // Stale VTS strings belong to the old dial — let JS refill them.
+        npTitle = null; npArtist = null
+        mainHandler.post { updateMetadataSession(); updateNotification() }
     }
 
     private fun sendWsJson(obj: JSONObject) {

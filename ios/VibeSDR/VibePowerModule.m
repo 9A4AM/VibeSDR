@@ -29,6 +29,9 @@ RCT_EXTERN_METHOD(audioStaleness:(RCTPromiseResolveBlock)resolve reject:(RCTProm
 RCT_EXTERN_METHOD(setSystemVolume:(nonnull NSNumber *)v)
 RCT_EXTERN_METHOD(getSystemVolume:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(sendTuneCommand:(NSInteger)frequency mode:(NSString *)mode)
+// ★★★ Adopt the server's dial — a cache update, never a control action. Exported here or it does
+//     not exist to JS: the Swift @objc alone is invisible, which is how a fix ships doing nothing.
+RCT_EXTERN_METHOD(noteServerFreq:(NSInteger)frequency mode:(NSString *)mode)
 RCT_EXTERN_METHOD(sendBandwidth:(NSInteger)low high:(NSInteger)high)
 RCT_EXTERN_METHOD(setStep:(NSInteger)hz)
 RCT_EXTERN_METHOD(setInstanceName:(NSString *)name)

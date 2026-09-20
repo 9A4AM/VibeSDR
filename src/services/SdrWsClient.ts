@@ -2595,6 +2595,27 @@ export abstract class SdrWsClient {
       // ★ Once. Cleared either way, so a server that lands us somewhere on purpose is argued with
       //   exactly once and never again.
       if (Number.isFinite(Number(msg.vfo)) && Number(msg.vfo) > 0) this.lastServerVfo = Number(msg.vfo);
+      /* ★★★ TELL NATIVE WHERE THE DIAL IS — SILENTLY. This is the server's word, so it is the ONE
+       *  thing entitled to write native's `currentFreq`, and it must not reach the wire.
+       *
+       *  ★★★ WHY HERE AND NOT IN NATIVE'S OWN HANDLER: the server sends `config` to SPECTRUM clients
+       *      only (`for (auto& c : allSpecClients()) sendConfig(c)` — local_sdr_shim.cpp). The audio
+       *      socket, which native owns, never receives one, so native cannot learn this by itself.
+       *  ★★ Native used to learn the dial ONLY from our own sendTuneCommand, so it went stale the
+       *     moment anyone else tuned a shared receiver — and it then re-imposed that stale value on
+       *     every reconnect and engine restart. That is the bug this whole change removes.
+       *  ★ Unconditional, outside the "somebody else moved it" branch below: native wants the dial
+       *    after OUR tunes too (the server's confirmation is the authoritative value), and it is a
+       *    no-op when nothing changed. Cheap enough to do on every config. */
+      {
+        const sv = Number(msg.vfo);
+        if (Number.isFinite(sv) && sv > 0) {
+          try {
+            VibePowerModule?.noteServerFreq?.(
+              sv, typeof msg.mode === 'string' && msg.mode ? msg.mode : this.status.mode);
+          } catch {}
+        }
+      }
       // ★★★ FOLLOW THE DIAL WHEN SOMEBODY ELSE TURNS IT. On a shared-VFO receiver the frequency
       //     moves because another listener moved it, and this client adopted the server's vfo only
       //     during the first-connect negotiation below — so the audio followed and the readout,

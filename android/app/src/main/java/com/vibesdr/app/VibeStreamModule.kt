@@ -170,6 +170,16 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }
 
+    /** ★★★ ADOPT THE SERVER'S DIAL — A CACHE UPDATE, NOT A CONTROL ACTION. JS calls this when the
+     *  server's `config` says where the dial is; it must never reach the wire. Its twin below,
+     *  sendTuneCommand, is the ONLY thing that transmits, and only from a user action.
+     *  ★ @ReactMethod or it does not exist — a method without it is invisible to JS and the call
+     *    silently does nothing, which is how a fix ships and changes no behaviour at all. */
+    @ReactMethod
+    fun noteServerFreq(frequency: Double, mode: String) {
+        VibeStreamService.instance?.noteServerFreq(frequency.toLong(), mode)
+    }
+
     @ReactMethod
     fun sendTuneCommand(frequency: Double, mode: String) {
         VibeStreamService.instance?.sendTuneCommand(frequency.toLong(), mode)

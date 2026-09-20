@@ -20,6 +20,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       startFmdxAudio?:   (baseUrl: string) => void;
       stopFmdxAudio?:    () => void;
       sendTuneCommand:   (frequency: number, mode: string) => void;
+      /** ★ Adopt the server's dial into native's cache. NEVER transmits — see SdrWsClient's config
+       *  handler and VibeStreamService.noteServerFreq. Optional: older native builds lack it. */
+      noteServerFreq?:   (frequency: number, mode: string) => void;
       sendBandwidth:     (low: number, high: number) => void;
       setStep:           (hz: number) => void;
       setInstanceName:   (name: string) => void;
@@ -159,13 +162,25 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, propUuid, restartKey, adminAuth]);
 
-  // Sync tune when frequency or mode changes (native owns now-playing metadata)
+  /* ★★★ THIS EFFECT NO LONGER TUNES, AND THAT IS THE FIX.
+   *
+   *  It fired `sendTuneCommand` whenever the `frequency` PROP changed — and the prop changes for two
+   *  completely different reasons that a prop cannot tell apart:
+   *    1. the user moved the dial, in which case SdrWsClient.tune() has ALREADY sent it (_routeTune),
+   *       so this was a duplicate; and
+   *    2. the SERVER said the dial moved (someone else tuned a shared receiver), in which case this
+   *       ECHOED the server's own value straight back at it — a control action from a client nobody
+   *       touched, and a second owner of the dial.
+   *  ★★ Stuart, 2026-09-20: "The app should have always taken the servers word as gospel and never
+   *     tried to force itself." ONE writer now: SdrWsClient._routeTune, reached only from a user
+   *     action. Adoption goes the other way, through noteServerFreq, and is silent.
+   *  ✗ DO NOT restore a send here "so the native side stays in step". That is what this was for, and
+   *    keeping native's copy in step by TRANSMITTING is the entire fault — see noteServerFreq. */
   useEffect(() => {
     if (!activeUrl.current) return;
     if (frequency === activeFreq.current && mode === activeMode.current) return;
     activeFreq.current = frequency;
     activeMode.current = mode;
-    VibePowerModule?.sendTuneCommand(frequency, mode);
   }, [frequency, mode]);
 
   // Sync step to native for lock-screen / notification skip buttons

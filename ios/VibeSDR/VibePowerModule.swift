@@ -190,17 +190,6 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // the handshake window can be lost, which left the session on the URL's
   // freq/mode while the UI showed the restored tune.
   private var wsNeedsTuneAssert = false
-  /* ★★★ HAS THIS SESSION EVER BEEN CONNECTED? A FIRST connect carries the listener's frequency — it is
-   *  how a remembered tune is restored. A RECONNECT must not: the dial may have moved since, by another
-   *  listener or by this user on another device, and re-asserting our own stale copy is a CONTROL ACTION
-   *  FROM A CLIENT NOBODY TOUCHED.
-   *  ★★ Stuart, 2026-09-20, watching it happen: "I only tuned on the iPhone and the mac has fought me …
-   *     There should be 0 control when nothing is touched." Measured from a third socket on the Pi 2: the
-   *     dial ping-ponged 96.5 ↔ 96.1 about three times a second, two apps each re-asserting its own stale
-   *     frequency on every reconnect, and it stopped dead the moment one app was closed.
-   *  ★ So a reconnect JOINS the dial where it is. The frequency is left out of the URL and no tune is
-   *    asserted; the server's own config tells us where we landed. */
-  private var wsEverConnected = false
   // SERVER BUG WORKAROUND (FM half-speed, root-caused 2026-06-12): ubersdr
   // creates its opus encoder ONCE per WS at the then-current sample rate;
   // a mode change flips radiod to a new rate but keeps the old encoder, so
@@ -387,9 +376,6 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     currentMode  = mode
     currentUuid  = uuid
     bypassPassword = password
-    // ★ A NEW session states its frequency again — this is the remembered tune being restored, not a
-    //   reconnect. Only within one session does a rejoin stay silent. See wsEverConnected.
-    wsEverConnected = false
     isRunning    = true
     isMuted      = false
     // Fresh session — clear the disconnected / reconnect-failed card state.
@@ -1091,6 +1077,34 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
                 mode: currentMode, uuid: currentUuid)
   }
 
+  /* ★★★ ADOPT THE SERVER'S DIAL — A CACHE UPDATE, NOT A CONTROL ACTION.
+   *
+   *  The ONLY non-user-action writer of `currentFreq`, and a pure copy. It used to be written solely
+   *  by our own sendTuneCommand, so when anyone else moved a shared dial our value went stale — and
+   *  every reconnect and engine restart then re-imposed it.
+   *
+   *  ★★★ FED BY JS, NOT BY OUR OWN SOCKET. The server sends `config` to SPECTRUM clients only
+   *      (`for (auto& c : allSpecClients()) sendConfig(c)` in local_sdr_shim.cpp); this module owns
+   *      the AUDIO socket, which never receives one. Parsing our own frames for it would be a
+   *      handler that can never fire.
+   *  ★★ A STALE CACHE IS NOW HARMLESS, which is what makes JS-fed enough: nothing but a user action
+   *     transmits, so the worst a stale copy does is mislabel the lock screen until the next config.
+   *     That is why the spectrum socket sleeping in the background no longer costs us the dial.
+   *  ★ IT MUST NOT TRANSMIT. Adopting then confirming would make us an owner again — two owners
+   *    ping-ponged the Pi 2's dial 96.5 ↔ 96.1 three times a second with nobody touching a device.
+   *  ★ Mirror of VibeStreamService.noteServerFreq() — one rule, two readers. */
+  @objc func noteServerFreq(_ frequency: Int, mode: String) {
+    onMain {
+      var changed = false
+      if frequency > 0 && frequency != self.currentFreq { self.currentFreq = frequency; changed = true }
+      if !mode.isEmpty && mode != self.currentMode { self.currentMode = mode; changed = true }
+      guard changed else { return }
+      // Stale VTS strings belong to the old dial — fall back to "freq · mode" until JS refills.
+      self.npTitleOverride = nil; self.npArtistOverride = nil
+      self.updateNowPlaying()
+    }
+  }
+
   @objc func sendTuneCommand(_ frequency: Int, mode: String) {
     currentFreq = frequency
     currentMode = mode
@@ -1608,12 +1622,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // ★ A packet is the only proof the session is real. Everything else — a 101, a .ready — is
     //   equally true of a socket the server is about to drop.
     deadRevives = 0
-    if wsNeedsTuneAssert {
-      wsNeedsTuneAssert = false
-      // ★ Only the FIRST connect of a session states a frequency — see wsEverConnected.
-      if !wsEverConnected { sendWsJson(["type": "tune", "frequency": currentFreq, "mode": currentMode]) }
-      wsEverConnected = true
-    }
+    /* ★★★ NO TUNE ON CONNECT. A client nobody touched must not move the radio — see audioWsURL().
+     *  This asserted `currentFreq` on the first connect of each session, and "each session" included
+     *  every engine restart, which is the half the reconnect fix did not cover. */
     // Header sample-rate flip → server's per-WS opus encoder is now mismatched
     // (see wsBaseSr note) — cycle the socket for a fresh encoder. 3-packet
     // confirmation + 4s cooldown so stragglers around the flip can't storm.
@@ -2081,11 +2092,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if s.hasPrefix("https://") { s = "wss://" + s.dropFirst(8) }
     else if s.hasPrefix("http://") { s = "ws://" + s.dropFirst(7) }
     s = s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    /* ★ A rejoin asks for no frequency at all: the server keeps this session on the dial it is already
-     *  on. Only a first connect states one (frequency <= 0 is the caller saying "join"). */
-    var path = wsEverConnected
-      ? "/ws?user_session_id=\(uuid)&format=opus&version=2"
-      : "/ws?user_session_id=\(uuid)&frequency=\(frequency)&mode=\(mode)&format=opus&version=2"
+    /* ★★★ THE URL NEVER STATES A FREQUENCY — NOT EVEN ON A FIRST CONNECT. It used to state one when
+     *  `wsEverConnected` was false, and startAudioEngine cleared that flag, so an ENGINE RESTART
+     *  re-imposed this client's stale copy on a dial somebody else was using. Measured 2026-09-20:
+     *  a tune to 97.2 on the iPhone snapped back to the Mac's stale 96.6 within 10 ms, twice.
+     *  ★★ Stuart: "The app should have always taken the servers word as gospel and never tried to
+     *     force itself." The server owns the dial; we adopt it. Only a USER ACTION transmits.
+     *  ★ Mirror of VibeStreamService.wsUrl() — one rule, two readers: change both or neither. */
+    var path = "/ws?user_session_id=\(uuid)&format=opus&version=2"
     // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client delays
     //     the spectrum socket a second to let the session register, so it is THIS one that claims
     //     the occupant slot — and it was anonymous, so the server stamped an empty agent and the
