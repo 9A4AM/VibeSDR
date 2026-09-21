@@ -1707,7 +1707,7 @@ int main(int argc, char** argv) {
                     // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
                     //   must be applied where the gain settings are, not somewhere that could run
                     //   before the radio exists (which is exactly how it failed on Android).
-                    LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
+                    LocalSdrShim::instance().setVibeAgcRtl(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
                     LocalSdrShim::instance().setTunerBwAuto(g_runtimeConfig.tunerBwAuto);
                     LocalSdrShim::setAgcLock(g_runtimeConfig.agcLock == 1);
                     LocalSdrShim::setVibeServerTuneLimits(
@@ -2598,14 +2598,14 @@ int main(int argc, char** argv) {
     //     with it off while the page still said on. Stuart, 2026-08-21, having set it locked on:
     //     "still had to toggle it in the webclient for it to activate" — the toggle was not
     //     enabling a feature, it was doing the job this line should have done.
-    //  ★★★ AND IT MUST BE AFTER THE OPEN, not with the other gain settings. setRtlAgc raises the
+    //  ★★★ AND IT MUST BE AFTER THE OPEN, not with the other gain settings. setVibeAgcRtl raises the
     //      CEILING to the tuner's maximum by reading the device's gain table; with no device it
     //      sets the flag and returns, leaving the ceiling unset — and overloadTick does nothing
     //      without one. That is not a guess: it is exactly how this failed on Android, and the
     //      comment on the live-apply path already warns of it.
     //  ★ The live-apply path (a setup-page save) keeps its own call, so a change still takes effect
     //    without a restart; this is the half that was missing.
-    LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
+    LocalSdrShim::instance().setVibeAgcRtl(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
     // ★★ THE SAME PLACE, FOR THE SAME REASON — after the radio is open. This call was MISSING from
     //    the startup path (it existed only in the live-reload path), so `tunerBwAuto` in the config
     //    applied when the setup page was saved and was then silently LOST on every restart — the

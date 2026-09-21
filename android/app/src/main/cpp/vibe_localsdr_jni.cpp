@@ -1074,7 +1074,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainAutomation(JNIEnv*, jobject,
                                                           jboolean protect, jboolean agc) {
     vibe::LocalSdrShim::setOverloadProtect(protect == JNI_TRUE);
-    vibe::LocalSdrShim::instance().setRtlAgc(agc == JNI_TRUE);
+    vibe::LocalSdrShim::instance().setVibeAgcRtl(agc == JNI_TRUE);
 }
 
 /** What is hosting this server — see LocalSdrShim::setServerHost. */

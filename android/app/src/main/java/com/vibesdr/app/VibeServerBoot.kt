@@ -271,7 +271,7 @@ object VibeServerBoot {
         //     feature — they were doing the job this line should have done. Stuart, 2026-08-21:
         //     "when the AGC switch is enabled in the GUI I still have to enable it manually in the
         //     menu of the client". The same fault existed on Linux and is fixed the same way.
-        //  ★★ AND setRtlAgc HAD TO CHANGE FOR THIS TO WORK AT ALL: it used to return whenever the
+        //  ★★ AND setVibeAgcRtl HAD TO CHANGE FOR THIS TO WORK AT ALL: it used to return whenever the
         //     flag was unchanged, so calling it a second time did nothing — the flag already
         //     agreed. It now asks whether the CEILING has been applied, not whether the flag moved.
         // ★ The lock implies the AGC — see the same rule on the server (main.cpp) and in the

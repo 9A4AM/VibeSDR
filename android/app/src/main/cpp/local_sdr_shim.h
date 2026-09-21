@@ -104,7 +104,7 @@ public:
      *  AGC: the same loop with the ceiling raised to the tuner's maximum, the owner's figure
      *  becoming the starting point. See the notes by g_ovlProtect. */
     static void setOverloadProtect(bool on);
-    void        setRtlAgc(bool on);
+    void        setVibeAgcRtl(bool on);
     /** ★ The tuner's IF filter follows the zoom (RTL only). Persisted in the server's config —
      *  see RadioConfig::tunerBwAuto — so it survives a restart and is not re-asserted by a client. */
     void        setTunerBwAuto(bool on);

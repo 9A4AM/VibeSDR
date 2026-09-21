@@ -1103,7 +1103,7 @@ static std::atomic<int>    g_dabSavedLna{-1};    // ★ the RSP's LNA state on D
  *  ★ Save what the radio is actually doing. The lock is a separate promise and is restored
  *    alongside, not instead. */
 static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedView{0.0};
-/* ★ AND WHETHER VibeAGC WAS ON. g_rtlAgc is a SEPARATE flag from g_gainTarget — the first says
+/* ★ AND WHETHER VibeAGC WAS ON. g_vibeAgcRtlOn is a SEPARATE flag from g_gainTarget — the first says
  *  whether the loop runs, the second what the owner asked for — and DAB only ever saved the
  *  second. Leaving DAB therefore handed back a gain figure with the loop switched off: "exiting
  *  DAB mode reverts VibeAGC to manual every time" (Stuart). Two halves of one setting, and I
@@ -2330,7 +2330,20 @@ static std::atomic<int>      g_adcCleanRun{0};
  *      apart; with it off, the same sweep measured ZERO.
  *   ★ AGC still comes down when the ADC rails — that half of the behaviour was never in question
  *     and lives on in overloadTick. What has gone is doing it BEHIND a manual setting. */
-static std::atomic<bool>     g_rtlAgc{false};
+/* ★★★ VibeAGC ON THE RTL — AND THE NAME NOW SAYS SO.
+ *
+ *  This was `g_rtlAgc` / `setRtlAgc`, which reads as the RTL2832's OWN digital AGC. That is a
+ *  DIFFERENT THING — it lives at g_rtlDigitalAgc, it is known broken on the RTL-SDR Blog v4, and
+ *  this server deliberately never uses it. VibeAGC exists precisely because that one is unusable.
+ *  ★★ Stuart asked for this rename once before and I did not do it. It then cost us directly: asked
+ *     "how does the AGC work in locked mode", I read `setRtlAgc(rtlAgc || agcLock)` as the HARDWARE
+ *     AGC being force-enabled by the lock. It is not — agcLock force-enables OUR loop. A misleading
+ *     name is a bug that fires in the reader.
+ *  ★ Three separate things, named apart now: g_vibeAgcRtlOn (this, the RTL gain-step loop),
+ *    g_vibeAgcRspOn (the SDRplay RF/LNA loop), and g_rtlDigitalAgc (the tuner's own, not ours).
+ *  ★ The CONFIG KEY and the WIRE FIELD stay `rtlAgc`: renaming those would silently ignore the
+ *    setting in every config already sitting on a receiver. It is the internal name that misled. */
+static std::atomic<bool>     g_vibeAgcRtlOn{false};
 /** ★★★ WHERE THE AGC AIMS: peak ADC level, in dBFS. Not the clipping point — the LINEAR operating
  *  point. An 8-bit tuner is well behaved with its peaks around -12 dBFS and starts generating
  *  intermodulation long before it rails, so a loop that aims at the rail arrives somewhere the
@@ -2957,7 +2970,7 @@ static std::atomic<double> g_adcPeakDbfs{-99.0};
  *     test. A feature with that record does not get to be on by default until it has been proved
  *     on air over more than one evening.
  * ★ The switch is on the setup page and in the menu; an owner who wants it can have it. */
-static std::atomic<int> g_rspRfAgc{0};
+static std::atomic<int> g_vibeAgcRspOn{0};
 /* ★ Declared HERE, with its neighbour, because the control handler reads it thousands of lines
  *  before the setter is defined. Fourth time tonight a flag has had to move up for that reason:
  *  anything the message handlers read must be declared above them, not next to its setter. */
@@ -2965,8 +2978,8 @@ static std::atomic<bool> g_rspAgcSetLock{false};
 /* ★ Where the RF AGC starts from, as a GAIN POSITION (-1 = the middle). Applied ONCE each time
  *  the loop arms, so it begins from a sensible place instead of inheriting an end stop from the
  *  start-up kick — which is what made it walk several steps and disturb the IF AGC. */
-static std::atomic<int>  g_rspRfAgcStart{-1};
-static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
+static std::atomic<int>  g_vibeAgcRspStart{-1};
+static std::atomic<int> g_vibeAgcRspLastLna{-1};   // what we last set, for the readout
 static std::atomic<bool> g_dabIfHeld{false};      // ★ the DAB IF hold is in force (see the hold block)
 static std::atomic<bool> g_dabOverClear{false};   // ★ the hold was released for overload — the RF ceiling was its doing
 static std::atomic<long long> g_dabRfStepAt{0};    // ★ steady-clock seconds of the DAB rule's last LNA write — the hold waits 8 s after it
@@ -2974,7 +2987,7 @@ static std::atomic<long long> g_dabRfStepAt{0};    // ★ steady-clock seconds o
  *  over from. Stuart, 2026-09-15: "if we have a gain memory then we use that, speeds the whole
  *  process up, but starting from scratch or if it's not been used in a long time then play it
  *  safe". Fresh = set in this run within kRspGainMemorySec; a cold start has none. */
-static std::atomic<long long> g_rspRfAgcLastLnaAt{0};
+static std::atomic<long long> g_vibeAgcRspLastLnaAt{0};
 static constexpr long long    kRspGainMemorySec = 6 * 3600;
 static std::atomic<bool>      g_rspHandoverFromMemory{false};
 /** ★ A transient VTS line to every listener — see the `vts` notice field. */
@@ -3029,7 +3042,7 @@ static constexpr int kGrLowPub = 30, kGrHighPub = 50;   // ★ the working windo
  *     horribly broken but it was sorta working well enough before". The commits stay in the
  *     history (87b0004b … bd1d0e54) if any of it is wanted back; do not re-add them piecemeal. */
 static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) {
-    if (!sdrp || !g_rspRfAgc.load(std::memory_order_relaxed)) return;
+    if (!sdrp || !g_vibeAgcRspOn.load(std::memory_order_relaxed)) return;
     // ★ Only meaningful while the IF AGC is running: with it off the reduction is whatever the
     //   owner typed, and steering off a number nobody is moving would walk the LNA to an end stop.
     // ★ Except in DAB, whose rule below reads the converter and not the IF — it runs with the IF
@@ -3228,8 +3241,8 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         LocalSdrShim::instance().setLnaState(want);
         sfericHold(6.0);   // ★ a ~20 dB step across the band is not a strike either
         g_dabRfStepAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
-        g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
-        g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+        g_vibeAgcRspLastLna.store(want, std::memory_order_relaxed);
+        g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
         lastMove = now; lastDir = ddir; lastMean = mean;
         lastStepAt = std::chrono::steady_clock::now();
@@ -3526,8 +3539,8 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     grAtLastStep     = (int)llround(mean);
     structGainAtStep = sdrp->structGainDb();
     LocalSdrShim::instance().setLnaState(want);
-    g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
-    g_rspRfAgcLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+    g_vibeAgcRspLastLna.store(want, std::memory_order_relaxed);
+    g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
     lastMove = now;
     lastDir = dir; lastMean = mean;
@@ -8768,15 +8781,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              *     and the kick's own step 1 (position 1) is the cautious place to
                              *     hand over from. The saved LNA is the owner's MANUAL setting and
                              *     still applies when the loop is off. */
-                            const bool rfLoop = g_rspRfAgc.load(std::memory_order_relaxed);
+                            const bool rfLoop = g_vibeAgcRspOn.load(std::memory_order_relaxed);
                             if (!rfLoop) { if (savedLna >= 0) sdrp->setLnaState(savedLna); }
                             else {
                                 /* ★ A FRESH GAIN MEMORY IS A SHORTCUT; anything else plays safe.
                                  *   The memory is where the loop last settled this run. */
                                 const long long nowS = (long long)std::chrono::duration_cast<std::chrono::seconds>(
                                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                                const int mem = g_rspRfAgcLastLna.load(std::memory_order_relaxed);
-                                const long long at = g_rspRfAgcLastLnaAt.load(std::memory_order_relaxed);
+                                const int mem = g_vibeAgcRspLastLna.load(std::memory_order_relaxed);
+                                const long long at = g_vibeAgcRspLastLnaAt.load(std::memory_order_relaxed);
                                 const bool fresh = mem >= 0 && at > 0 && (nowS - at) < kRspGainMemorySec;
                                 g_rspHandoverFromMemory.store(fresh, std::memory_order_relaxed);
                                 if (fresh) {
@@ -8943,7 +8956,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (sdrpSettling) armedOnce = false;
             if (armedOnceReset) { armedOnce = false; armedOnceReset = false; }
             if (!sdrpSettling && graceDone && ifAgcAlive && !armedOnce
-                && g_rspRfAgc.load(std::memory_order_relaxed)) {
+                && g_vibeAgcRspOn.load(std::memory_order_relaxed)) {
                 armedOnce = true;
                 const int n = sdrp->lnaStateCount();
                 if (n > 1) {
@@ -9007,7 +9020,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  whole cycle and the listener watches the same rearrangement again. */
             if (sdrpSettling) { coarseDone = false; coarseAt = {}; sdrpInitAgc = true; }
             else if (graceDone && ifAgcAlive && armedOnce && !coarseDone
-                     && g_rspRfAgc.load(std::memory_order_relaxed)) {
+                     && g_vibeAgcRspOn.load(std::memory_order_relaxed)) {
                 const auto nowC = std::chrono::steady_clock::now();
                 if (coarseAt.time_since_epoch().count() == 0) coarseAt = nowC;
                 else if (std::chrono::duration_cast<std::chrono::seconds>(nowC - coarseAt).count()
@@ -9128,7 +9141,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    labour: a fixed band needs no front-end management, a tunable one does.
              *
              *  ★★★ AND THIS PATH WAS UNREACHABLE. vsSdrplayRfAgcTick returns immediately unless
-             *      g_rspRfAgc is set — and g_rspRfAgc was also what handed BOTH stages to VibeAGC,
+             *      g_vibeAgcRspOn is set — and g_vibeAgcRspOn was also what handed BOTH stages to VibeAGC,
              *      so with it on the RF loop never ran, and with it off it refused to. Dead code
              *      since VibeAGC landed, which is exactly what Stuart reported at the time ("RF
              *      agc not doing anything now it seems") and I went looking elsewhere for.
@@ -9294,7 +9307,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     sdrp->overloadReal() ? 1 : 0, sdrpSettling ? 1 : 0,
                     vsDesiredRfNotch() > 0 ? 1 : 0, vsDesiredDabNotch() > 0 ? 1 : 0,
                     vsAutoNotchOn() ? 1 : 0, vsUserNotchAllowed() ? 1 : 0,
-                    g_rspRfAgc.load(std::memory_order_relaxed) ? 1 : 0,
+                    g_vibeAgcRspOn.load(std::memory_order_relaxed) ? 1 : 0,
                     /* ★★★ THE LIVE AGC TARGET, because the server MOVES IT ON ITS OWN. DAB drops
                      *     it for OFDM headroom (see kDabAgcSetPoint) and restores it on exit — and
                      *     none of that reached the client, which advertised only the CAPABILITY
@@ -9888,9 +9901,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (l >= 0 && useSdrplay() && sdrp && l != sdrp->currentLnaState()) {
               LOGI("RSP RF AGC: DAB left — LNA state back to %d, where the carrier had it", l);
               LocalSdrShim::instance().setLnaState(l);
-              g_rspRfAgcLastLna.store(l, std::memory_order_relaxed);
+              g_vibeAgcRspLastLna.store(l, std::memory_order_relaxed);
           } }
-        g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
+        g_vibeAgcRtlOn.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
         LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
         /* ★ And give the AGC target back. -999 means the owner had never set one, so restore the
          *   API's own default rather than leaving DAB's -40 on an FM carrier that does not need
@@ -12182,7 +12195,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
-                g_dabSavedAgcOn.store(g_rtlAgc.load(std::memory_order_relaxed));
+                g_dabSavedAgcOn.store(g_vibeAgcRtlOn.load(std::memory_order_relaxed));
                 /* ★ The RSP's LNA state too. DAB's rule opens the front end for a weak
                  *   multiplex; back on medium wave that state pinned the IF at 59 and the window
                  *   rule took a rung 7 s after EVERY return (suite runs 1-3, 23:55-00:25, one
@@ -12225,7 +12238,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *    the AGC at the bottom, changing multiplex leaves it alone, and a manual gain
                  *    set WHILE in DAB is nobody's business but the listener's. */
                 /* ★★★ AND RUN THE LOOP. g_gainTarget = -1 says "auto", but the AGC only actually
-                 *  steps while g_rtlAgc is set — so on a receiver with VibeAGC switched off,
+                 *  steps while g_vibeAgcRtlOn is set — so on a receiver with VibeAGC switched off,
                  *  every ceiling and target this file defines is dead code and the gain simply
                  *  stays wherever it was. Measured: ADC peak parked at -11.8 dBFS with a -20
                  *  ceiling in force and NOT ONE gain step in 160 seconds. That is why Stuart's
@@ -12242,7 +12255,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  perfect at 100% of 2.4 MS/s while iqDrops climbed 5.71/s (18% of the stream
                  *  binned for want of DSP time) and 1981 of 2016 MP2 frames failed. */
                 rx.setSpectrumOnly(true);
-                g_rtlAgc.store(true, std::memory_order_relaxed);
+                g_vibeAgcRtlOn.store(true, std::memory_order_relaxed);
                 LocalSdrShim::instance().setAgc(false);   // the DONGLE's — see g_dabSavedDigAgc
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
                 /* ★ The settle that follows is shortened by agcForget itself while a multiplex is
@@ -12830,8 +12843,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *    DAB the server turned the loop on itself, so the server has to be the one to
                  *    turn it off. Whoever switches a thing on owns switching it off. */
                 if (wantsManual && g_dabMode.load(std::memory_order_relaxed)
-                    && g_rtlAgc.load(std::memory_order_relaxed)) {
-                    g_rtlAgc.store(false, std::memory_order_relaxed);
+                    && g_vibeAgcRtlOn.load(std::memory_order_relaxed)) {
+                    g_vibeAgcRtlOn.store(false, std::memory_order_relaxed);
                     LOGI("DAB: manual gain set — the listener has taken the gain");
                 }
             }
@@ -13316,9 +13329,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       //     working (Stuart: "not seeing the current gain in the status bar").
                       //     Events say what just happened; hwinfo says what IS, and a readout is a
                       //     state.
-                      + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                      + ",\"agc\":" + (g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "1" : "0")
                       /* ★★★ THE DONGLE'S OWN DIGITAL AGC — THE ONE THE BUTTON ACTUALLY COMMANDS.
-                       *     `agc` above is VibeAGC (g_rtlAgc). The client's AGC toggle sends {"type":"agc"}, and
+                       *     `agc` above is VibeAGC (g_vibeAgcRtlOn). The client's AGC toggle sends {"type":"agc"}, and
                        *     THAT handler calls setAgc() — the RTL2832's DIGITAL AGC. So one button READ one AGC
                        *     and WROTE a different one. Stuart, 2026-09-05: "the digital AGC button looks like its
                        *     on but when pressed I think it actually turns on then when pressed again it turns off."
@@ -17736,7 +17749,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     new is being risked; it is the existing price, paid by whoever asked for it.
          *  ★ Latched by the `adcstats` command and cleared when the asking socket goes away, so a
          *    tool that crashes cannot leave a receiver measuring for ever. */
-        const bool wantAdc = (g_rtlAgc.load(std::memory_order_relaxed)
+        const bool wantAdc = (g_vibeAgcRtlOn.load(std::memory_order_relaxed)
                               || Impl::nowSecs()
                                      < g_adcStatsUntil.load(std::memory_order_relaxed))
                           && ((++adcBufN_ & 3u) == 0u);
@@ -18762,7 +18775,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     and the tuner's top elsewhere, refreshed on every retune — including when the cap
          *     goes AWAY, which is why this sits above the early return. Steps are re-based so the
          *     loop's position is unchanged in dB, only measured from the new ceiling. */
-        if (!useSdrplay() && !useHackRf() && dev && g_rtlAgc.load(std::memory_order_relaxed)) {
+        if (!useSdrplay() && !useHackRf() && dev && g_vibeAgcRtlOn.load(std::memory_order_relaxed)) {
             const int n = rtlsdr_get_tuner_gains(dev, nullptr);
             if (n > 1) {
                 std::vector<int> gl((size_t)n);
@@ -18936,9 +18949,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //  ★★ With the AGC on, the resting gain is its STARTING POINT rather than a manual value —
         //     which is exactly what the setup page promises ("the gain above becomes the STARTING
         //     point"). So set the reference and leave the loop running.
-        //  ★ The lock counts as on: setRtlAgc is fed `rtlAgc || agcLock` at startup, so a locked
+        //  ★ The lock counts as on: setVibeAgcRtl is fed `rtlAgc || agcLock` at startup, so a locked
         //    receiver must be treated the same here or the park would defeat the lock as well.
-        if (g_rtlAgc.load(std::memory_order_relaxed)) {
+        if (g_vibeAgcRtlOn.load(std::memory_order_relaxed)) {
             // ★★★ ZERO STEPS IS MAXIMUM GAIN, NOT "NEUTRAL", AND WRITING 0 HERE SENT THE RADIO TO
             //     THE TOP OF ITS RANGE. `g_ovlSteps` counts DOWN from the ceiling, and with the AGC
             //     on the ceiling is the tuner's maximum — so "reset it to 0" meant 49.6 dB. Stuart
@@ -20107,7 +20120,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   retired elsewhere: this is the SECOND place that decides "are we
                      *   settling?", and two readers of one rule is how half-applied fixes ship. */
                     const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6
-                                          && !g_rspRfAgc.load(std::memory_order_relaxed);
+                                          && !g_vibeAgcRspOn.load(std::memory_order_relaxed);
                     if (!empty) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
                     else if (g_vsReleaseWhenIdle.load()) {
@@ -20969,7 +20982,7 @@ void LocalSdrShim::setRestGain(int gain) {
 void LocalSdrShim::setOverloadProtect(bool on) {
     // ★ KEPT AS A NO-OP, DELIBERATELY, and only for the wire: older apps and saved configs still
     //   carry the flag, and this must swallow it rather than let it mean something. Manual is
-    //   manual now — see the note by g_rtlAgc.
+    //   manual now — see the note by g_vibeAgcRtlOn.
     (void)on;
     LOGI("overload protection: removed — manual gain is left exactly where it is put");
 }
@@ -20988,8 +21001,8 @@ void LocalSdrShim::setTunerBwAuto(bool on) {
     if (p) p->applyAutoIf();
     broadcastHwInfo();
 }
-void LocalSdrShim::setRtlAgc(bool on) {
-    const bool was = g_rtlAgc.exchange(on, std::memory_order_relaxed);
+void LocalSdrShim::setVibeAgcRtl(bool on) {
+    const bool was = g_vibeAgcRtlOn.exchange(on, std::memory_order_relaxed);
     // ★★★ "ALREADY SET" IS NOT "ALREADY APPLIED". This returned whenever the flag did not change,
     //     which is right for a repeated toggle and WRONG for the case that matters: the servers
     //     set this from the config BEFORE the radio is open, where the flag lands but the ceiling
@@ -22126,14 +22139,14 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
-void LocalSdrShim::setVibeServerRfAgc(bool on) { g_rspRfAgc.store(on ? 1 : 0, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerRfAgc(bool on) { g_vibeAgcRspOn.store(on ? 1 : 0, std::memory_order_relaxed); }
 static std::atomic<bool> g_rspDabDecim{false};
 void LocalSdrShim::setVibeServerRspDabDecim(bool on) {
     g_rspDabDecim.store(on, std::memory_order_relaxed);
     Impl* impl = instance().p;
     if (impl && impl->useSdrplay() && impl->sdrp) impl->sdrp->setDabDecimation(on);
 }
-void LocalSdrShim::setVibeServerRfAgcStart(int pos) { g_rspRfAgcStart.store(pos, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerRfAgcStart(int pos) { g_vibeAgcRspStart.store(pos, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerAgcSetLock(bool locked) { g_rspAgcSetLock.store(locked); }
 void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
     g_dabAgcOverride.store(on);
@@ -22884,7 +22897,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     // ★★ A CEILING THAT IS ONLY SET ON THE PATH NOBODY TAKES IS NOT A CEILING. The starting gain is
     //    the owner's intent just as much as a slider move is, and it is the one that is in force
     //    for the whole time nobody has touched anything.
-    // ★★★ THE CEILING, AND WHY THE AGC COULD NOT CLIMB PAST THE STARTING GAIN. setRtlAgc() raises
+    // ★★★ THE CEILING, AND WHY THE AGC COULD NOT CLIMB PAST THE STARTING GAIN. setVibeAgcRtl() raises
     //     the ceiling to the tuner's maximum — but at startup it is called BEFORE the device is
     //     open, so it returned on its `!p->dev` guard and did nothing. This path then set the
     //     ceiling to the starting gain, and the loop was free to move only DOWNWARD from it, for
@@ -22895,7 +22908,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     //     again once it does — the same shape as restoreVibeHw waiting for `hwinfo`.
     int ceiling = agcCeiling >= 0 ? agcCeiling : applyGain;
     int startSteps = 0;
-    if (g_rtlAgc.load(std::memory_order_relaxed)) {
+    if (g_vibeAgcRtlOn.load(std::memory_order_relaxed)) {
         int n2 = rtlsdr_get_tuner_gains(impl->dev, nullptr);
         if (n2 > 1) {
             std::vector<int> gs2((size_t)n2);
@@ -24143,11 +24156,11 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     //     and it is this one. So the client's AUTO button engages it, and a manual gain turns it
     //     off — which is what both of those words already meant to the person pressing them.
     if (gainTenthDb < 0) {
-        setRtlAgc(true);                 // raises the ceiling to the tuner max and lets it climb
+        setVibeAgcRtl(true);                 // raises the ceiling to the tuner max and lets it climb
         LOGI("gain: AGC");
         return;
     }
-    setRtlAgc(false);                    // a number is a decision — the ceiling comes back to it
+    setVibeAgcRtl(false);                    // a number is a decision — the ceiling comes back to it
     p->lastGainTenthDb = gainTenthDb;
     g_gainTarget.store(gainTenthDb, std::memory_order_relaxed);
     g_gainRef.store(gainTenthDb, std::memory_order_relaxed);
@@ -24244,8 +24257,8 @@ void LocalSdrShim::overloadTick() {
     if (!p) return;
     if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
     // ★★★ AGC OR NOTHING. A gain the owner typed is a decision, and the loop does not second-guess
-    //     it — see the note by g_rtlAgc for what this used to do and what it cost.
-    if (!g_rtlAgc.load(std::memory_order_relaxed)) return;
+    //     it — see the note by g_vibeAgcRtlOn for what this used to do and what it cost.
+    if (!g_vibeAgcRtlOn.load(std::memory_order_relaxed)) return;
     /* ★★★ NO GAIN TO STEER IN DIRECT SAMPLING (Stuart, 2026-09-19, 648 kHz on the Pi 2: "its trying to work
      *  thinking its overloaded" — the chip read OVERLOAD: GAIN ↓ 28.0 dB). On the Q branch the tuner and
      *  its gain are bypassed, so every step this loop takes is a no-op and every "overload" it reports
@@ -25459,9 +25472,9 @@ void LocalSdrShim::overloadTick() {
         const std::string m = std::string("{\"type\":\"ovl\",\"steps\":") + std::to_string(want)
                             + ",\"dir\":" + (want > steps ? "-1" : "1")
                             + ",\"gain\":" + std::to_string(applied)
-                            + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                            + ",\"agc\":" + (g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "1" : "0")
                             /* ★★★ THE DONGLE'S OWN DIGITAL AGC — THE ONE THE BUTTON ACTUALLY COMMANDS.
-                             *     `agc` above is VibeAGC (g_rtlAgc). The client's AGC toggle sends {"type":"agc"}, and
+                             *     `agc` above is VibeAGC (g_vibeAgcRtlOn). The client's AGC toggle sends {"type":"agc"}, and
                              *     THAT handler calls setAgc() — the RTL2832's DIGITAL AGC. So one button READ one AGC
                              *     and WROTE a different one. Stuart, 2026-09-05: "the digital AGC button looks like its
                              *     on but when pressed I think it actually turns on then when pressed again it turns off."
