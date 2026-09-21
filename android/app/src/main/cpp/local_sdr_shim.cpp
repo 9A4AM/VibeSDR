@@ -2715,6 +2715,24 @@ static std::atomic<float>    g_chanBeforeMove{0.0f};
  *    no amount of individually-innocent steps can answer wrongly. */
 static std::atomic<float>    g_sepAtRunStart{-200.0f};
 static std::atomic<int>      g_stepsAtRunStart{-1};
+/* ★★★ WHICH RULER THAT BASELINE WAS MEASURED WITH, BECAUSE THERE ARE TWO AND THEY DISAGREE BY TEN
+ *     DECIBELS. sepAvgDb is channel-MINUS-shoulders when the shoulder bins fit the window and
+ *     channel-minus-NOISE-FLOOR when they do not (see sepFromShoulders) — the same variable
+ *     carrying two different quantities. The floor is far below the neighbours, so the second
+ *     form reads much larger, and a baseline taken under one ruler against a verdict taken under
+ *     the other is a subtraction of unlike things.
+ * ★★★ MEASURED, 106.9 on the Pi 2, 2026-09-21: the run aborted on "14.6 -> 2.5", and a 29-step
+ *     sweep of that very station puts channel-above-shoulders between 0.2 and 6.3 dB at EVERY
+ *     gain from 0 to 49.6. 14.6 is not a reachable value on that ruler; it was the floor ruler.
+ *     The climb it threw away had actually improved separation 0.3 -> 3.4 dB, and the loop then
+ *     settled at 20.7 dB where the sweep says the useful band is 32-44.
+ *  ★ The log line at the settle site has ALWAYS worded these two cases differently ("above the
+ *    neighbouring spectrum" vs the floor) — one reader knew they were different quantities and
+ *    the verdict did not. Same fault shape as every other "one rule, two readers" in this file.
+ *  ★ A ruler change is not evidence either way, so the run is ABANDONED rather than judged: the
+ *    next climb from settled opens a fresh one with a baseline that matches. */
+static std::atomic<bool>     g_sepRulerAtRunStart{true};
+static std::atomic<bool>     g_sepRulerBeforeMove{true};
 /* ★★★ HOW MANY MOVES IN A ROW THIS DIRECTION HAS BEEN PROVED RIGHT — the accelerator. Stuart:
  *     "I think it seems to pick a decent gain but it takes a while to get there."
  * ★★★ THE COST IS THE NUMBER OF STEPS, NOT THE TIME PER STEP. Measured on the Pi: 96.6 arriving
@@ -24608,6 +24626,9 @@ void LocalSdrShim::overloadTick() {
          */
         const float sepWas = g_sepBeforeMove.load(std::memory_order_relaxed);
         const float sepNow = p->sepAvgDb.load();
+        /* ★★★ ONLY IF BOTH READINGS USED THE SAME RULER — see g_sepRulerAtRunStart. */
+        const bool  sepRulerNow  = p->sepFromShoulders.load();
+        const bool  sepComparable = (sepRulerNow == g_sepRulerBeforeMove.load(std::memory_order_relaxed));
         /* ★ The band-wide half of the objective — see g_contrastBeforeMove. 99 is the "never
          *  measured" initial value, so a first move is judged on separation alone rather than on a
          *  sentinel; a real contrast is always well under that. */
@@ -24615,7 +24636,7 @@ void LocalSdrShim::overloadTick() {
         const float contrastNow  = p->bandContrastDb.load();
         const float contrastFell = (contrastWas < 90.0f && contrastNow < 90.0f)
                                  ? (contrastWas - contrastNow) : 0.0f;
-        const float d = sepNow - sepWas;
+        const float d = sepComparable ? (sepNow - sepWas) : 0.0f;   // ★ unlike units: no evidence
         const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
 
         /* ══ IS THE THING IN THE CHANNEL REAL, OR ARE WE MAKING IT? ════════════════════════════
@@ -24669,7 +24690,19 @@ void LocalSdrShim::overloadTick() {
              *     "105.4 is very weak and needs a lot of tinkering with the gain to get it in."
              *  ★ Calibrated on the two cases seen: the genuine catch cost 3.8 dB overall and still
              *    fires; the doubtful one cost 1.7 dB and no longer does. */
-            if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f
+            /* ★★★ A RULER CHANGE ABANDONS THE RUN, it does not condemn it. */
+            if (runSep > -190.0f && runAt >= 0
+                    && sepRulerNow != g_sepRulerAtRunStart.load(std::memory_order_relaxed)) {
+                LOGI("dropping the whole-run baseline: it was measured against %s and we are now "
+                     "measuring against %s — %.1f dB and %.1f dB are not the same quantity",
+                     g_sepRulerAtRunStart.load(std::memory_order_relaxed)
+                         ? "the neighbouring spectrum" : "the noise floor",
+                     sepRulerNow ? "the neighbouring spectrum" : "the noise floor",
+                     runSep, sepNow);
+                g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
+                g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+            }
+            else if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f
                     && !g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("this climb has cost %.1f dB of separation overall (%.1f -> %.1f) — every step "
                      "looked harmless, the run did not — back to %d steps below the ceiling",
@@ -25288,10 +25321,33 @@ void LocalSdrShim::overloadTick() {
         const int from = tgtIdx - steps;
         const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
         const double room = agcTargetDbfs() - peak - g_ovlMargin.load(std::memory_order_relaxed);
-        if (from >= 0 && room > 1.0) {
+        /* ★★★ AND THE ADC IS NOT THE BINDING CONSTRAINT WHERE HARM SHOWS OUTSIDE THE CHANNEL.
+         *
+         *  `room` is pure converter headroom, and this file already says what that is worth on an
+         *  R820T: "ADC headroom is NOT the binding constraint on an R820T. Its mixer goes
+         *  non-linear long before an 8-bit converter fills." This branch then spends ALL of it in
+         *  ONE move, which no verdict ever judges — the separation test only runs on the step
+         *  AFTER, by which time the front end is already in the mush.
+         *
+         *  ★★★ MEASURED on the Pi 2 (the only R820T2 of Stuart's; every other server is an R860):
+         *      "recovering: -32.6 dBFS is 23.6 dB below the -9.0 dBFS operating point — taking
+         *      19.3 dB in one move (8.7 -> 28.0 dB)". The knee on that radio is at 29.7 dB, so a
+         *      single unjudged jump lands one rung from the cliff, and the gain then walks over it.
+         *      adcPeak was -36 to -17 dBFS throughout: the converter never came close to full, and
+         *      was never going to be the thing that stopped it.
+         *  ★★ CAPPED, NOT REMOVED. The fast recovery is right where the converter genuinely IS the
+         *     constraint — WIDE/DAB, which has no neighbourhood to damage and whose profile says
+         *     exactly that (watchShoulders = false). There the whole of `room` is still taken at
+         *     once, as before.
+         *  ★ 10 dB: enough that recovering from a deep cut still takes two or three moves rather
+         *    than seventeen rungs, and small enough that the separation verdict gets to judge the
+         *    approach instead of meeting the knee on arrival. */
+        const AgcProfile& prof0 = *g_profile.load(std::memory_order_relaxed);
+        const double roomCap = prof0.watchShoulders ? std::min(room, 10.0) : room;
+        if (from >= 0 && roomCap > 1.0) {
             int best = from;
             for (int i = from + 1; i < n && (tgtIdx - i) >= 0; ++i) {
-                if ((gains[(size_t)i] - gains[(size_t)from]) / 10.0 > room) break;
+                if ((gains[(size_t)i] - gains[(size_t)from]) / 10.0 > roomCap) break;
                 best = i;
             }
             if (best > from && (tgtIdx - best) < want) {
@@ -25563,6 +25619,7 @@ void LocalSdrShim::overloadTick() {
      *   began. Closed by agcForget, by a downward move, and by the whole-run verdict itself. */
     if (want < steps && g_stepsAtRunStart.load(std::memory_order_relaxed) < 0) {
         g_sepAtRunStart.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_sepRulerAtRunStart.store(p->sepFromShoulders.load(), std::memory_order_relaxed);
         g_stepsAtRunStart.store(steps, std::memory_order_relaxed);
     } else if (want > steps) {
         g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
@@ -25570,6 +25627,7 @@ void LocalSdrShim::overloadTick() {
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_sepRulerBeforeMove.store(p->sepFromShoulders.load(), std::memory_order_relaxed);
         g_contrastBeforeMove.store(p->bandContrastDb.load(), std::memory_order_relaxed);
         if (g_dabMode.load(std::memory_order_relaxed)) {
             const auto q = g_dab.quality();

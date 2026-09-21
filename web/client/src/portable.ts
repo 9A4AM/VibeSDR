@@ -16,6 +16,9 @@
  *   settings travel — never gain, hardware, where you were tuned, or any credential.
  * ★ RESET lives on the directory page. It clears MASTER and stamps a reset time; a server page that loads
  *   with overrides older than that stamp drops them, so a reset reaches every server, not just the master.
+ * ★★ "SAVE FOR ALL" STAMPS ITS OWN TIME (viewAt) FOR THE SAME REASON. Writing MASTER is not enough on its
+ *    own: layer 1 beats layer 2, and any server the listener has already tweaked is holding a layer-1
+ *    override that would win forever. The stamp is what makes those servers let go of theirs.
  * ★ Only on *.vibeserver.vibesdr.net. A LAN, port-forwarded or raw tunnel address behaves exactly as before.
  */
 
@@ -29,13 +32,22 @@ export const VIEW_KEYS = [
 
 const DIRECTORY = 'https://vibeserver.vibesdr.net';
 const EPOCH_KEY = 'vsPortableEpoch';          // this origin's copy of the last reset it has honoured
+/* ★★★ THE VIEW EPOCH IS ITS OWN, AND MUST STAY THAT WAY. "Save view settings for all" has to reach
+ *     servers this browser is not currently on, and the only way it can is by making them drop their
+ *     own overrides next time they load — the same trick RESET uses. It cannot BORROW resetAt to do
+ *     it: search.ts clears the listener's BOOKMARKS when resetAt advances, so a colour change would
+ *     have silently binned their bookmarks on every other server. Two readers, two epochs. */
+const VIEW_EPOCH_KEY = 'vsPortableViewEpoch';
 
-export interface Portable { view: Record<string, unknown>; bookmarks: unknown[] | null; resetAt: number }
-let master: Portable = { view: {}, bookmarks: null, resetAt: 0 };
+export interface Portable { view: Record<string, unknown>; bookmarks: unknown[] | null; resetAt: number; viewAt: number }
+let master: Portable = { view: {}, bookmarks: null, resetAt: 0, viewAt: 0 };
 /** ★ Decided ONCE, when the store loads, before anything can write the epoch: was the directory reset since
  *  this origin last looked? Settings (honourReset) and bookmarks (search.ts) both act on this one answer —
  *  deciding it twice raced, and the second reader saw the epoch the first had already written. */
 let resetPending = false;
+/** ★ Decided once alongside resetPending: has "save for all" run somewhere since this origin looked?
+ *  Drops this server's VIEW overrides only — bookmarks are not involved. */
+let viewPending = false;
 let frame: HTMLIFrameElement | null = null;
 let ready: Promise<boolean> | null = null;
 let seq = 0;
@@ -75,11 +87,15 @@ export function portableReady(): Promise<boolean> {
     await Promise.race([loaded, new Promise((r) => setTimeout(r, 2000))]);
     const got = await ask({ op: 'get' });
     if (!got || !got.data) return false;
-    master = { view: got.data.view || {}, bookmarks: got.data.bookmarks ?? null, resetAt: Number(got.data.resetAt) || 0 };
-    let seen = 0;
+    master = { view: got.data.view || {}, bookmarks: got.data.bookmarks ?? null,
+               resetAt: Number(got.data.resetAt) || 0, viewAt: Number(got.data.viewAt) || 0 };
+    let seen = 0, seenView = 0;
     try { seen = Number(localStorage.getItem(EPOCH_KEY)) || 0; } catch { /* private mode */ }
+    try { seenView = Number(localStorage.getItem(VIEW_EPOCH_KEY)) || 0; } catch { /* private mode */ }
     resetPending = master.resetAt > seen;
+    viewPending  = master.viewAt  > seenView;
     if (resetPending) try { localStorage.setItem(EPOCH_KEY, String(master.resetAt)); } catch { /* private mode */ }
+    if (viewPending)  try { localStorage.setItem(VIEW_EPOCH_KEY, String(master.viewAt)); } catch { /* private mode */ }
     return true;
   })();
   return ready;
@@ -89,10 +105,11 @@ export function portableReady(): Promise<boolean> {
 export function masterView(): Record<string, unknown> { return master.view; }
 export function masterBookmarks(): unknown[] | null { return master.bookmarks; }
 
-/** Drop this server's overrides if the directory was reset since this origin last looked. Returns true if
- *  anything was dropped. `local` is this origin's prefs object; the caller writes it back. */
+/** Drop this server's VIEW overrides if either epoch has moved since this origin last looked — a RESET on
+ *  the directory page, or a "save for all" done on some other server. Returns true if anything was dropped.
+ *  `local` is this origin's prefs object; the caller writes it back. */
 export function honourReset(local: Record<string, unknown>): boolean {
-  if (!resetPending) return false;
+  if (!resetPending && !viewPending) return false;
   let dropped = false;
   for (const k of VIEW_KEYS) if (k in local) { delete local[k]; dropped = true; }
   return dropped;
@@ -105,7 +122,12 @@ export async function saveViewForAll(values: Record<string, unknown>): Promise<b
   const view: Record<string, unknown> = {};
   for (const k of VIEW_KEYS) if (values[k] !== undefined) view[k] = values[k];
   const r = await ask({ op: 'setView', view });
-  if (r?.ok) master.view = view;
+  if (r?.ok) {
+    master.view = view;
+    /* ★ This page has just deleted its own overrides, so it is already in step with the master it
+     *  wrote; record the stamp it caused so its NEXT load does not treat its own save as news. */
+    try { localStorage.setItem(VIEW_EPOCH_KEY, String(Date.now())); } catch { /* private mode */ }
+  }
   return !!r?.ok;
 }
 

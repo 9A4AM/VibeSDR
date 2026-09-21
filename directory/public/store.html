@@ -22,9 +22,18 @@
     var d = e.data, s = load(), r = { id: d.id, ok: false };
     if (d.op === 'get') {
       r.ok = true;
-      r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null, resetAt: s.resetAt || 0 };
+      r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null,
+                 resetAt: s.resetAt || 0, viewAt: s.viewAt || 0 };
     } else if (d.op === 'setView' && d.view && typeof d.view === 'object') {
-      s.view = d.view; r.ok = save(s);
+      /* ★★★ STAMP THE VIEW EPOCH, OR "SAVE FOR ALL" REACHES ONLY THE SERVER YOU ARE STANDING ON.
+         A per-server override beats MASTER (portable.ts layer 1), and every server the listener has
+         ever tweaked holds one — so writing MASTER alone changed nothing anywhere else. Stuart,
+         2026-09-21: "I changed the colour to orange on the sony tv and pressed to save for all
+         vibesdr.net servers and got a confirmation, but all other servers are still green."
+         ★★ A SEPARATE EPOCH FROM resetAt, NOT A REUSE OF IT. resetAt is also read by the BOOKMARK
+            side (search.ts clears the list when it advances), so stamping it here would have made
+            changing a colour delete the listener's bookmarks on every other server. */
+      s.view = d.view; s.viewAt = Date.now(); r.ok = save(s);
     } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
       s.bookmarks = d.bookmarks; r.ok = save(s);
     }
