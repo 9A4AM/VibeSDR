@@ -139,7 +139,26 @@ COPY_EXCLUDES="--exclude build --exclude .git --exclude node_modules --exclude P
 if [ -n "${VIBE_PREBUILT_DEB:-}" ]; then
   [ -f "$VIBE_PREBUILT_DEB" ] || { echo "!! VIBE_PREBUILT_DEB does not exist: $VIBE_PREBUILT_DEB"; exit 1; }
   DEB="$VIBE_PREBUILT_DEB"
-  echo "==> using a pre-built package: $(basename "$DEB")"
+  # ★★★ AND IT MUST BE FOR THE ARCHITECTURE BEING PUBLISHED. The version is checked further down
+  #     and caught a mismatch the first time this was used in anger; the ARCHITECTURE was not
+  #     checked at all, and that is the one that gets you.
+  # ★★★ MEASURED, 2026-09-21: publishing both arches in one run with VIBE_PREBUILT_DEB set — and
+  #     without `--arch amd64` — fed the AMD64 package to the ARM64 pass. It published happily. The
+  #     commit read "vibeserver 5.6.34-1 (arm64)" and added vibeserver_5.6.34-1_amd64.deb to the
+  #     pool, with no arm64 package anywhere in it. arm64's index still pointed at the previous
+  #     release, so a Pi upgrading would have got nothing — which is the only reason this was a
+  #     near miss rather than shipping x86 binaries to ARM machines.
+  #  ★ The deb says what it is; ask it, rather than trusting the caller to have paired
+  #    VIBE_PREBUILT_DEB with the matching --arch.
+  _pkgarch="$(dpkg-deb -f "$DEB" Architecture 2>/dev/null \
+              || ar p "$DEB" control.tar.gz 2>/dev/null | tar -xzO ./control 2>/dev/null \
+                 | sed -n 's/^Architecture: *//p')"
+  [ "$_pkgarch" = "$ARCH" ] || {
+    echo "!! VIBE_PREBUILT_DEB is a '$_pkgarch' package but this run publishes '$ARCH'"
+    echo "!! pair it with --arch $_pkgarch, or build the right one — see"
+    echo "!! build_emulated_arch_on_real_hardware"
+    exit 1; }
+  echo "==> using a pre-built package: $(basename "$DEB") ($_pkgarch)"
 else
 # ── Build, INSIDE A DEBIAN BOOKWORM ROOT ─────────────────────────────────────
 # ★★★ NOT ON THE HOST. CPack derives Depends: from whatever the build machine links against, so
