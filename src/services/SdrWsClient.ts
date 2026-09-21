@@ -2463,8 +2463,26 @@ export abstract class SdrWsClient {
       //     ★ Only on a socket that has been here before (`this.hadSession`): on a FIRST connect
       //       the server's landing frequency is exactly what should win, and SDRScreen's own
       //       last-tune restore runs then too — re-asserting here would fight it.
-      if (this.hadSession && this.status.frequency > 0) {
+      /* ★★★ AND NEVER ON A SHARED DIAL — THIS IS THE SECOND WRITER, AND IT IS HALF THE BOUNCE.
+       *     Everything above is right for a PER-LISTENER VFO, where the dial is ours and a resume
+       *     must put the listener back. On a shared dial the opposite is true: the room owns the
+       *     frequency, the landing IS the room, and re-asserting our own is the app arguing with
+       *     the server. Every resume from background fires an hwinfo, so this shoved a stale
+       *     frequency at the room on every unlock of the phone.
+       *  ★★★ TWO WRITERS IS WHY IT BOUNCES RATHER THAN SITTING STALE. Stuart, 2026-09-21: "its now
+       *      fucking bouncing between the 2 ... the server tells the app hey I am on 103.0 now and
+       *      the app sticks its fingers in its ears". A single stale writer sits on the wrong
+       *      number quietly; two that each re-assert produce a ping-pong. The adopt path (see the
+       *      config handler) was already fixed — it could not win while this kept shouting over it.
+       *  ★★ THE FIX IS A SUBTRACTION, as it was the first time: ONE writer of the frequency, the
+       *     server, and the app transmits only on a USER ACTION. ✗ Do not add a guard, a settle
+       *     timer or a reconciliation pass here — each of those is a second route by another name.
+       *  ★ The web client has no equivalent of this block at all, which is the whole reason it
+       *    "just works": it has nothing that can assert a frequency nobody asked for. */
+      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial) {
         this.tune(this.status.frequency, this.status.mode, { recenter: true });
+      } else if (this.hadSession && this.sharedDial) {
+        this.dbg('shared dial — not re-asserting our tune on this hwinfo; the room owns the dial');
       }
       this.hadSession = true;
       // VibeServer sent the serving device's tuner gains + offered sample rates.

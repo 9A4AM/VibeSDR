@@ -1405,10 +1405,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     "it did finally connect but the whole thing reconnected and came back at a
         //     different frequency"). A fix that silently retunes you is not a fix you would
         //     choose. Re-assert from a REF, not from the closure: this callback is created once.
+        /* ★★★ EXCEPT ON A SHARED DIAL, WHERE THIS WAS THE OTHER HALF OF THE BOUNCE. The reasoning
+         *     above holds for a PER-LISTENER VFO: the recovery must not silently move the listener.
+         *     On a shared dial the landing IS the room's frequency, so being put there is the
+         *     CORRECT outcome, and asserting our remembered one 600 ms later drags everybody else
+         *     to where this app used to be.
+         *  ★★ Together with the hwinfo re-assert in SdrWsClient (now gated the same way) this made
+         *     TWO writers of a dial that must have exactly ONE. Stuart, 2026-09-21: "the server
+         *     tells the app hey I am on 103.0 now and the app sticks its fingers in its ears and
+         *     goes lalalala"; "its now fucking bouncing between the 2". It was not deaf — it was
+         *     talking over the server, and a deferred write nothing cancels is the loudest kind.
+         *  ★ The ref, not the state: this callback is created once (see tuneRef above), and
+         *    sharedDialRef is kept in step by its own effect for exactly these late-firing paths. */
         const want = tuneRef.current;
-        if (want.frequency) {
+        if (want.frequency && !sharedDialRef.current) {
           noteAudioEvent(`re-asserting the tune ${want.frequency} ${want.mode}`);
-          setTimeout(() => { client.current?.tune(want.frequency, want.mode); }, 600);
+          setTimeout(() => {
+            // ★ Re-checked AT FIRE TIME, not only when scheduled: the dial can become shared in
+            //   the 600 ms, and a timer that tests a stale answer is the same bug with a delay.
+            if (sharedDialRef.current) {
+              noteAudioEvent('shared dial — dropping the queued re-assert; the room owns the dial');
+              return;
+            }
+            client.current?.tune(want.frequency, want.mode);
+          }, 600);
+        } else if (want.frequency) {
+          noteAudioEvent('shared dial — not re-asserting the tune; the room owns the dial');
         }
       })
       .catch((e: unknown) => {
