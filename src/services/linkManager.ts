@@ -226,22 +226,6 @@ export class LinkManager {
       }
     } else {
       this.starvedSecs = 0; this.healthySecs = 0;   // in between — hold this rung
-      /* ★★★ HOLDING IS A DECISION TOO, AND NOT SAYING SO LEFT THE METER SWEEPING FOR EVER.
-       *     `settling` was cleared on only TWO of the three outcomes — judged poor, and judged
-       *     healthy. A link whose ratio sits BETWEEN starve (0.60) and healthy (0.85) takes this
-       *     branch every tick and took it with `settling` still true, so the bars animated
-       *     1-2-3-3-2-1 for the whole session. Stuart, 2026-09-21: "connection meter is still
-       *     fucked and can never settle" — which is the literal behaviour, not a figure of speech.
-       *  ★★★ AND THE DEAD BAND IS WHERE ORDINARY LINKS LIVE. Measured from his own screenshots:
-       *      the Mac showing 6 fps against rung 1's expected 10 is a ratio of exactly 0.60 — not
-       *      BELOW starve, so not poor; nowhere near healthy. POWER SAVE deliberately slows the
-       *      spectrum, so a power-saving client parks in this band and stays there.
-       *  ★★ The sweep means "still working out what this link will carry" (see startSettleSweep).
-       *     Past warm-up, a rate that is neither starving nor climbing IS the answer: this rung is
-       *     what the link carries. The animation has to stop, or it says "asking" for ever.
-       *  ★ Only here, after the warm-up return above — the ramp after a rate change must still be
-       *    allowed to look unsettled. */
-      this.settling = false;
     }
   }
 
