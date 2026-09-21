@@ -13018,6 +13018,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        /* ★★★ AUTOMATIC DIRECT SAMPLING — THE OWNER'S DEFAULT, AND THE THIRD POSITION OF THE CONTROL.
+         *
+         *  setAutoDirectSampling() existed and was reachable only from the config at startup, so the
+         *  client had no way to offer AUTO and no way to put a receiver back into it once a listener
+         *  had switched by hand. Stuart, 2026-09-21: "these buttons need to say Off On Auto and it
+         *  should show what the server owner has set".
+         *  ★★ ADMIN-GATED, UNLIKE `directSampling` ITSELF. Plain direct sampling is deliberately a
+         *     LISTENER control — "users will need to enable direct sampling in normal use" — and a
+         *     listener's choice is not written to the config. AUTO is the opposite: it is the
+         *     receiver's standing behaviour, it PERSISTS, and it outlives whoever set it, which is
+         *     exactly the trap that rule was written about.
+         *  ★ The crossover comes from the config and is not changed here: this switches the owner's
+         *    automation on and off, it does not let anyone redefine where HF begins. */
+        if (type == "autoDirectSampling") {
+            if (!adminGate("automatic direct sampling")) return;
+            if (jsonNum(msg, "value", v)) {
+                const bool on = v != 0;
+                LocalSdrShim::instance().setAutoDirectSampling(
+                    on, (double)g_dsBelowHz.load(std::memory_order_relaxed));
+                vsPersist(std::string("{\"autoDirectSampling\":") + (on ? "true" : "false") + "}");
+                // ★ Tell every client at once: the control they are looking at has just changed state.
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
+            return;
+        }
         if (type == "directSampling") {
             /* ★★★ A LISTENER CONTROL, NOT AN ADMIN ONE (Stuart, 2026-09-20). This was admin-gated, and the
              *  consequence was a receiver that ADVERTISES 500 kHz - 1766 MHz while no ordinary visitor can
@@ -13355,6 +13380,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       // ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner
                       //   gain is bypassed and VibeAGC stands down — see overloadTick.
                       + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) == 2 ? "true" : "false")
+                      /* ★★★ THE OWNER'S DIRECT-SAMPLING SETTING, not just what the hardware is doing
+                       *  this second. `dsActive` is the live state; these say what was CHOSEN, which
+                       *  is what the control has to draw.
+                       *  ★★★ WITHOUT autoDs THE CONTROL CANNOT TELL THE TRUTH. It offered OFF / ON
+                       *      only, so a receiver whose owner set AUTO showed "OFF" while the server
+                       *      was switching the tuner out by itself below the crossover — the button
+                       *      disagreed with the radio and there was no third position to put it in
+                       *      (Stuart, 2026-09-21, on the Nooelec v3: "this was on the nooelec v3
+                       *      which was in auto mode and so these buttons need to say Off On Auto").
+                       *  ★ dsBelowHz is already published on the status payload for the directory;
+                       *    the CONTROL is here and could not see it, so it is published here too.
+                       *    One value, two readers — and the second one had nothing. */
+                      + std::string(",\"autoDs\":") + (g_autoDs.load(std::memory_order_relaxed) ? "true" : "false")
+                      + ",\"dsBelowHz\":" + std::to_string((long long)g_dsBelowHz.load(std::memory_order_relaxed))
+                      + ",\"ds\":" + std::to_string(g_dsNow.load(std::memory_order_relaxed))
                       // ★★★ THE AGC'S STATE BELONGS IN THE STATE MESSAGE. The chip was driven only
                       //     by the `ovl` EVENT, so a listener who arrived after the gain had settled
                       //     — or who simply reloaded — saw nothing at all, however hard the loop was

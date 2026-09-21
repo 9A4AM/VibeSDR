@@ -1412,7 +1412,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
-    onDsActive: (on) => { hwDsActive = on; },
+    onDsActive: (on, setting) => {
+      hwDsActive = on;
+      // ★ Absent on a server that predates the field — leave the defaults and do not offer AUTO.
+      if (setting) { hwAutoDs = setting.auto; hwDsBelowHz = setting.belowHz; hwHasAutoDs = true; }
+    },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak, rateNow) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
@@ -2336,6 +2340,11 @@ let hwAgcLocked = false;
 /** ★ Automatic notch filtering is ON — the server sets both notches from the tuned frequency, so
  *  they are not a listener control while it runs. See applyRspLock. */
 let hwAutoNotch = false;
+/* ★ The owner's DIRECT SAMPLING setting, from hwinfo. Distinct from `dsMode`/`dsActive`, which are
+ *  what the hardware is doing right now — these are what was CHOSEN, which is what the control has
+ *  to draw. `hwHasAutoDs` records that the receiver told us at all: a server too old to send these
+ *  leaves AUTO unoffered rather than showing a position it cannot honour. */
+let hwAutoDs = false, hwDsBelowHz = 24e6, hwHasAutoDs = false;
 /** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
 /** ★★★ HOW MANY LNA STATES THE RADIO HAS **RIGHT NOW**, straight from rspstat. The RSP's state
  *  count is per BAND, not per model — seven below 60 MHz where hwinfo's per-model figure says ten
@@ -10322,7 +10331,17 @@ function buildMenu() {
   //   is persisted in its config; this button reports it and changes it, but must not command it
   //   from stale storage the moment a page loads.
   toggle('agc',   (on) => spec!.setHwAgc(on),   'agc', false, /*pushOnInit=*/false);
-  segment('dsSeg', 'ds', (v) => spec!.setHwDirectSampling(v as 0 | 1 | 2), 'directSampling');
+  /* ★★★ THREE POSITIONS, AND THE THIRD IS A DIFFERENT MESSAGE. OFF/ON are a listener control that
+   *  the server does not persist; AUTO is the owner's standing behaviour and is admin-gated and
+   *  persisted. Choosing OFF or ON also stands the automation down, or the crossover would simply
+   *  undo the listener's choice at the next band change and the button would look broken.
+   *  ★ -1 is the AUTO sentinel in the markup only — it is never sent as a directSampling value,
+   *    which the driver would reject (rtlsdr_set_direct_sampling takes 0/1/2). */
+  segment('dsSeg', 'ds', (v) => {
+    if (Number(v) === -1) { spec!.setHwAutoDirectSampling(true); return; }
+    if (hwAutoDs) spec!.setHwAutoDirectSampling(false);
+    spec!.setHwDirectSampling(Number(v) as 0 | 1 | 2);
+  }, 'directSampling');
 
   const gainAuto = $<HTMLButtonElement>('gainAuto');
   gainAuto.onclick = () => {
@@ -11942,6 +11961,20 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   gainMinShown = false;
   rtlAutoExplained = false;
   maybeExplainRtlAutomation();
+  /* ★★★ A BLOG V4 / V4L DOES NOT NEED DIRECT SAMPLING, AND SAYING NOTHING IS ADVICE TO USE IT.
+   *
+   *  Those two have an UPCONVERTER built in: HF arrives through the tuner like everything else, so
+   *  the control below is at best pointless on them and at worst switches the tuner out and makes
+   *  the radio deaf (Stuart, 2026-09-21, looking at a V4: "This is on a V4 which doesnt need direct
+   *  sampling so when we read the USB name as a V4/V4L we need to advise this is not needed").
+   *  ★★ ADVISED, NOT HIDDEN. Every other inert control here is hidden outright — but this one is a
+   *     thing a knowledgeable listener will come looking for BECAUSE it is how every other dongle
+   *     reaches HF, and a control that simply vanishes reads as a missing feature rather than as an
+   *     unnecessary one. Telling them why is the whole value.
+   *  ★ Matched on the model the dongle reports over USB ("RTLSDRBlog Blog V4", "RTLSDRBlog Blog
+   *    V4L"), not on a serial or a config label, because that string is the thing the hardware
+   *    itself says. A V3 and the Nooelec boards do not match and keep the control unchanged. */
+  const dsUnneeded = /\bblog\s*v4l?\b/i.test(String(caps?.model || ''));
   const isRsp = caps?.driver === 'sdrplay';
   const isAhf = caps?.driver === 'airspyhf';
   const isHrf = caps?.driver === 'hackrf';
@@ -11967,6 +12000,46 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
     el.hidden = isRsp || isAhf || isHrf;
+  /* ★★★ WHAT THIS RECEIVER'S OWNER ACTUALLY SET, under the control that obeys it — and, on a V4 or
+   *  V4L, that the control is not needed at all. Both come from hwinfo (autoDs / dsBelowHz / ds),
+   *  which had to be taught to send them: `dsActive` alone says what the hardware is doing this
+   *  second and cannot describe a SETTING, so the segment could only ever offer OFF and ON.
+   *  ★ A receiver that says nothing leaves the note hidden rather than guessing. */
+  {
+    const note = document.getElementById('dsNote');
+    const auto = document.getElementById('dsAutoNote');
+    const seg  = document.getElementById('dsSeg');
+    if (dsUnneeded && note) {
+      note.innerHTML = 'This radio has an <b>upconverter built in</b>, so it already hears HF, medium wave '
+                     + 'and long wave through the tuner. <b>Direct sampling is not needed</b> &mdash; leaving '
+                     + 'it off is correct here. Switching it on bypasses the tuner and takes the gain controls '
+                     + 'with it.';
+    }
+    if (auto) {
+      const mhz = (n: number) => (n / 1e6).toFixed(3).replace(/\.?0+$/, '');
+      if (dsUnneeded) { auto.hidden = true; }
+      else if (hwAutoDs) {
+        auto.hidden = false;
+        auto.textContent = `This receiver's owner has set AUTOMATIC direct sampling: the server switches `
+                         + `the tuner out by itself below ${mhz(hwDsBelowHz || 24e6)} MHz, and back in above it.`;
+      } else { auto.hidden = true; }
+    }
+    /* ★ The segment still works on a V4 — the owner may have a reason — but AUTO is only offered
+     *  where the server has an automatic mode to obey. */
+    if (seg) {
+      const autoBtn = seg.querySelector('[data-ds="-1"]') as HTMLElement | null;
+      if (autoBtn) autoBtn.hidden = !hwHasAutoDs;
+      /* ★★★ AND SELECT IT WHEN IT IS WHAT THE RECEIVER IS DOING. This is the actual complaint: the
+       *  Nooelec was in AUTO and the control showed OFF, because the only thing it painted from was
+       *  the live hardware state — which on an automatic receiver reads "tuner" above the crossover
+       *  and "bypassed" below it, and is never "auto". A control that cannot show its own position
+       *  is worse than one that is missing. */
+      if (hwAutoDs) {
+        for (const b of Array.from(seg.querySelectorAll('.btn')) as HTMLElement[])
+          b.classList.toggle('on', b.getAttribute('data-ds') === '-1');
+      }
+    }
+  }
   $('radioName').textContent = caps?.model
     ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
     : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');

@@ -4312,7 +4312,7 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ SAY WHAT IT IS FOR, WHERE IT IS OFFERED (Stuart, 2026-09-20). Without this the control is a piece
          of jargon, and the listing's "500 kHz - 1766 MHz" is a promise nobody knows how to collect. The gain
          warning is the honest other half: the tuner is switched OUT, so its gain stages go with it. -->
-    <div class="mnote" style="margin:2px 0 6px;opacity:.75">
+    <div class="mnote" id="dsNote" style="margin:2px 0 6px;opacity:.75">
       To receive HF and below &mdash; the short wave bands, medium wave and long wave &mdash; this radio needs
       direct sampling ON. The tuner is bypassed, so the gain controls go with it, and the VHF and UHF bands stay
       quiet until you switch it back off.
@@ -4321,10 +4321,19 @@ select.btn { padding: 6px 8px; }
          On an RTL, HF arrives on the Q branch; the I branch is a curiosity that simply leaves the receiver
          deaf, so offering it is offering a way to break your own reception. ON sends 2, which is what every
          real use of this control means. The server still accepts 0/1/2, so an older client is unaffected. -->
+    <!-- ★★★ AUTO IS A REAL POSITION, AND LEAVING IT OUT MADE THE CONTROL LIE. A receiver whose owner
+         set automatic direct sampling showed OFF while the server was switching the tuner out by
+         itself below the crossover (Stuart, 2026-09-21, on the Nooelec v3: "this was on the nooelec
+         v3 which was in auto mode and so these buttons need to say Off On Auto"). The button
+         disagreed with the radio and had nowhere to say so. -->
     <div class="seg" id="dsSeg">
       <button class="btn on" data-ds="0">OFF</button>
       <button class="btn" data-ds="2">ON</button>
+      <button class="btn" data-ds="-1">AUTO</button>
     </div>
+    <!-- ★ What the OWNER set, in their words, under the control that obeys it. Filled by main.ts from
+         hwinfo's autoDs/dsBelowHz; empty and hidden when the receiver has not said. -->
+    <div class="mnote" id="dsAutoNote" hidden style="margin:6px 0 0;opacity:.85"></div>
   </div>
 
   <h2>DISPLAY</h2>
