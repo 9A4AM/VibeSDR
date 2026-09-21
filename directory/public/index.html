@@ -182,6 +182,10 @@
   .rcAsk { margin-top: 4px; font-size: 12px; color: var(--accent); letter-spacing: .06em; }
   .rcHost { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
             font-size: 12px; color: var(--dim); letter-spacing: .03em; margin: 2px 0 10px; }
+  /* ★ Lifted out of the dim block around it: the build and its version are what an operator comes
+     to this line to check, and the machine details underneath are context for them. Not the accent
+     colour — that belongs to instructions ("ASK BEFORE TUNING"), not to a readout. */
+  .rcHost .rcVer { color: var(--fg); font-weight: 600; letter-spacing: .04em; }
   /* ★ Brighter than the detail around it: it is an instruction, not another readout. */
   .radio .cap.ask { color: var(--accent); letter-spacing: 0.06em; margin-top: 3px; }
   /* ★★ THE ONE FILLED THING ON THE PAGE. Everything else here is an outline on near-black, which
@@ -1146,8 +1150,26 @@ function serverBlock(s) {
     h.ramMb ? (h.ramMb >= 1024 ? `${(h.ramMb / 1024).toFixed(h.ramMb >= 10240 ? 0 : 1)} GB RAM` : `${h.ramMb} MB RAM`) : '',
     h.isa || '',
   ].filter(Boolean).join(' · ') : '';
-  const extra = (s.host || s.platform || hwLine)
-    ? `<div class="rcHost">${s.host ? `Server: ${esc(s.host)}` : ''}`
+  /* ★★★ WHICH VibeServer THIS IS, AND WHICH VERSION. Stuart, 2026-09-21: "i think in the directory
+   *  we should list Server version so I can keep track of it", naming the three builds — VibeServer,
+   *  VibeServer inside VibeSDR, VibeServer Lite.
+   *  ★★ The NAME comes from the server (`flavour`), not from a table here. `lite` alone cannot tell
+   *     the three apart: it means "32-bit ARM build", so the phone running the server inside the app
+   *     reports lite:false exactly like a Pi 500. Deriving it in the page would be a second lookup
+   *     table to keep in step with builds we have not met.
+   *  ★ Falls back to the old `lite` reading for a server that predates the field, so an un-upgraded
+   *    receiver still says something true rather than nothing. A missing version reads as unknown and
+   *    is simply omitted — never guessed, never shown as "".
+   *  ★ Versions are shown AS THEY ARE, not normalised: "don't bump the versions yet though display
+   *    them as is" (Stuart, same message). */
+  const flavour = s.flavour || (s.lite === true ? 'VibeServer Lite' : (s.lite === false ? 'VibeServer' : ''));
+  const verLine = flavour || s.version
+    ? [flavour, s.version].filter(Boolean).join(' ')
+    : '';
+  const extra = (s.host || s.platform || hwLine || verLine)
+    ? `<div class="rcHost">${verLine ? `<b class="rcVer">${esc(verLine)}</b>` : ''}`
+      + `${verLine && (s.host || s.platform || hwLine) ? '<br>' : ''}`
+      + `${s.host ? `Server: ${esc(s.host)}` : ''}`
       + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}`
       + `${hwLine ? `${s.host || s.platform ? '<br>' : ''}${esc(hwLine)}` : ''}</div>` : '';
   return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">

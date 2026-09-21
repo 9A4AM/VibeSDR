@@ -640,6 +640,20 @@ async function list(env, url) {
       //   or an icon URL: what a server says about itself must stay text, or one day a listing
       //   carries an image. Not lowercased — it is a NAME, and "macOS" is not "macos".
       platform: typeof status.platform === 'string' ? status.platform.slice(0, 40) : '',
+      /* ★★★ WHICH BUILD OF VibeServer, AND WHICH VERSION (Stuart, 2026-09-21: "i think in the
+       *  directory we should list Server version so I can keep track of it").
+       *  ★★ A CLOSED SET, not free text. `platform` above is printed as the server says it because
+       *     it names an OS we may never have met; this one names OUR OWN builds, so there are
+       *     exactly three legitimate answers and anything else is a server misreporting itself.
+       *     Whitelisting them keeps a listing from carrying arbitrary text into the page.
+       *  ★ The VERSION is bounded and character-restricted rather than enumerated — it moves every
+       *    release and a table here would be one more thing to bump. Absent stays absent: a server
+       *    too old to send either field shows nothing, and the page reads that as unknown rather
+       *    than inventing a number. */
+      flavour: ['VibeServer', 'VibeServer Lite', 'VibeServer inside VibeSDR']
+                 .includes(status.flavour) ? status.flavour : '',
+      version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}$/.test(status.version)
+                 ? status.version : '',
       // ★ THE MACHINE, as the server measured it (vibe_hwinfo.h) — shown so a listener can see a DAB receiver
       //   running on a 900 MHz Pi 2 or a TV (Stuart, 2026-09-19). Each field checked and bounded; text stays text.
       hw: (status.hw && typeof status.hw === 'object') ? {

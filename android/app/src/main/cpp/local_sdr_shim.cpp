@@ -22293,6 +22293,23 @@ static std::string vsTunableJson() {
 #else
     j += ",\"lite\":false";
 #endif
+    /* ★★★ WHICH BUILD OF VibeServer THIS IS, IN WORDS, so the directory can say it rather than infer
+     *  it. Stuart, 2026-09-21: "i think in the directory we should list Server version so I can keep
+     *  track of it ... VibeServer / VibeServer inside VibeSDR / VibeServer Lite".
+     *  ★★ `lite` ALONE CANNOT ANSWER THIS. It means "32-bit ARM build", so the XCover — the server
+     *     running INSIDE the VibeSDR app — reports lite:false exactly like a Pi 500, and the two are
+     *     indistinguishable in the directory today. __ANDROID__ is the honest discriminator: that
+     *     build is the app's embedded server and nothing else is.
+     *  ★ Sent as a NAME, not a code, because the directory's job is to print it and a second lookup
+     *    table in the page is a second thing to keep in step. The VERSION stays separate (`version`)
+     *    — Stuart, same message: "don't bump the versions yet though display them as is". */
+#if defined(__ANDROID__)
+    j += ",\"flavour\":\"VibeServer inside VibeSDR\"";
+#elif defined(__arm__) && !defined(__aarch64__)
+    j += ",\"flavour\":\"VibeServer Lite\"";
+#else
+    j += ",\"flavour\":\"VibeServer\"";
+#endif
     // ★ The contract, for the directory to forward (BRIEF-v11 §4): a client greys a server out by
     //   these, never by its version string.
     j += ",\"proto\":" + std::to_string(VS_PROTO) + ",\"minProto\":" + std::to_string(VS_MIN_PROTO);
