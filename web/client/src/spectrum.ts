@@ -404,6 +404,11 @@ export interface SpectrumCallbacks {
    *  ★ Optional, so a server too old to send it leaves AUTO unoffered rather than showing a
    *    position it cannot honour. */
   onDsActive?: (on: boolean, setting?: { auto: boolean; belowHz: number; mode: number }) => void;
+  /** ★ The RECEIVER's clock — signed minutes from UTC, and what it calls its zone. Its own callback
+   *  for the reason onTunerBw has one: onHwInfo's positional list is already past the length where
+   *  a wrong argument goes unnoticed. Absent on a server too old to send it, and the client then
+   *  keeps showing the browser's time rather than a blank. */
+  onServerClock?: (offsetMin: number, abbr: string) => void;
   /* ★★★ AND THE WHOLE MESSAGE, because rspstat has GROWN and a positional list cannot grow with
    *     it. The server sends agcSet, rfNotch, dabNotch, autoNotch, userNotch and rfAgc; this
    *     boundary forwarded five positional numbers and DROPPED every one of them, so the handler
@@ -908,6 +913,8 @@ export class SpectrumClient {
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
                               msg.tunerBwAuto === true);
+        if (typeof msg.tzOffsetMin === 'number')
+          this.cb.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''));
         this.cb.onDsActive?.(msg.dsActive === true,
           typeof msg.autoDs === 'boolean'
             ? { auto: msg.autoDs === true,

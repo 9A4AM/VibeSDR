@@ -2056,6 +2056,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Idle saver: after 30s without touch, ask the server for ⅓ frame rate
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
+  /** ★ The RECEIVER's clock, from hwinfo — shown in the status row instead of the phone's own time,
+   *  which the phone is already displaying two centimetres higher. null = not yet told. */
+  const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
   const [idleSlow,      setIdleSlow]      = useState(true);
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
@@ -4242,6 +4245,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     unlimited server (occupantSecsLeft returns -1). Treating that as just another number
       //     would set a deadline in the PAST; ignoring it leaves a stale clock running with
       //     nothing behind it. Either way the owner sees a countdown the server is not keeping.
+      /* ★ The RECEIVER's clock, for the status row — see ControlsBar's useClock. Stored rather than
+       *  formatted here: the bar ticks every second and only it knows when it is visible. */
+      onServerClock: (offsetMin: number, abbr: string) => {
+        setSrvTz({ offsetMin, abbr });
+      },
       onSessionWarning: (secs: number) => {
         if (destroyed.current) return;
         // ★ AND TO THE WRIST, which until now had no idea a session was timed at all. Someone
@@ -8784,6 +8792,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
       >
         <ControlsBar
+          srvTzOffsetMin={srvTz.offsetMin}
+          srvTzAbbr={srvTz.abbr}
           readOnly={readOnly}
           activeDecoder={activeDecoder}
           adminMode={adminOk}

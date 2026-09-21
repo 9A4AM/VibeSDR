@@ -204,7 +204,24 @@ export function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): stri
 }
 
 // ── Clock — port of tick() ────────────────────────────────────────────────────
-function useClock() {
+/* ★★★ THE RECEIVER'S CLOCK, NOT THE PHONE'S.
+ *
+ *  This row read "17:13 UTC · 18:13 BST", where the second half was the LISTENER's time — the one
+ *  number the phone is already showing in its own status bar, two centimetres above. What it could
+ *  not tell you is the time AT THE AERIAL, which is what explains the band: whether the receiver is
+ *  in daylight, on greyline, or deep in its night.
+ *  ★★ Stuart, 2026-09-21: "we already do for the local time anyway which when every computer and
+ *     phone has a clock visible is a bit redundant. Knowing the time of the server is important."
+ *     He then demonstrated the gap himself — he had Kiko's receiver in Paraná down as US East Coast
+ *     time, two hours out, and nothing on screen was ever going to put him right.
+ *  ★★★ THE ZONE ABBREVIATION IS THE LABEL. The row already ended in one, so swapping the listener's
+ *      for the receiver's costs NO extra width — which is what kills the "Server 18:13" idea that
+ *      would clip this line. On a UK receiver it still reads "18:13 BST" and is correct; on Kiko's
+ *      it reads "14:13 -03", which is unmistakably not your own clock. No glyph needed: a symbol
+ *      has to be learnt, and -03 is already how radio writes this.
+ *  ★ Falls back to the phone's clock when the server has not said (an older build), so the row is
+ *    never blank — but it is then labelled with the PHONE's zone, which is the honest reading. */
+function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     // Background audio keeps JS alive when locked — don't re-render the
@@ -214,10 +231,22 @@ function useClock() {
     }, 1000);
     return () => clearInterval(id);
   }, []);
-  const utc   = now.toUTCString().slice(17, 22);
-  const local = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  const tz    = now.toLocaleDateString([], { timeZoneName: 'short' }).split(', ')[1] || '';
-  return `${utc} UTC  ·  ${local} ${tz}`;
+  const utc = now.toUTCString().slice(17, 22);
+  if (tzOffsetMin === null || tzOffsetMin === undefined) {
+    const local = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const tz    = now.toLocaleDateString([], { timeZoneName: 'short' }).split(', ')[1] || '';
+    return `${utc} UTC  ·  ${local} ${tz}`;
+  }
+  /* ★ Shift UTC by the receiver's offset and read it back in UTC: that gives its wall clock without
+   *  needing an IANA zone name or the phone's tz database, and it is right for the half-hour and
+   *  three-quarter-hour zones too (India +330, the Chathams +765). */
+  const at  = new Date(now.getTime() + tzOffsetMin * 60_000);
+  const hhmm = at.toISOString().slice(11, 16);
+  const mins = Math.abs(tzOffsetMin);
+  const label = tzAbbr || (tzOffsetMin === 0 ? 'UTC'
+    : (tzOffsetMin > 0 ? '+' : '-') + String(Math.floor(mins / 60)).padStart(2, '0')
+      + (mins % 60 ? ':' + String(mins % 60).padStart(2, '0') : ''));
+  return `${utc} UTC  ·  ${hhmm} ${label}`;
 }
 
 // ── SVG paths (from mockup HTML) ──────────────────────────────────────────────
@@ -237,6 +266,10 @@ const RECORD_DOT   = Skia.Path.MakeFromSVGString('M10 10m-4 0a4 4 0 1 0 8 0a4 4 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface ControlsBarProps {
+  /** ★ The RECEIVER's clock — signed minutes from UTC and its zone name, from hwinfo. Undefined on
+   *  a server too old to say, and the row then falls back to the phone's own time. See useClock. */
+  srvTzOffsetMin?: number | null;
+  srvTzAbbr?: string;
   frequency:     number;
   mode:          SDRMode;
   step:          number;
@@ -1207,6 +1240,7 @@ const lnd = StyleSheet.create({
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
+  srvTzOffsetMin = null, srvTzAbbr = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
   fmStereo = false, activeDecoder = null, dabOn = false,
@@ -1257,7 +1291,7 @@ function ControlsBar({
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
   const snrText   = meterLabel ?? ''; // FM-DX static reading; live text comes from the bus + meterText()
-  const clock     = useClock();
+  const clock     = useClock(srvTzOffsetMin, srvTzAbbr);
 
   const cycleStep = useCallback(() => {
     const list = stepList ?? stepsForFreq(frequency);

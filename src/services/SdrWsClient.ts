@@ -421,6 +421,13 @@ export interface SDRCallbacks {
    *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
    *  between these, so re-base on it rather than trusting our own arithmetic. */
   onSessionWarning?: (secs: number) => void;
+  /** ★★★ THE RECEIVER'S CLOCK — signed minutes from UTC, and what it calls its zone.
+   *  The status row showed UTC and the PHONE's local time, and the second of those is the one thing
+   *  every phone already displays on its own status bar. What it could not say is the time AT THE
+   *  AERIAL, which is what explains the band you are hearing.
+   *  ★ Stuart, 2026-09-21, having placed a Paraná receiver on US East Coast time and been two hours
+   *    out: "this is precicely why having the server time and UTC is important". */
+  onServerClock?: (offsetMin: number, abbr: string) => void;
   /** ★ The owner's notice to listeners ("antenna maintenance in progress"), pushed when it is
    *  posted or cleared. '' = nothing to show. */
   onNotice?: (text: string) => void;
@@ -2470,6 +2477,10 @@ export abstract class SdrWsClient {
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
         this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
+      // ★ Absent on a server too old to send it — the clock then keeps showing the phone's time
+      //   rather than going blank.
+      if (typeof msg.tzOffsetMin === 'number')
+        this.callbacks.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''));
       }
       // ★★★ THE SESSION CLOCK RIDES HWINFO, NOT CONFIG — the exact trap that made Jr's whole
       // session-limit feature silently never happen (jr_vibeserver_release_pass). The phone was

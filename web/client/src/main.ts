@@ -1412,6 +1412,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
+    onServerClock: (offsetMin, abbr) => { srvTzOffsetMin = offsetMin; srvTzAbbr = abbr; },
     onDsActive: (on, setting) => {
       hwDsActive = on;
       // ★ Absent on a server that predates the field — leave the defaults and do not offer AUTO.
@@ -2345,6 +2346,16 @@ let hwAutoNotch = false;
  *  to draw. `hwHasAutoDs` records that the receiver told us at all: a server too old to send these
  *  leaves AUTO unoffered rather than showing a position it cannot honour. */
 let hwAutoDs = false, hwDsBelowHz = 24e6, hwHasAutoDs = false;
+/* ★★★ THE RECEIVER'S CLOCK, NOT YOURS. The row used to read "UTC 17:13 · 18:13" where the second
+ *  half was the BROWSER's time — the one number every phone and laptop is already showing. What it
+ *  could not tell you is what time it is AT THE AERIAL, which is what explains the band.
+ *  ★★ Stuart, 2026-09-21: "Knowing the time of the server is important... we already do for the
+ *     local time anyway which when every computer and phone has a clock visible is a bit
+ *     redundant." He then proved the need himself — he had Kiko's receiver in Paraná placed on US
+ *     East Coast time, two hours out, and nothing on screen was ever going to correct him.
+ *  ★ null = the server has not said (an older build). Then, and only then, fall back to the
+ *    browser's clock so the row never goes blank. */
+let srvTzOffsetMin: number | null = null, srvTzAbbr = '';
 /** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
 /** ★★★ HOW MANY LNA STATES THE RADIO HAS **RIGHT NOW**, straight from rspstat. The RSP's state
  *  count is per BAND, not per model — seven below 60 MHz where hwinfo's per-model figure says ten
@@ -9948,8 +9959,25 @@ addEventListener('message', (ev) => {
 // Clock + panel toggles
 function tick() {
   const d = new Date();
+  let right: string;
+  if (srvTzOffsetMin === null) {
+    right = d.toLocaleTimeString();                       // no server clock yet — show the browser's
+  } else {
+    /* ★ Shift UTC by the server's offset and read the result back in UTC: that gives the
+     *  receiver's wall clock without needing an IANA zone name or the browser's tz database. */
+    const at = new Date(d.getTime() + srvTzOffsetMin * 60_000);
+    const hhmmss = at.toISOString().slice(11, 19);
+    /* ★ The ABBREVIATION IS THE LABEL — no "Server:" prefix and no glyph, so the row costs exactly
+     *  what it did before. On a UK receiver it reads "18:13:22 BST", unchanged and correct; on
+     *  Kiko's it reads "14:13:22 -03", which is unmistakably not your own clock. */
+    const label = srvTzAbbr || (srvTzOffsetMin === 0 ? 'UTC'
+      : (srvTzOffsetMin > 0 ? '+' : '-')
+        + String(Math.floor(Math.abs(srvTzOffsetMin) / 60)).padStart(2, '0')
+        + (Math.abs(srvTzOffsetMin) % 60 ? ':' + String(Math.abs(srvTzOffsetMin) % 60).padStart(2, '0') : ''));
+    right = hhmmss + ' ' + label;
+  }
   document.getElementById('clock').textContent =
-    'UTC ' + d.toISOString().slice(11, 19) + ' · ' + d.toLocaleTimeString();
+    'UTC ' + d.toISOString().slice(11, 19) + ' · ' + right;
 }
 tick(); setInterval(tick, 1000);
 const bind = (id, el) => {

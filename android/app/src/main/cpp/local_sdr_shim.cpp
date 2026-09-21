@@ -879,6 +879,32 @@ static std::atomic<bool>   g_dabMode{false};
  *
  *  ★ Empty when DAB is off, so the field is absent-shaped for the page and an older page that has
  *    never heard of it renders exactly as before. */
+/** ★ How far this machine's local time is from UTC, in signed MINUTES. Minutes, not hours: India is
+ *  +330, Newfoundland -150, the Chathams +765, and an hours-only field is wrong for all of them. */
+static int vsUtcOffsetMinutes() {
+    const time_t t = time(nullptr);
+    struct tm lt{}, gt{};
+    localtime_r(&t, &lt);
+    gmtime_r(&t, &gt);
+    const int lm = lt.tm_hour * 60 + lt.tm_min;
+    const int gm = gt.tm_hour * 60 + gt.tm_min;
+    int diff = lm - gm;
+    // ★ The two may straddle midnight — normalise into (-720, +840], which covers every real zone.
+    if (diff <= -720) diff += 1440;
+    else if (diff > 840) diff -= 1440;
+    return diff;
+}
+/** ★ What this machine CALLS its zone ("BST", "-03", "AEST"). Empty is fine — the client formats
+ *  from tzOffsetMin when it is. */
+static std::string vsZoneAbbrev() {
+    const time_t t = time(nullptr);
+    struct tm lt{};
+    localtime_r(&t, &lt);
+    char buf[16] = {0};
+    if (strftime(buf, sizeof buf, "%Z", &lt) == 0) return {};
+    return std::string(buf);
+}
+
 static std::string vsDabBlockNow() {
     if (!g_dabMode.load(std::memory_order_relaxed)) return "";
     const char* n = g_dab.channelName();
@@ -13417,6 +13443,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             LocalSdrShim::instance().currentGainTenthDb())
                       // ★ Direct sampling IN FORCE now (auto switches it at the crossover): the tuner
                       //   gain is bypassed and VibeAGC stands down — see overloadTick.
+                      /* ★★★ THE RECEIVER'S OWN CLOCK — its UTC offset and what it calls its zone.
+                       *
+                       *  The status row showed UTC and the LISTENER'S local time, and the second of
+                       *  those is the one piece of information every phone and laptop is already
+                       *  displaying. What it cannot tell you is what time it is AT THE AERIAL, which
+                       *  is the thing that explains what you are hearing — greyline, a daytime band
+                       *  that is dead, an evening one that is alive.
+                       *  ★★ Stuart, 2026-09-21, after using Kiko's receiver in Paraná: "Knowing the
+                       *     time of the server is important... we already do for the local time
+                       *     anyway which when every computer and phone has a clock visible is a bit
+                       *     redundant." Show the SERVER's, always.
+                       *  ★★ THE ABBREVIATION IS THE LABEL, which is why no glyph or "Server:" prefix
+                       *     is needed: the row already ends in a zone name, and swapping the
+                       *     listener's for the receiver's costs no width at all. "18:13 BST" on a UK
+                       *     receiver reads exactly as before and is correct; "14:13 -03" on Kiko's
+                       *     is unmistakably not your kitchen clock.
+                       *  ★ Offset in MINUTES, signed, because not every zone is a whole hour (India
+                       *    +330, Newfoundland -150, Chatham +765). A client that formats from the
+                       *    offset rather than the abbreviation is then always right.
+                       *  ★ %Z can be empty or numeric on some libcs; the client falls back to
+                       *    formatting the offset itself, so an empty string is harmless. */
+                      + ",\"tzOffsetMin\":" + std::to_string(vsUtcOffsetMinutes())
+                      + ",\"tzAbbr\":\"" + jsonEscape(vsZoneAbbrev()) + "\""
                       + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) == 2 ? "true" : "false")
                       /* ★★★ THE OWNER'S DIRECT-SAMPLING SETTING, not just what the hardware is doing
                        *  this second. `dsActive` is the live state; these say what was CHOSEN, which
