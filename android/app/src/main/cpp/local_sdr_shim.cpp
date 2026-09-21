@@ -16823,7 +16823,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    recorded and stops stays -1 ("not measured") rather than 0 ("found nothing").
              *    Conflating those two would libel a perfectly good receiver. */
             int vStops = -1, vHeard = 0; float vBest = 0; double vParked = 0;
-            if (auto c = dspFor(sock)) {
+            /* ★★★ clientDsp DIRECTLY — NEVER dspFor() HERE. THIS BLOCK ALREADY HOLDS clientMtx
+             *  (taken well above, and it is a plain non-recursive mutex), and dspFor() takes it
+             *  again: a SELF-DEADLOCK that wedges the socket-close handler.
+             *  ★★★ WHAT IT LOOKS LIKE, because it does not look like a hang: the SPECTRUM socket
+             *      closes, this handler never finishes, and the session is left half-torn-down — so
+             *      the AUDIO socket that follows on the SAME session id opens and then delivers
+             *      NOTHING. The compat gate caught it exactly there ("WS /ws/audio → 0 frames in
+             *      6001 ms") while an ordinary probe on a fresh session passed, because a fresh
+             *      session never runs this path first.
+             *  ★★ The file already documents this exact trap one layer up — sendConfig calling
+             *     binsFor(), "a SELF-DEADLOCK … clientMtx is a plain mutex". I made the identical
+             *     mistake in a different function. Line 16803 above is the pattern to copy: it
+             *     reads clientDsp with a bare find() precisely because the lock is already held.
+             *  ★ Mirrors dspFor's own fallback (the audio socket is keyed on ->audio, not on the
+             *    map key), minus the lock. */
+            ClientDsp* cd = nullptr;
+            { auto it = clientDsp.find(sock.get());
+              if (it != clientDsp.end()) cd = it->second.get();
+              else for (auto& kv : clientDsp) if (kv.second && kv.second->audio == sock) { cd = kv.second.get(); break; } }
+            if (auto* c = cd) {
                 c->closeStop((long long)time(nullptr));   // fold in the dwell still in progress
                 vStops = c->visitStops;
                 vHeard = c->visitHeard;
