@@ -783,6 +783,7 @@ export abstract class SdrWsClient {
     if (this.dabHeld) return;            // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
+    this._armTuneSettleAsk();
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
     this._routeTune(frequency, mode ?? this.status.mode);
@@ -1224,8 +1225,12 @@ export abstract class SdrWsClient {
     const p = this.pendingView;
     if (!p) return;
     this.pendingView = null;
-    // WS down (reconnecting): drop — onopen re-sends the predicted view.
-    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
+    // WS down (reconnecting): drop — the first config after reopening re-sends the predicted
+    // view. ★ Remembered as a USER action, which is the one thing entitled to reach a shared dial.
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) {
+      this.viewTouchedWhileDown = true;
+      return;
+    }
     this.lastSendAt = Date.now();
     // Server treats zoom and pan as one case; binBandwidth ≤ 0 = keep current.
     const msg: Record<string, unknown> = { type: 'zoom', frequency: p.frequency };
@@ -1390,6 +1395,7 @@ export abstract class SdrWsClient {
 
   destroy() {
     this.destroyed = true;
+    if (this.tuneSettleAsk) { clearTimeout(this.tuneSettleAsk); this.tuneSettleAsk = null; }
     this.stopLinkManager();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
@@ -1411,6 +1417,60 @@ export abstract class SdrWsClient {
   /** True once a radio has announced itself on this client — so a LATER hwinfo means we came
    *  back, rather than arrived. */
   private hadSession = false;
+  /** ★ Set on socket open; the first `config` decides whether to restore our view or adopt the
+   *  server's. See _restoreViewOnConfig. */
+  private viewRestorePending = false;
+  /** ★ The user zoomed or panned while the socket was down — a USER action, so it is sent even
+   *  to a shared dial once the socket is back. */
+  private viewTouchedWhileDown = false;
+
+  /** ★★★ ADOPT ON A SHARED DIAL, RESTORE ELSEWHERE — decided by the server's own `shared`, which
+   *  arrives in this very message ("the decision and the fact that governs it must arrive
+   *  together", local_sdr_shim.cpp). A per-listener radio resets our view on a new socket, so
+   *  there we put it back exactly as onopen always did; a UberSDR sends no `shared` and keeps
+   *  that behaviour too. */
+  private _restoreViewOnConfig(msg: Record<string, unknown>) {
+    if (!this.viewRestorePending) return;
+    this.viewRestorePending = false;
+    const touched = this.viewTouchedWhileDown;
+    this.viewTouchedWhileDown = false;
+    if (msg.shared === true && !touched) {
+      this.dbg('shared dial — adopting the server\'s view, not restoring ours');
+      return;
+    }
+    const ws = this.spectrumWs;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type:         'zoom',
+      frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
+      binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
+    }));
+  }
+
+  /** ★★★ "GIVE ME YOUR FULL STATE" — the question that replaces every re-assert. The server
+   *  answers unconditionally with config + hwinfo + dial (+ DAB). VibeServer only: an UberSDR
+   *  would not know the message. */
+  /** ★★★ ASK WHEN OUR OWN SETTLE WINDOW CLOSES — Jr's `armTuneSettle` on the phone. The adopt
+   *  branch ignores every config for 1500 ms after OUR tune (so our own echo is not read as
+   *  somebody else); if another listener moved the dial inside that window, the server will not
+   *  say it again until it CHANGES, and we would sit on our own stale frequency for ever. So once
+   *  the window closes we ask. Armed ONLY by our own tune — never by an incoming message, which
+   *  is the discipline whose absence made the app deaf (2026-09-21). Shared dials only: on a
+   *  per-listener VFO nobody else can move ours. */
+  private tuneSettleAsk: ReturnType<typeof setTimeout> | null = null;
+  private _armTuneSettleAsk() {
+    if (!this.isVibe || !this.sharedDial) return;
+    if (this.tuneSettleAsk) clearTimeout(this.tuneSettleAsk);
+    this.tuneSettleAsk = setTimeout(() => {
+      this.tuneSettleAsk = null;
+      if (!this.destroyed) this.requestState();
+    }, 1600);
+  }
+
+  requestState() {
+    const ws = this.spectrumWs;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'state' }));
+  }
   /** The tune we connected FOR, when it came from memory rather than from the server. Re-sent once
    *  the server has told us where it actually put us; cleared the moment it is honoured. */
   private wantTune: { frequency: number; mode: SDRMode } | null = null;
@@ -1566,13 +1626,14 @@ export abstract class SdrWsClient {
       if (this.destroyed) { ws.close(); return; }
       this.dbg('Spectrum WS open');
       this.callbacks.onConnect();
-      // Restore the predicted view (falls back to acked, then tuned freq) —
-      // gestures made while the WS was down land here instead of being lost.
-      ws.send(JSON.stringify({
-        type:         'zoom',
-        frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
-        binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
-      }));
+      /* ★★★ THE VIEW IS NOT RESTORED HERE ANY MORE — IT WAITS FOR THE SERVER'S FIRST `config`
+       *     (2026-09-22). This sent our own zoom the instant the socket opened, before we could
+       *     know whether the dial is shared — so a joiner imposed its default full-span view on
+       *     a room that already had one, and on an RTL that walks the IF filter open and resets
+       *     the AGC: the blip Stuart heard when a second user connected. Stuart's contract: "the
+       *     server should say hey we are zoomed into this level ... and the joining client should
+       *     be like OK setting myself to that." See _restoreViewOnConfig. */
+      this.viewRestorePending = true;
       // ★★ NO RAW DIVISOR RE-ASSERT HERE. This used to send `set_rate` directly on
       // every socket open, which was wrong twice over:
       //
@@ -2550,7 +2611,9 @@ export abstract class SdrWsClient {
       if (typeof msg.rateNow === 'number' && msg.rateNow > 0)
         this.callbacks.onHwRateNow?.(msg.rateNow);
       // ★ Whether the server's own AGC is running — see onHwAgc.
-      if (typeof msg.agc === 'boolean') this.callbacks.onHwAgc?.(msg.agc);
+      // ★★ The server writes it as 1/0, not true/false — a boolean-only test never fired.
+      if (typeof msg.agc === 'boolean' || typeof msg.agc === 'number')
+        this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
       // messages outright, so the client hides the picker rather than offer a
@@ -2614,7 +2677,16 @@ export abstract class SdrWsClient {
       return;
     }
     if (msg.type === 'config') {
-      // Local hardware advertises its full span here → cap zoom-out to it.
+      this._restoreViewOnConfig(msg);
+      /* ★★★ THE RADIO'S IF FILTER AND GAIN, FROM THE SAME MESSAGE AS ITS FREQUENCY AND ZOOM —
+       *  the server's full state in one place (2026-09-22). hwinfo still carries them for older
+       *  servers; these fields are absent there, so nothing changes against one. */
+      if (typeof msg.ifBw === 'number')
+        this.callbacks.onHwTunerBw?.(msg.ifBw, msg.ifAuto === true);
+      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0)
+        this.callbacks.onHwGainNow?.(msg.gainNow);
+      if (typeof msg.agc === 'number' || typeof msg.agc === 'boolean')
+        this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);      // Local hardware advertises its full span here → cap zoom-out to it.
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;
       if (typeof msg.binBandwidth === 'number') this.status.binBandwidth = msg.binBandwidth;

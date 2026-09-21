@@ -2840,6 +2840,8 @@ static std::atomic<double>   g_agcHurryUntil{0.0};
 static std::atomic<bool>     g_gainSettleIsForget{false};
 /** ★ Set on every gain write: the channel peak-hold must forget the old gain's level. */
 static std::atomic<bool>     g_resetPeakHold{false};
+/** ★★ Set by agcForget: a new station must not inherit the old one's separation average. */
+static std::atomic<bool>     g_resetSepAvg{false};
 // Defined further down, beside setSampleRate(); declared here because retune() and the loop both
 // run above them.
 static void agcForget(const char* why);
@@ -5169,6 +5171,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         {
             const double span = displaySpan() / zoomFactor.load();
             half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
+            /* ★★★ BUT NOT ON A SHARED DIAL (2026-09-22). There is ONE view for everybody there,
+             *     and the server states it; a joiner's default full-span view is not a request,
+             *     it is a client that has not adopted yet. Counting it walked the filter open four
+             *     rungs on every join — four AGC resets, the blip Stuart heard when a second user
+             *     connected. "The server doesnt need to accomodate the joiners span." Widest-view-
+             *     wins stays for per-listener-VFO radios, where user 2 really has their own view. */
+            if (!vsSharedDial())
             for (auto& pr : allSpecPeers()) {
                 auto c = dspFor(pr.sock);
                 if (!c || c->viewSpanHz <= 0) continue;
@@ -5554,6 +5563,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<bool>  sepFromShoulders{true};
     /** ★ Separation, averaged over about a second — what the AGC actually judges by. */
     std::atomic<float> sepAvgDb{-200.0f};
+    /** ★★★ How many CLEAN frames (outside the settle window) sepAvgDb holds since it was last
+     *  reset. Below ~one second's worth it is not an average yet, and no verdict may read it —
+     *  see sepAvgFilled(). */
+    std::atomic<int>   sepAvgN{0};
+    std::atomic<int>   sepAvgNeed{10};
+    bool sepAvgFilled() const { return sepAvgN.load() >= sepAvgNeed.load(); }
     float chanPeakHold_ = -200.0f;   // ★ see the peak-hold note in the measurement
     float chanSlowMean_  = -200.0f;  // ★ the wobble/skew detector — see the note at chanNow
     float chanWobbleDb_  = -1.0f;
@@ -7586,6 +7601,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         for (auto& kv : out) sendText(kv.first, kv.second);
     }
+    /** ★★★ ONE ANSWER TO "WHERE IS THE RADIO?" — sent on join and on a client's {"type":"state"}.
+     *  Everything a client must ADOPT: config (frequency, mode, zoom, IF, gain), hwinfo, the DAB
+     *  box when DAB is the mode (the box IS the viewer there), and the dial. Two readers of the
+     *  same fact must be one function, or one of them drifts. */
+    void sendFullState(const std::shared_ptr<net::Socket>& sock) {
+        sendConfig(sock); sendHwInfo(sock);
+        /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
+         *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
+         *  the second listener on a shared radio got audio and no box). */
+        if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
+        if (vsSharedDial()) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            auto it = sockSession.find(sock.get());
+            sendText(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second));
+        }
+    }
     unsigned long long soleLastBytes = 0;   ///< previous sample, for the uplink rate
     double soleLastAt = 0;
     double dspLoadPct = 0;              ///< last measured total DSP load, %
@@ -8552,8 +8583,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  ★ Half a decibel a second: fast enough to follow a station fading or a retune,
                  *    slow enough to bridge a gap between words or between CW characters.
                  */
+                if (g_resetSepAvg.exchange(false, std::memory_order_relaxed))
+                    { sepAvgDb.store(-200.0f); sepAvgN.store(0); }
                 if (g_resetPeakHold.exchange(false, std::memory_order_relaxed))
-                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); }
+                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); sepAvgN.store(0); }
                       // ★ NOT the wobble/skew: they are paused through the settling window
                       //   instead (see below), because re-seeding them from a disturbed frame is
                       //   what made 104.2 look like a ghost.
@@ -8637,10 +8670,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     and the gap between them is over 3 dB (2026-08-23).
                  *  ★ A one-second time constant: long enough to average the flutter, short enough
                  *    that the 2.5s verdict is not reading mostly pre-move data. */
-                const float a = 1.0f / std::max(1.0f, (float)fftRate);
-                float avg = sepAvgDb.load();
-                if (avg < -190.0f) avg = sepNow;
-                sepAvgDb.store(avg + (sepNow - avg) * a);
+                /* ★★★ AND NOT FROM ONE FRAME, NOR FROM INSIDE THE SETTLE WINDOW (2026-09-22).
+                 *     This reset on every gain write and re-seeded from the very next frame — the
+                 *     tuner still relocking — and the verdicts then read it two seconds later as
+                 *     if it were a second of evidence. On the Pi 2 it reported "separation 2.0 ->
+                 *     0.6" across a climb the sweep says went 0.3 -> 1.0: it ROSE. Same fault the
+                 *     wobble detector already had fixed (see above): PAUSE through the window, then
+                 *     FILL as a true mean until one time constant of clean frames is in, then EMA.
+                 *     sepAvgFilled() says when that is; nothing judges before it. */
+                const int need = std::max(4, (int)std::lround(fftRate));
+                sepAvgNeed.store(need);
+                if (nowSecs() >= g_gainSettleUntil.load(std::memory_order_relaxed)) {
+                    const int n = sepAvgN.load() + 1;
+                    float avg = sepAvgDb.load();
+                    if (avg < -190.0f || n == 1) avg = sepNow;
+                    else avg += (sepNow - avg) / (float)std::min(n, need);
+                    sepAvgDb.store(avg);
+                    sepAvgN.store(std::min(n, 1 << 20));
+                }
             }
             /* ══ HOW MUCH CONTRAST IS LEFT IN THE BAND ══════════════════════════════════════
              * ★★★ THE ONE THING THAT IS TRUE OF INTERMODULATION AND OF NOTHING ELSE: it FILLS IN
@@ -11370,14 +11417,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (me->viewSpanHz > 0) { myCentre = me->viewCentreHz; myEffective = me->viewSpanHz; }
         }
         const double binBw = myEffective / (double)cfgBins;   // we emit cfgBins bins over MY span
-        char buf[512];   // grew when vfo/locked were added — a truncated JSON config is fatal
+        char buf[768];   // grew when vfo/locked, then ifBw/gain were added — a truncated JSON config is fatal
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
         // to this so you can't zoom out past the actual RTL bandwidth.
         // ★ mode: the server is AUTHORITATIVE on its own starting demodulator (the owner sets it,
         // and it is configurable). Without it the web client defaulted to nfm while the server ran
         // wfm — the UI showed NFM with a thin NFM passband until you clicked a mode. The client
         // adopts this on the first config when it has no remembered session.
-        snprintf(buf, sizeof buf,
+        const int cfgLen = snprintf(buf, sizeof buf,
             // ★★★ `vfo` — WHERE THE RADIO IS ACTUALLY TUNED, and the client was never told.
             //     Without it a joining listener has no way to know, so it falls back on its own
             //     remembered frequency and immediately tunes away from where the server put it.
@@ -11402,14 +11449,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //        decision and the fact that governs it must arrive together.
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,"
-            "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s,\"shared\":%s}",
+            "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s,\"shared\":%s,"
+            /* ★★★ THE REST OF THE RADIO'S STATE, IN THE SAME MESSAGE (2026-09-22). IF width and
+             *     gain rode only on hwinfo — a different message with different timing — so a
+             *     client deciding what to adopt could hold a config with no IF filter in it.
+             *     Stuart's contract: "the server should say hey we are zoomed into this level with
+             *     this IF filter and this gain and the joining client should be like OK setting
+             *     myself to that." ONE message states it all. hwinfo keeps its copies for older
+             *     clients. ifBw 0 = no filter (full capture). */
+            "\"ifBw\":%d,\"ifAuto\":%s,\"gainNow\":%d,\"agc\":%d}",
             (long long)llround(myCentre), cfgBins, binBw, myEffective, span,
             // ★★ THIS listener's mode and VFO, not the server's. In shared mode they are
             //    genuinely different per listener, and telling a client someone else's dial is
             //    how it ends up tuned somewhere it never asked for.
             myMode.c_str(), (long long)llround(myVfo),
             g_vsLockedCentre.load() > 0.0 ? "true" : "false",
-            vsSharedDial() ? "true" : "false");
+            vsSharedDial() ? "true" : "false",
+            g_tunerBwHz.load(std::memory_order_relaxed),
+            (g_tunerBwAuto.load(std::memory_order_relaxed)
+                && !g_dabMode.load(std::memory_order_relaxed)) ? "true" : "false",
+            LocalSdrShim::instance().currentGainTenthDb(),
+            g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? 1 : 0);
+        // ★ snprintf returns the length it WANTED — a cut config is a deaf client.
+        if (cfgLen < 0 || cfgLen >= (int)sizeof buf) { LOGE("config truncated (%d)", cfgLen); return; }
         sendText(sock, buf);
     }
 
@@ -11681,6 +11743,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         double v;
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
+        /* ★★★ "GIVE ME YOUR FULL STATE" — answered unconditionally (2026-09-22). The server only
+         *     volunteers state on a CHANGE, so a client that missed one (a dropped message, a
+         *     resumed socket, a joiner mid-session) had no way back except to ASSERT its own —
+         *     and that re-assert is what fought the shared dial for three days. Now it ASKS.
+         *     Jr's watch link has done this all along ("ASK, don't wait"). Changes nothing on
+         *     the radio, so it needs no dial and no admin. */
+        if (type == "state") { sendFullState(sock); return; }
         // ★ LOGGED alongside fftRate: these are the TWO ways a client can ask to be slowed, and
         //   which one it uses depends on whether it has recognised this server as a VibeServer.
         //   The app showed a POWER SAVE pill while sending NEITHER (Stuart, 2026-08-01), so the
@@ -16717,11 +16786,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("listener %s: own channel at %.3f kHz %s",
                      session.empty() ? "(anon)" : session.c_str(), c->vfoHz / 1e3, c->mode.c_str());
             }
-            sendConfig(sock); sendHwInfo(sock);
-            /* ★ A receiver already on a multiplex tells the joiner NOW, not at the next half-second
-             *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
-             *  the second listener on a shared radio got audio and no box). */
-            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
+            sendFullState(sock);
             broadcastUsers();          // ★ everyone learns someone joined, including the joiner
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
@@ -16754,12 +16819,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     joins a quiet room sees no strip and no chat button at all, on a receiver whose
             //     whole arrangement is that people talk to each other. Also tells everybody ELSE
             //     that the listener count just changed.
-            if (vsSharedDial()) {
-                { std::lock_guard<std::mutex> lk(clientMtx);
-                  auto it = sockSession.find(sock.get());
-                  sendText(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second)); }
-                sendDialState();
-            }
+            if (vsSharedDial()) sendDialState();   // ★ the joiner's own copy went in sendFullState
         }
         // Boot the ghost (if any) now that the new socket has taken its place. Outside the lock:
         // close() only flips the old socket's flags/fd; its own accept loop does the bookkeeping.
@@ -24603,6 +24663,10 @@ void LocalSdrShim::overloadTick() {
         LOGI("gain climb not judged — the pipeline was disturbed (a listener joined, or a buffer "
              "was dropped); re-measuring from here");
     } else
+    if (climbAt > 0 && now - climbAt >= tickProf.verdictSec && !p->sepAvgFilled()) {
+        /* ★★★ Not yet — the separation average has not refilled since the move (see sepAvgN).
+         *     Judging it now is judging one frame of a relocking tuner. Ask again next tick. */
+    } else
     if (climbAt > 0 && now - climbAt >= tickProf.verdictSec) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         /* ══ ONE QUESTION, ASKED OF EVERY MOVE ═══════════════════════════════════════════════════
@@ -24628,7 +24692,9 @@ void LocalSdrShim::overloadTick() {
         const float sepNow = p->sepAvgDb.load();
         /* ★★★ ONLY IF BOTH READINGS USED THE SAME RULER — see g_sepRulerAtRunStart. */
         const bool  sepRulerNow  = p->sepFromShoulders.load();
-        const bool  sepComparable = (sepRulerNow == g_sepRulerBeforeMove.load(std::memory_order_relaxed));
+        const bool  sepComparable = (sepRulerNow == g_sepRulerBeforeMove.load(std::memory_order_relaxed))
+                                  && sepWas > -190.0f;   // ★ baseline taken before the average filled
+
         /* ★ The band-wide half of the objective — see g_contrastBeforeMove. 99 is the "never
          *  measured" initial value, so a first move is judged on separation alone rather than on a
          *  sentinel; a real contrast is always well under that. */
@@ -25617,8 +25683,11 @@ void LocalSdrShim::overloadTick() {
     }
     /* ★ Open a run the first time the gain moves UP after being settled, and remember where it
      *   began. Closed by agcForget, by a downward move, and by the whole-run verdict itself. */
+    /* ★★★ A BASELINE IS ONLY A BASELINE IF THE AVERAGE HAD FILLED — otherwise it is one frame,
+     *     and -200 (no evidence) is the honest value. See sepAvgN. */
+    const float sepBase = p->sepAvgFilled() ? p->sepAvgDb.load() : -200.0f;
     if (want < steps && g_stepsAtRunStart.load(std::memory_order_relaxed) < 0) {
-        g_sepAtRunStart.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_sepAtRunStart.store(sepBase, std::memory_order_relaxed);
         g_sepRulerAtRunStart.store(p->sepFromShoulders.load(), std::memory_order_relaxed);
         g_stepsAtRunStart.store(steps, std::memory_order_relaxed);
     } else if (want > steps) {
@@ -25626,7 +25695,7 @@ void LocalSdrShim::overloadTick() {
         g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
-        g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_sepBeforeMove.store(sepBase, std::memory_order_relaxed);
         g_sepRulerBeforeMove.store(p->sepFromShoulders.load(), std::memory_order_relaxed);
         g_contrastBeforeMove.store(p->bandContrastDb.load(), std::memory_order_relaxed);
         if (g_dabMode.load(std::memory_order_relaxed)) {
@@ -26292,6 +26361,7 @@ static void agcForget(const char* why) {
     g_gainSettleUntil.store(now + (dabAcq ? 1.2 : 2.5), std::memory_order_relaxed);
     g_gainSettleIsForget.store(!dabAcq, std::memory_order_relaxed);   // ★ the peak-hold is STALE here
     if (dabAcq) g_resetPeakHold.store(true, std::memory_order_relaxed);
+    g_resetSepAvg.store(true, std::memory_order_relaxed);   // ★ the LAST station's separation
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
