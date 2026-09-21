@@ -12746,10 +12746,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     later overrule it — see preTunedSession. Keyed off sockSession, NOT pendingAudio:
             //     the latter exists only on a per-client radio, and the receiver that reported this
             //     bug is single-listener, where perClientDsp() is false and none of that code runs.
+            std::string tuneAsker, tuneAgent;
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
                 auto it = sockSession.find(sock.get());
                 if (it != sockSession.end() && !it->second.empty()) preTunedSession = it->second;
+                if (it != sockSession.end()) tuneAsker = it->second;
+                for (auto& kv : clientDsp)
+                    if (kv.second && kv.second->session == tuneAsker && !kv.second->agent.empty())
+                        { tuneAgent = kv.second->agent.substr(0, 40); break; }
+            }
+            /* ★★★ SAY WHO ASKED. The retune log has always said WHAT changed — "retune -> 97200.000
+             *  kHz (was 96600.000)" — and never WHICH CLIENT asked for it, so on a shared dial with
+             *  two apps connected the log cannot tell you which one is moving the radio.
+             *  ★★★ THAT COST A WHOLE EVENING. Stuart, 2026-09-20: "I only tuned on the iPhone and the
+             *      mac has fought me." The only way we established which client was re-imposing a
+             *      stale frequency was to put a THIRD socket on the receiver and capture the wire —
+             *      for something the server knew all along and was not writing down.
+             *  ★★ At the HANDLER, not inside retune(): retune() is reached from the landing gate, the
+             *     DAB entry, a band change and the idle resume, none of which has a client to name.
+             *     Here there is always exactly one asker, and it is the question being asked.
+             *  ★ The agent is trimmed and best-effort — it is there so "VibeSDR/10.5" and a browser
+             *    are distinguishable at a glance, not as an identity. */
+            {
+                double askHz = 0; jsonNum(msg, "frequency", askHz);
+                if (askHz > 0)
+                    LOGI("tune -> %.3f kHz asked by session [%s]%s%s", askHz / 1e3,
+                         tuneAsker.empty() ? "?" : tuneAsker.c_str(),
+                         tuneAgent.empty() ? "" : " · ", tuneAgent.c_str());
             }
             std::string m = jsonStr(msg, "mode");
             /* ★★★ A BLOCKED MODE IS BLOCKED HERE TOO. The check lived only in the `mode` handler,
