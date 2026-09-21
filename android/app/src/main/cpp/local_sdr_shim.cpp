@@ -7704,7 +7704,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     meter to lag a bit though" — it was not lag, it was most of the readings never arriving.
      *  ★ Two quantities, two classes. Reusing a class is not a shortcut, it is a claim that the
      *    older message is worthless, and that claim was false. */
-    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat };
+    /* ★★★ Lx IS ITS OWN CLASS, AND IT HAD TO LEARN THAT THE HARD WAY. The lightning message was
+     *  sent as Out::Adc, and these classes are NEWEST-WINS: a frame supersedes the queued frame of
+     *  its own class. `lx` and `adc` go out in the SAME pass, adc first — so every single tick, the
+     *  lightning frame deleted the converter telemetry before the client ever saw it.
+     *  ★★★ MEASURED on the Pi 500's V4, 2026-09-21: sig 298 frames in 20 s (14.90/s), lx 298
+     *      (14.90/s), adc ONE (0.05/s). Stuart found it from the outside — "the V4 shows the PK
+     *      figure but the V4L doesnt" — and the honest answer was that neither reliably does.
+     *  ★★ WHAT IT COST: the client blanks pk after 5 s without an `adc`, so the peak readout was
+     *     mostly empty; worse, the "% RAILED" warning rides the same message, so the one indicator
+     *     that says the front end is clipping almost never arrived.
+     *  ★ The enum note above adc already warned "NOT Out::Sig" — the separation was understood and
+     *    then undone by a third message quietly reusing the class. One class, one quantity. */
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx };
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -7836,7 +7848,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
         if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
-            || cls == Out::RspStat) {
+            || cls == Out::RspStat || cls == Out::Lx) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -9604,7 +9616,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double lxRate = lxBand ? g_sferic.ratePerMin(lxT) : 0.0;
                     snprintf(sb, sizeof sb, "{\"type\":\"lx\",\"rate\":%.1f,\"ago\":%.0f}",
                              lxRate, lxBand ? g_sferic.agoSecs(lxT) : -1.0);
-                    sendText(p.sock, sb, Out::Adc);
+                    // ★★★ Out::Lx, NOT Out::Adc — see the enum. Sharing the class made this frame
+                    //     delete the converter telemetry every tick.
+                    sendText(p.sock, sb, Out::Lx);
                 }
             }
         }
