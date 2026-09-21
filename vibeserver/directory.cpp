@@ -457,6 +457,19 @@ std::string buildStatus(int port) {
     if (!plat.empty()) j += ",\"platform\":\"" + plat + "\"";
     // ★ CPU, cores, clock, RAM and the instruction set this build runs — see vibe_hwinfo.h.
     j += ",\"hw\":" + vibe::hardwareJson();
+    /* ★★★ WHICH VibeServer, AND WHICH VERSION (Stuart, 2026-09-21: "i think in the directory we
+     *  should list Server version so I can keep track of it").
+     *  ★★★ THIS PAYLOAD IS A CURATED SUBSET, NOT vibeserver.json. Both fields have been in
+     *      vibeserver.json for ages, and I wrote the directory's whitelist and its page believing
+     *      that meant they were "already on the wire". They were not — this function decides what
+     *      the directory ever sees, and it had never been told. The listing came back with empty
+     *      flavour AND empty version, which is how it was caught.
+     *  ★ Taken from `ident` (the server's own vibeserver.json) rather than recomputed, so there is
+     *    one source for the number and the build name and they cannot drift apart. */
+    { const std::string ver = jsonStr(ident, "version");
+      if (!ver.empty()) j += ",\"version\":\"" + ver + "\""; }
+    { const std::string fl = jsonStr(ident, "flavour");
+      if (!fl.empty()) j += ",\"flavour\":\"" + fl + "\""; }
     // ★ The contract this server speaks (docs/PROTOCOL.md) — a client greys a server out by these.
     if (jsonNum(ident, "proto", -1) >= 0)
         j += ",\"proto\":" + std::to_string((int)jsonNum(ident, "proto", 0))
