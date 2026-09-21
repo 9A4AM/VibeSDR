@@ -172,6 +172,10 @@ set(VIBESERVER_VERSION "${CMAKE_MATCH_1}")
 if(NOT VIBESERVER_VERSION)
   message(FATAL_ERROR "could not read the version from vibeserver/CMakeLists.txt — see the note above")
 endif()
+# ★ Set only by lite/android/app/build.gradle — see the flavour report in local_sdr_shim.cpp.
+if (VIBE_LITE_APP)
+  target_compile_definitions(vibelocalsdr PRIVATE VIBE_LITE_APP=1)
+endif()
 target_compile_definitions(vibelocalsdr PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}"
     VIBE_DAB_PFFFT=1)   # ★ the DAB OFDM transform uses the PFFFT this target already links — see vibe_dab_fft.h
 message(STATUS "VibeServer core version: ${VIBESERVER_VERSION}")

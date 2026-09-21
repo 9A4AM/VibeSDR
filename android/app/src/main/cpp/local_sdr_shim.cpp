@@ -22432,7 +22432,16 @@ static std::string vsTunableJson() {
      *  ★ Sent as a NAME, not a code, because the directory's job is to print it and a second lookup
      *    table in the page is a second thing to keep in step. The VERSION stays separate (`version`)
      *    — Stuart, same message: "don't bump the versions yet though display them as is". */
-#if defined(__ANDROID__)
+    /* ★★★ LITE FIRST, BECAUSE IT IS ALSO ANDROID. Caught by deploying it: the Sony TV runs the
+     *  standalone Lite app (com.vibesdr.serverlite) and announced itself as "VibeServer inside
+     *  VibeSDR" — the OTHER app. __ANDROID__ is true for both, and they share one CMakeLists, so
+     *  the platform cannot answer this question. The Lite build passes -DVIBE_LITE_APP=ON and that
+     *  is the only thing that can tell them apart.
+     *  ★ "VibeServer Lite" is the PRODUCT, not the platform: it is this Android app AND the 32-bit
+     *    ARM Linux build (the Pi 2), which is why that case says Lite too. */
+#if defined(VIBE_LITE_APP)
+    j += ",\"flavour\":\"VibeServer Lite\"";
+#elif defined(__ANDROID__)
     j += ",\"flavour\":\"VibeServer inside VibeSDR\"";
 #elif defined(__arm__) && !defined(__aarch64__)
     j += ",\"flavour\":\"VibeServer Lite\"";

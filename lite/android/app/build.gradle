@@ -15,6 +15,25 @@ android {
     compileSdk 36
     ndkVersion '27.1.12297006'
 
+    /* ★★★ ExpiredTargetSdkVersion DOES NOT APPLY TO THIS APP, AND IT FAILS THE BUILD ANYWAY.
+     *
+     *  lintVitalRelease runs on every assembleRelease and enforces "Google Play requires that apps
+     *  target API level 33 or higher" — a PLAY POLICY. Lite never goes near Play: it is sideloaded
+     *  from GitHub, and that is the entire reason it exists as a separate app from the main one
+     *  with VibeServer built in.
+     *  ★★ THE LOW TARGET IS THE POINT, NOT AN OVERSIGHT. targetSdkVersion 28 is what keeps the old
+     *     rules in force — no scoped storage, no background-service and notification restrictions —
+     *     so the server runs on e-waste-tier hardware: a 2017 Fire 7 on API 22, an old Bravia.
+     *     Raising it to satisfy a policy we are not subject to would break exactly the devices this
+     *     app was written for. Stuart, 2026-09-21: "we deliberately used older SDK's to make sure
+     *     it was compatible with e-waste tier ancient android devices".
+     *  ★ ONE check disabled, not lint. `checkReleaseBuilds false` would switch off every fatal lint
+     *    rule including ones that do apply here; this silences the single rule that is asking the
+     *    wrong question. */
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
     defaultConfig {
         applicationId 'com.vibesdr.serverlite'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
@@ -25,6 +44,12 @@ android {
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_STL=c++_shared",
+                          // ★★★ WHICH ANDROID APP THIS IS. The shim reports a `flavour` so the
+                          //     directory can name the build, and __ANDROID__ alone cannot tell
+                          //     Lite from the main app — BOTH are Android, and they share this very
+                          //     CMakeLists. Without this the TV announced itself as "VibeServer
+                          //     inside VibeSDR", which is the other app entirely.
+                          "-DVIBE_LITE_APP=ON",
                           "-DSDR_KIT_ROOT=${NATIVE}/kit",
                           "-DOPUS_A=${NATIVE}/opus/lib/armeabi-v7a/libopus.a"
             }
