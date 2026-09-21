@@ -2642,7 +2642,35 @@ export abstract class SdrWsClient {
         //     drum would stutter for everyone watching. Two questions, two thresholds; they were
         //     one, and the cheap one inherited the costly one's caution.
         const moved = Math.abs(sv - Number(this.status.frequency));
-        if (!this.wantTune && settled && Number.isFinite(sv) && sv > 0 && moved > 100) {
+        /* ★★★ THE ONE CLAUSE THE WEB CLIENT DOES NOT HAVE — AND IT IS THE BUG.
+         *
+         *  Compared clause by clause against spectrum.ts, which does this correctly:
+         *      web:  if (settled && cfg.serverVfo && moved > 100)
+         *      app:  if (!this.wantTune && settled && ... && moved > 100)
+         *  Same 1500 ms settle, same 100 Hz floor, same view-follow below. The ONLY difference is
+         *  `!this.wantTune`, and it is why an app can sit on a stale dial for ever while the
+         *  browser beside it tracks perfectly.
+         *
+         *  ★★★ HOW IT BITES: the adopt runs BEFORE the wantTune block below, so the config that
+         *      carries the remembered tune is skipped here. The server sends `config` on connect
+         *      and on CHANGE — so if nothing moves the dial afterwards, the only config that
+         *      client will ever see was the one it threw away. Measured 2026-09-21 on Stuey3D
+         *      SonyTV: server on 99.7 (moved there from the iPhone), Mac reading 97.8 — a
+         *      frequency not even on the Mac's own axis.
+         *  ★★ AND THERE IS NOTHING FOR THE GUARD TO PROTECT ON A SHARED DIAL: the wantTune block
+         *     below already refuses to assert a remembered tune there ("NEVER ON A SHARED DIAL"),
+         *     so blocking the adopt buys a stale readout and prevents nothing.
+         *  ★ Stuart, stating the model: "The apps should simply mirror the server ... they should
+         *    not fight the server and should not be holding the tuning." On a shared dial the
+         *    server is the authority; a client that can disagree with it is the fault.
+         *  ✗ Left in place for a PER-LISTENER VFO, where the dial genuinely is ours and a
+         *    remembered tune is the listener's own answer — that is the case the guard was for. */
+        const sharedNow = msg.shared === true || this.sharedDial;
+        if (sharedNow && this.wantTune) {
+          this.dbg('shared dial — the server owns this VFO; dropping the remembered tune');
+          this.wantTune = null;
+        }
+        if ((sharedNow || !this.wantTune) && settled && Number.isFinite(sv) && sv > 0 && moved > 100) {
           this.dbg(`another listener moved the dial to ${sv}`);
           this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
           this.status.frequency = sv;
