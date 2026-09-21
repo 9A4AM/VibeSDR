@@ -2638,6 +2638,38 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
  *   have already checked the other side of the peak once, so a settled radio does not oscillate.
  */
 static std::atomic<float>    g_sepBeforeMove{0.0f};
+/** ★★★ THE BAND'S CONTRAST BEFORE THE MOVE — the half of the objective that was missing.
+ *
+ *  The hill-climb asks "did that move leave the signal further above its surroundings?" and takes
+ *  "surroundings" to mean the SHOULDERS, 30–130 kHz either side. That is the right question for the
+ *  station you are tuned to and blind to what the move did to everything else.
+ *
+ *  ★★★ MEASURED LIVE ON THE PI 2 (R820T2), 2026-09-21, which is the only radio of Stuart's that
+ *      shows this — every other server is an R860:
+ *        104.2, a blowtorch: separation 16.3 -> 31.3 dB as the gain rose. The loop behaves.
+ *        106.9, a weak one:  separation  3.5 ->  5.8 dB, so the climb was RIGHT by its own
+ *                            objective — and it ratcheted 8.7 -> 40.2 -> 44.5 -> 49.6 dB in seven
+ *                            seconds, where the front end sprays over the rest of the band.
+ *      adcPeak was -36 to -17 dBFS throughout, so nothing railed and the ADC backoff never ran.
+ *  ★★ SO THE OBJECTIVE WAS INCOMPLETE, NOT WRONG. Maximising one weak channel's separation is
+ *     exactly what it was told to do; nothing told it what that cost the band. bandContrastDb is
+ *     that number — "top of the stations against the floor between them... Collapses when the front
+ *     end starts filling the gaps in" — and it was computed and then only read by the branch that
+ *     the separation rewrite disabled.
+ *  ★ SAFE ON A CLEAN TUNER BY CONSTRUCTION, which matters because only the Pi 2 has the fault: an
+ *    R860 does not fill the gaps in as the gain rises, so this term stays near zero there and
+ *    changes nothing. It can only ever REFUSE a climb, never ask for one. */
+static std::atomic<float>    g_contrastBeforeMove{99.0f};
+/** ★★★ HOW MUCH BAND CONTRAST A CLIMB MAY COST BEFORE IT IS REFUSED.
+ *  ★★ 2.0 dB, and the number comes from the two live traces rather than from argument. On 104.2,
+ *     where the loop is right to climb, contrast moved within about a decibel between steps — band
+ *     breathing, the same order as the 0.5 dB the separation arm calls noise. On 106.9 at the top
+ *     of the ladder the gaps between stations fill in by many decibels. 2.0 sits above the first
+ *     and well below the second.
+ *  ★ Deliberately NOT an absolute floor like the old bandIsMush test (contrast < 15 dB), which
+ *    never fired here — 104.2 measured 21.8-26.9 dB at every gain including the ruinous ones. What
+ *    distinguishes the two cases is the CHANGE across a move, not the level. */
+static constexpr float       kContrastCostDb = 2.0f;
 /** ★ DAB's own "before the move" figures — see the DAB verdict in overloadTick. */
 static std::atomic<float>    g_dabFibBeforeMove{-1.0f};
 static std::atomic<float>    g_dabNullBeforeMove{0.0f};
@@ -24421,6 +24453,13 @@ void LocalSdrShim::overloadTick() {
          */
         const float sepWas = g_sepBeforeMove.load(std::memory_order_relaxed);
         const float sepNow = p->sepAvgDb.load();
+        /* ★ The band-wide half of the objective — see g_contrastBeforeMove. 99 is the "never
+         *  measured" initial value, so a first move is judged on separation alone rather than on a
+         *  sentinel; a real contrast is always well under that. */
+        const float contrastWas  = g_contrastBeforeMove.load(std::memory_order_relaxed);
+        const float contrastNow  = p->bandContrastDb.load();
+        const float contrastFell = (contrastWas < 90.0f && contrastNow < 90.0f)
+                                 ? (contrastWas - contrastNow) : 0.0f;
         const float d = sepNow - sepWas;
         const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
 
@@ -24606,6 +24645,30 @@ void LocalSdrShim::overloadTick() {
             steps_forceUp   = (dir < 0);
             g_sameDirRun.store(0, std::memory_order_relaxed);
     g_nextStride.store(0, std::memory_order_relaxed);   // ★ wrong once: back to one rung
+            g_settled.store(true, std::memory_order_relaxed);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
+        } else if (d > 0.5f && dir > 0 && contrastFell > kContrastCostDb) {
+            /* ★★★ IT BOUGHT THIS CHANNEL AND SOLD THE BAND. A climb that lifts the tuned station a
+             *  little while filling in the gaps between every OTHER station is not an improvement,
+             *  it is the front end starting to manufacture — and the separation objective alone
+             *  cannot see it, because it only looks 30-130 kHz either side of where you are tuned.
+             *
+             *  ★★★ THIS IS THE 106.9 CASE, MEASURED LIVE ON THE PI 2 (2026-09-21). Separation there
+             *      runs 3.5 -> 5.8 dB, so every climb was correctly judged "better" by its own
+             *      objective and the gain ratcheted 8.7 -> 40.2 -> 44.5 -> 49.6 dB in seven seconds.
+             *      Nothing railed (adcPeak -36 to -17 dBFS) so the ADC backoff never ran either.
+             *      On 104.2 the same loop behaves perfectly (separation 16.3 -> 31.3) — which is
+             *      why this had to be a term in the objective, not a cap on the gain.
+             *  ★★ REFUSES, NEVER REQUESTS. It can only turn a "better" into a "worse"; it never
+             *     asks for gain. So on an R860 — every other server Stuart runs — where contrast
+             *     does not collapse as the gain rises, this term is ~0 and nothing changes at all.
+             *  ★ Only on the way UP. Coming down cannot be the thing that made the mush. */
+            LOGI("that step up bought %.1f dB of separation (%.1f -> %.1f) but cost %.1f dB of band "
+                 "contrast (%.1f -> %.1f) — that is the front end filling the band in, putting it back",
+                 d, sepWas, sepNow, contrastFell, contrastWas, contrastNow);
+            steps_forceDown = true;
+            g_sameDirRun.store(0, std::memory_order_relaxed);
+            g_nextStride.store(0, std::memory_order_relaxed);
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f) {
@@ -25352,6 +25415,7 @@ void LocalSdrShim::overloadTick() {
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_contrastBeforeMove.store(p->bandContrastDb.load(), std::memory_order_relaxed);
         if (g_dabMode.load(std::memory_order_relaxed)) {
             const auto q = g_dab.quality();
             g_dabFibBeforeMove.store(q.locked ? q.fibRate : -1.0f, std::memory_order_relaxed);
