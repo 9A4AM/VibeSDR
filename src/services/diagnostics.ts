@@ -62,7 +62,10 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   // ── Server messages we did not handle ────────────────────────────────────
   // ★★ The single most useful thing in this report when a receiver misbehaves: a server says
   // something, we ignore it, and the symptom turns up somewhere unrelated. See protocolLog.ts.
-  lines.push('', '--- unhandled server messages ---');
+  /* ★ The ring now also carries DECISIONS the client made (protocolLog.noteDecision) — the
+   *  shared-dial adopt/decline above all — so the heading says both. A report that names only
+   *  half its contents gets read as if the other half is not there. */
+  lines.push('', '--- unhandled server messages + client decisions ---');
   {
     const u = unhandledLog();
     if (!u.length) lines.push('none');

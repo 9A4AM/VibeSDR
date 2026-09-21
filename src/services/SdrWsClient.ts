@@ -50,7 +50,7 @@ import type { DabState } from './dabTypes';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
-import { noteUnhandled } from './protocolLog';
+import { noteUnhandled, noteDecision } from './protocolLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 
@@ -2467,8 +2467,23 @@ export abstract class SdrWsClient {
        *     Everything above is right for a PER-LISTENER VFO, where the dial is ours and a resume
        *     must put the listener back. On a shared dial the opposite is true: the room owns the
        *     frequency, the landing IS the room, and re-asserting our own is the app arguing with
-       *     the server. Every resume from background fires an hwinfo, so this shoved a stale
-       *     frequency at the room on every unlock of the phone.
+       *     the server.
+       *  ★★★ AND hwinfo IS NOT RARE — IT ARRIVES ON EVERY RETUNE BY ANYONE. The server re-sends it
+       *      to every spectrum client whenever the RF centre, tuner bandwidth or gain cap moves
+       *      ("★ Only on a CHANGE. This runs on every retune", local_sdr_shim.cpp), so while one
+       *      listener works the dial, every OTHER client gets a stream of them. That made this the
+       *      engine of the whole fault, not an edge case on resume:
+       *        1. someone tunes -> the dongle moves -> hwinfo to everybody
+       *        2. each other client re-asserts ITS OWN stale frequency here
+       *        3. tune() stamps lastLocalTuneAt, so `settled` (1500 ms) is false
+       *        4. the stream of hwinfos keeps it false FOR EVER, so the adopt branch in the config
+       *           handler can never run — the client is structurally deaf while anyone is tuning
+       *        5. and step 2 drags the room back, which is the bounce
+       *      Stuart named the symptom of (4) without knowing the cause: "I used to see user xx has
+       *      tuned to xxxxMHz ... I've not seen that toast in a while" — that toast is fired FROM
+       *      the adopt branch, so its disappearance was the branch going dead.
+       *  ★★ Which is also the honest answer to "the web client just works": it has no equivalent
+       *     of this block, so nothing ever stamps its settle timer and its adopt always runs.
        *  ★★★ TWO WRITERS IS WHY IT BOUNCES RATHER THAN SITTING STALE. Stuart, 2026-09-21: "its now
        *      fucking bouncing between the 2 ... the server tells the app hey I am on 103.0 now and
        *      the app sticks its fingers in its ears". A single stale writer sits on the wrong
@@ -2699,7 +2714,21 @@ export abstract class SdrWsClient {
           this.dbg('shared dial — the server owns this VFO; dropping the remembered tune');
           this.wantTune = null;
         }
-        if ((sharedNow || !this.wantTune) && settled && Number.isFinite(sv) && sv > 0 && moved > 100) {
+        /* ★★★ SAY WHAT WAS DECIDED, WHERE A RELEASE BUILD CAN BE READ. dbg() goes to onDbg, which
+         *     nothing in the UI consumes, so on a device this decision has always been invisible —
+         *     and it is THE decision the shared dial turns on. Recorded into the diagnostics ring
+         *     the About screen already exports, so a reproduction can be read instead of guessed
+         *     at. See protocolLog.noteDecision. */
+        const wouldAdopt = (sharedNow || !this.wantTune) && settled
+                        && Number.isFinite(sv) && sv > 0 && moved > 100;
+        if (!wouldAdopt && Number.isFinite(sv) && sv > 0 && moved > 100) {
+          noteDecision('vibe', `dial NOT adopted ${sv} (moved ${Math.round(moved)})`
+            + ` shared=${sharedNow ? 1 : 0} settled=${settled ? 1 : 0}`
+            + ` wantTune=${this.wantTune ? 1 : 0} msgShared=${msg.shared === true ? 1 : 0}`
+            + ` dialShared=${this.sharedDial ? 1 : 0}`);
+        }
+        if (wouldAdopt) {
+          noteDecision('vibe', `dial adopted ${sv} (moved ${Math.round(moved)})`);
           this.dbg(`another listener moved the dial to ${sv}`);
           this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
           this.status.frequency = sv;

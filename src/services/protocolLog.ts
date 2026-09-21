@@ -58,5 +58,42 @@ export function noteUnhandled(backend: string, text: string): void {
   }
 }
 
+/* ★★★ AND THE DECISIONS WE DO MAKE, FOR THE SAME REASON THE UNHANDLED ONES ARE HERE.
+ *
+ * This file's own opening note says it: three investigations came down to "a server said
+ * something and we ignored it in silence", and `onDbg` IS NOT CONSUMED ANYWHERE IN THE UI, so on
+ * a release build that logging goes nowhere. The shared-dial hunt then spent THREE DAYS in exactly
+ * that hole one layer up — SdrWsClient says "another listener moved the dial to X" at the precise
+ * moment in question, and on Stuart's phone that line went into a void, so every session was spent
+ * INFERRING the client's decision from a frequency readout. Stuart, 2026-09-21: "What I do not
+ * understand is how it is so hard to tell the app to fucking listen to the server?" — neither of
+ * us could see whether it had heard.
+ *
+ * ★★ A DECLINE IS THE INTERESTING EVENT, so it is recorded with the values that caused it. "Did
+ *    not adopt" plus shared/settled/moved answers in one line what a dial readout cannot answer
+ *    at all.
+ * ★ Same ring, same per-text tally, so a decision that repeats twenty times a second occupies one
+ *   slot — and the fact that it repeats is itself the finding. Keyed on the text with the numbers
+ *   stripped, or every new frequency would be a new entry and eat the ring exactly as sig/adc did.
+ */
+export function noteDecision(backend: string, text: string): void {
+  const key = backend + '|decision|' + text.replace(/-?[\d.]+/g, '#');
+  const seen = counts.get(key);
+  if (seen) {
+    seen.n++;
+    seen.line.ts = Date.now();
+    seen.line.text = `${seen.base}  (x${seen.n})`;
+    return;
+  }
+  const base = text.slice(0, 140);
+  const line: ProtoLine = { ts: Date.now(), backend, text: base };
+  counts.set(key, { n: 1, line, base });
+  ring.push(line);
+  if (ring.length > MAX) {
+    const dropped = ring.shift();
+    if (dropped) for (const [k, v] of counts) if (v.line === dropped) { counts.delete(k); break; }
+  }
+}
+
 /** Newest last. Used by buildDiagnostics(). */
 export function unhandledLog(): ProtoLine[] { return ring.slice(); }
