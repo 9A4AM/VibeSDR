@@ -712,6 +712,9 @@ export abstract class VibeServerWsClient {
   /** ★ Direct sampling on a REMOTE RTL — the web's dsSeg. The app's handler went only to its own
    *  local dongle, so on a networked server the control did nothing. 0 off, 1 I, 2 Q. */
   setHwDirectSampling(v: 0 | 1 | 2) { this._sendCtl({ type: 'directSampling', value: v }); }
+  /** ★ AUTO direct sampling (the engine switches the tuner out below the crossover). Admin-gated on
+   *  the server, as the web client's setHwAutoDirectSampling is. */
+  setHwAutoDirectSampling(on: boolean) { this._sendCtl({ type: 'autoDirectSampling', value: on ? 1 : 0 }); }
 
   /** ★★★ TELL THE SERVER SOMEONE IS ACTUALLY HERE — on BOTH sockets, on ACTIVITY.
    *
@@ -2169,6 +2172,8 @@ export abstract class VibeServerWsClient {
       return;
     }
     if (msg.type === 'hwinfo') {
+      if (typeof msg.autoDs === 'boolean')
+        this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
       //     Backgrounding pauses the spectrum, and resuming opens a FRESH socket — a new session
       //     as far as the server is concerned, so it starts the listener at the radio's landing

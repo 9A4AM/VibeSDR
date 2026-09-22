@@ -825,6 +825,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setBiasTee(on: Boolean) { VibeLocalSDR.setBiasTee(on) }
     @ReactMethod fun setAgc(on: Boolean) { VibeLocalSDR.setAgc(on) }
     @ReactMethod fun setDirectSampling(mode: Double) { VibeLocalSDR.setDirectSampling(mode.toInt()) }
+    /** ★ AUTO direct sampling for LOCAL hardware (2026-09-22) — the engine and VibeLocalSDR had it
+     *  (the server config uses it); the bridge did not, so the local panel could only offer Off/On. */
+    @ReactMethod fun setAutoDirectSampling(on: Boolean, belowHz: Double) {
+        VibeLocalSDR.setAutoDirectSampling(on, if (belowHz > 0) belowHz else 24e6)
+    }
     @ReactMethod fun setSampleRate(rate: Double) { VibeLocalSDR.setSampleRate(rate) }
     @ReactMethod fun setDeemphasis(tau: Double) { VibeLocalSDR.setDeemphasis(tau) }
     @ReactMethod fun setSquelch(on: Boolean, db: Double) { VibeLocalSDR.setSquelch(on, db.toFloat()) }

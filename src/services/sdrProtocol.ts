@@ -243,6 +243,10 @@ export interface SDRCallbacks {
    *  app showed its own idea of the gain and, on connecting, pushed it — overriding the owner's
    *  resting gain and re-gaining a shared receiver under everyone already listening. */
   onHwGainNow?: (tenthDb: number) => void;
+  /** ★ Direct sampling as the RADIO has it: the owner's AUTO switch and crossover, and what is live
+   *  now (0 off / 2 Q-branch). Without it the control could only offer Off/On and disagreed with a
+   *  radio set to Auto (2026-09-22). */
+  onHwDirectSampling?: (autoDs: boolean, belowHz: number, live: number) => void;
   /** ★★★ WHERE THE RATE ACTUALLY IS on the serving radio, in Hz — `gainNow` one field over, and
    *  the same lesson. A client cannot query a remote dongle, so with nothing to adopt the picker
    *  could only show what this phone happened to remember, and a client that shows a rate the

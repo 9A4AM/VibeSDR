@@ -57,8 +57,9 @@ const TUNER_BWS = [-1, 0, 1_500_000, 1_000_000, 700_000, 500_000, 350_000];
  *  the whole of HF arrives on the Q branch; the I branch is a curiosity whose only effect here is a deaf
  *  receiver, so offering it offers a way to break your own reception. ON is 2 — what every real use means —
  *  and the server still accepts 0/1/2, so nothing older breaks. */
+/* ★ -1 = AUTO: the engine switches the tuner out below the crossover and back in above it. */
 const DS_MODES: { label: string; value: number }[] = [
-  { label: 'Off', value: 0 }, { label: 'On', value: 2 },
+  { label: 'Off', value: 0 }, { label: 'On', value: 2 }, { label: 'Auto', value: -1 },
 ];
 
 export interface LocalHardwarePanelProps {
@@ -103,6 +104,10 @@ export interface LocalHardwarePanelProps {
   onAgc: (on: boolean) => void;
   directSampling: number;
   onDirectSampling: (mode: number) => void;
+  /** ★ Owner's AUTO direct-sampling switch and its crossover (Hz), from the radio's hwinfo. */
+  autoDs?: boolean;
+  dsBelowHz?: number;
+  onAutoDs?: (on: boolean) => void;
   /** ★★ WHAT THE CONNECTED RADIO ACTUALLY IS, from the server. Null = unknown, in which case
    *  we fall back to the dongle layout, which is what every VibeServer was before there were
    *  other radios. ★ Never INFER the driver from what else is present: an Airspy HF+ was drawn
@@ -1158,8 +1163,21 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
 
           <Text style={styles.section}>DIRECT SAMPLING</Text>
-          <Seg slot={slot} options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
+          <Seg slot={slot}
+               options={DS_MODES.filter(d => d.value >= 0 || !!p.onAutoDs).map(d => d.value)}
+               value={p.autoDs ? -1 : p.directSampling}
+               onChange={(v) => {
+                 if (v === -1) { p.onAutoDs?.(true); return; }
+                 if (p.autoDs) p.onAutoDs?.(false);
+                 p.onDirectSampling(v);
+               }}
                fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
+          {p.autoDs && (
+            <Text style={styles.note}>
+              Auto: below {((p.dsBelowHz ?? 24e6) / 1e6).toFixed(0)} MHz the tuner is switched out and HF comes
+              straight off the ADC; above it, the tuner is back in. Now {p.directSampling ? 'ON' : 'off'}.
+            </Text>
+          )}
           <Text style={styles.note}>
             To receive HF and below — short wave, medium wave and long wave — this radio needs this ON:
             the tuner is switched out and those bands come straight off the ADC, so the gain controls go with

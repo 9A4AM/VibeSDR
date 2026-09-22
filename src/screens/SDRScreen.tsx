@@ -911,6 +911,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwBiasTee,     setHwBiasTee]     = useState(false);
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
+  /* ★ AUTO direct sampling and its crossover, as the radio reports them (hwinfo). */
+  const [hwAutoDs,      setHwAutoDs]      = useState(false);
+  const [hwDsBelowHz,   setHwDsBelowHz]   = useState(24_000_000);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
   // ★★ THE BROADCAST-FM TREATMENTS. All four default ON, matching the server: each only acts on the
@@ -1169,6 +1172,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *   fixed and the checker actually ran, said so). Direct sampling is a normal listener
          *   control on an RTL below 24 MHz; nbx is the HF noise blanker. */
         setHwDirectSampling?: (v: 0 | 1 | 2) => void; setNoiseBlankerHf?: (on: boolean) => void;
+        setHwAutoDirectSampling?: (on: boolean) => void;
         setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
         setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
         setAutoBw?: (on: boolean) => void;
@@ -1234,6 +1238,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (rc) rc.setHwDirectSampling?.(Math.max(0, Math.min(2, Math.round(mode))) as 0 | 1 | 2);
     else LocalHw?.setDirectSampling?.(mode);
   }, [LocalHw, hwClient]);
+  /* ★★ AUTO: the engine switches the tuner out below the crossover by itself. Remote → the server's
+   *  autoDirectSampling (admin-gated there); local hardware → the bridge straight to the engine. */
+  const onHwAutoDs = useCallback((on: boolean) => {
+    setHwAutoDs(on);
+    const rc = hwClient();
+    if (rc) rc.setHwAutoDirectSampling?.(on);
+    else LocalHw?.setAutoDirectSampling?.(on, hwDsBelowHz);
+  }, [LocalHw, hwClient, hwDsBelowHz]);
   // ★★★ THESE TWO WENT ONLY TO THE LOCAL MODULE, so on a networked server they did NOTHING —
   //   the call landed on this app's own idle shim while the SERVER did the decoding. Every other
   //   hardware control already had the `rc ? remote : local` branch; these were simply never given
@@ -4041,6 +4053,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     to 12.5db but when I opened it in the app it was at 29.7db" (Stuart, 2026-08-15).
       // ★★ ADOPTED, NOT PUSHED BACK. Arriving at somebody's receiver is not a reason to change it,
       //    and on a shared one it would re-gain the radio under everybody already on it.
+      onHwDirectSampling: (autoDs: boolean, belowHz: number, live: number) => {
+        if (destroyed.current) return;
+        setHwAutoDs(autoDs);
+        if (belowHz > 0) setHwDsBelowHz(belowHz);
+        setHwDirectSamp(live);
+      },
       onHwGainNow: (tenthDb: number) => {
         if (destroyed.current) return;
         if (tenthDb < 0) { setHwAutoGain(true); return; }
@@ -9582,6 +9600,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           onAgc={onHwAgc}
           directSampling={hwDirectSamp}
           onDirectSampling={onHwDirectSamp}
+          autoDs={hwAutoDs}
+          dsBelowHz={hwDsBelowHz}
+          onAutoDs={onHwAutoDs}
         />
       ) : null}
 
