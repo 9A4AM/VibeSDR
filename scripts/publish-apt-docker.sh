@@ -41,12 +41,12 @@ DRY_RUN=""
 #     an old package for ever with apt reporting everything up to date — a stale architecture is
 #     invisible from the publishing end, which is exactly why it must not be opt-in.
 # ★ `--arch arm64` is there for a genuine hurry (see the emulation note below), not for habit.
-ARCHES="arm64 amd64"
+ARCHES="arm64 amd64 armhf"   # ★ armhf joined 2026-09-22 — cross-compiled, see below
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN="--dry-run" ;;
     --arch)    shift; ARCHES="${1//,/ }" ;;
-    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|'arm64 amd64']"; exit 1 ;;
+    *) echo "usage: $0 [--dry-run] [--arch arm64|amd64|armhf|'arm64 amd64 armhf']"; exit 1 ;;
   esac
   shift
 done
@@ -151,9 +151,23 @@ fi
 
 for A in $ARCHES; do
   IMAGE="vibeserver-build:bookworm-$A"
+  DOCKERFILE="$SRC_DIR/vibeserver/linux/Dockerfile.build"
+  PLATFORM="$A"
+  CROSS_ENV=""
+  HOSTARCH=$(uname -m); case "$HOSTARCH" in arm64|aarch64) HOSTARCH=arm64;; x86_64) HOSTARCH=amd64;; esac
+  # ★★★ armhf IS A CROSS-COMPILE ON THE HOST'S OWN ARCHITECTURE — never an arm/v7 container.
+  #     Apple Silicon cannot execute AArch32, so that would be qemu, the emulation that segfaults.
+  #     Measured on the Pi 2 against its native build: 174% vs 174% of a core (-marm matters —
+  #     see armhf-toolchain.cmake). ARMv7+NEON only: the package refuses a CPU without NEON.
+  if [ "$A" = "armhf" ]; then
+    IMAGE="vibeserver-cross:bookworm-armhf"
+    DOCKERFILE="$SRC_DIR/vibeserver/linux/Dockerfile.cross-armhf"
+    PLATFORM="$HOSTARCH"
+    CROSS_ENV="-e VIBE_CROSS_ARCH=armhf"
+  fi
   echo "==> [$A] build image"
-  docker build --platform "linux/$A" -q \
-    -f "$SRC_DIR/vibeserver/linux/Dockerfile.build" -t "$IMAGE" "$SRC_DIR/vibeserver/linux" >/dev/null
+  docker build --platform "linux/$PLATFORM" -q \
+    -f "$DOCKERFILE" -t "$IMAGE" "$SRC_DIR/vibeserver/linux" >/dev/null
 
   # ★★ --dry-run still BUILDS and SIGNS and commits locally; it only withholds the push. That is
   #    what makes it worth running: the failures worth catching are in the build and the index.
@@ -163,15 +177,14 @@ for A in $ARCHES; do
   #     the signature of the environment rather than the code. Raising the VM from 4 to 8 to 12 GiB
   #     did not fix it, because the constraint is concurrency under emulation, not total memory.
   # ★ The native architecture keeps nproc: it is not emulated and it is not the one that breaks.
-  HOSTARCH=$(uname -m); case "$HOSTARCH" in arm64|aarch64) HOSTARCH=arm64;; x86_64) HOSTARCH=amd64;; esac
-  JOBS_FOR_ARCH=""; [ "$A" != "$HOSTARCH" ] && JOBS_FOR_ARCH=1
+  JOBS_FOR_ARCH=""; [ "$PLATFORM" != "$HOSTARCH" ] && JOBS_FOR_ARCH=1
   [ -n "$JOBS_FOR_ARCH" ] && echo "==> [$A] emulated — building with JOBS=$JOBS_FOR_ARCH"
-  docker run --rm --platform "linux/$A" \
+  docker run --rm --platform "linux/$PLATFORM" \
     -v "$SRC_DIR":/work/VibeSDR \
     -v "$APT_DIR":/work/VibeServer \
     -v "$KEY_FILE":/tmp/signing-key.asc:ro \
     -e APT_DIR=/work/VibeServer \
-    ${PREBUILT_ENV} \
+    ${PREBUILT_ENV} ${CROSS_ENV} \
     -e JOBS="$JOBS_FOR_ARCH" \
     "$IMAGE" /bin/bash -euo pipefail -c '
     export GNUPGHOME=$(mktemp -d)

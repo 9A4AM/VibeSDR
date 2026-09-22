@@ -1,5 +1,11 @@
 # VibeServer Lite — build brief
 
+> ★★★ **SUPERSEDED FOR LINUX (Stuart, 2026-09-22).** There is no separate Linux Lite. 32-bit ARM is
+> published as the ordinary `vibeserver` package (armhf, ARMv7+NEON, cross-compiled — see
+> `vibeserver/linux/armhf-toolchain.cmake`) in the same apt repository, and reports itself as
+> "VibeServer". *"VibeServer Lite"* now names the **Android** app for older devices only. The
+> "separate apt package" rule below is retired; the performance work it describes still applies.
+
 *Stuart, 2026-09-16: "what this is going to be is VibeServer lite. Any changes stay away from the
 working VibeServer. This is a technical demo of what can be done with optimisation."*
 

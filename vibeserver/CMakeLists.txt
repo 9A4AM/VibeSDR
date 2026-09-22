@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 5.6.36 LANGUAGES CXX C)
+project(vibeserver VERSION 5.6.37 LANGUAGES CXX C)
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
@@ -651,6 +651,7 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "ffmpeg")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+      "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/preinst"
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postinst"
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/prerm"
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postrm")

@@ -1,0 +1,27 @@
+# ★ armhf by CROSS-COMPILE on a native arm64 bookworm host — see armhf-toolchain.cmake.
+#   Same libraries as Dockerfile.build, installed for :armhf beside the host's own.
+FROM debian:bookworm-slim
+RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-install-recommends \
+      build-essential crossbuild-essential-armhf cmake pkg-config file ca-certificates curl \
+      librtlsdr-dev:armhf libusb-1.0-0-dev:armhf libopus-dev:armhf libfftw3-dev:armhf \
+      libncursesw5-dev:armhf libhackrf-dev:armhf \
+      libstdc++6:armhf libc6:armhf libgcc-s1:armhf \
+      dpkg-dev apt-utils gnupg git rsync xz-utils binutils-arm-linux-gnueabihf \
+    && rm -rf /var/lib/apt/lists/*
+COPY sdrplay-inc/ /usr/local/include/
+COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
+ARG RTLSDR_TAG=797f814
+RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
+    && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_TOOLCHAIN_FILE=/opt/armhf-toolchain.cmake \
+             -DCMAKE_INSTALL_PREFIX=/opt/vibe-rtlsdr -DBUILD_SHARED_LIBS=ON \
+             -DDETACH_KERNEL_DRIVER=ON \
+    && cmake --build /tmp/rtlsdr/b --target rtlsdr -j"$(nproc)" \
+    && mkdir -p /opt/vibe-rtlsdr/lib /opt/vibe-rtlsdr/include \
+    && cp -a /tmp/rtlsdr/b/src/librtlsdr.so* /opt/vibe-rtlsdr/lib/ \
+    && cp /tmp/rtlsdr/include/rtl-sdr.h /tmp/rtlsdr/include/rtl-sdr_export.h /opt/vibe-rtlsdr/include/ \
+    && rm -rf /tmp/rtlsdr \
+    && file /opt/vibe-rtlsdr/lib/librtlsdr.so.* | grep -q "ARM, EABI5" \
+    && strings /opt/vibe-rtlsdr/lib/librtlsdr.so | grep -q "Blog V4L"
+WORKDIR /work

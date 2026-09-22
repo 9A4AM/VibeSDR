@@ -22582,15 +22582,17 @@ static std::string vsTunableJson() {
      *  VibeSDR" — the OTHER app. __ANDROID__ is true for both, and they share one CMakeLists, so
      *  the platform cannot answer this question. The Lite build passes -DVIBE_LITE_APP=ON and that
      *  is the only thing that can tell them apart.
-     *  ★ "VibeServer Lite" is the PRODUCT, not the platform: it is this Android app AND the 32-bit
-     *    ARM Linux build (the Pi 2), which is why that case says Lite too. */
+     *  ★ "VibeServer Lite" is the Android Lite app only; 32-bit Linux is plain VibeServer
+     *    (2026-09-22). */
 #if defined(VIBE_LITE_APP)
     j += ",\"flavour\":\"VibeServer Lite\"";
 #elif defined(__ANDROID__)
     j += ",\"flavour\":\"VibeServer inside VibeSDR\"";
-#elif defined(__arm__) && !defined(__aarch64__)
-    j += ",\"flavour\":\"VibeServer Lite\"";
 #else
+    /* ★★ ONE VibeServer ON LINUX, WHATEVER THE ARCHITECTURE (Stuart, 2026-09-22): "on Linux we
+     *  should drop the Lite branding ... we simply detect the OS and processor capabilities on
+     *  install". apt picks armhf / arm64 / amd64 itself. "VibeServer Lite" now means the Android
+     *  app for older devices, and only that. `lite` above stays: it describes the MACHINE. */
     j += ",\"flavour\":\"VibeServer\"";
 #endif
     // ★ The contract, for the directory to forward (BRIEF-v11 §4): a client greys a server out by

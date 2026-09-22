@@ -4,8 +4,17 @@ Turns an SDR into a network receiver for the VibeSDR apps and any browser.
 Tested on **Debian 13 (trixie)** on a Raspberry Pi 500 (arm64). Should work on any
 Debian/Ubuntu/Raspberry Pi OS.
 
-★ **64-bit only, in practice.** The DSP's NEON path is gated on `__aarch64__`, and a 32-bit
-userland silently loses all of it — roughly **13× slower** on the same hardware. Use a 64-bit OS.
+## Hardware
+
+One package for every architecture — apt picks **arm64**, **amd64** or **armhf** (32-bit ARM) to
+suit the machine. There is no separate "Lite" build on Linux.
+
+- **Minimum confirmed hardware: Raspberry Pi 2** — quad-core ARMv7 at 0.9 GHz.
+- **RAM:** 256 MB will run it; **512 MB recommended** for headroom.
+- **32-bit ARM needs NEON** (ARMv7 or newer). ARMv6 boards — Pi Zero, Zero W, Pi 1 — are not
+  supported yet; the package refuses to install there rather than fail at runtime.
+- Older or lower-end hardware will most likely run with restrictions: on a small machine the
+  setup page measures what it can carry and switches heavy features off.
 
 ---
 
@@ -18,7 +27,7 @@ VibeServer needs** — there is no list of libraries to chase, and nothing to bu
 # 1. Trust the signing key and add the repository (once, ever)
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 
 # 2. Install
@@ -26,10 +35,9 @@ sudo apt update
 sudo apt install vibeserver
 ```
 
-> **Naming the architectures is deliberate.** 64-bit Raspberry Pi OS enables multi-arch, so apt
-> asks every repository for `armhf` as well — which we do not publish, producing a harmless but
-> alarming `Skipping acquire of configured file 'main/binary-armhf/Packages'` on every update.
-> Listing what we DO publish stops apt asking for what we do not.
+> **Naming the architectures is deliberate** — it lists exactly what we publish. ★ `armhf` joined
+> on 2026-09-22 (32-bit Raspberry Pi OS on a Pi 2/3/4). An older line without it still works on a
+> 64-bit machine, but a 32-bit Pi needs `armhf` in the list or apt will never see its package.
 >
 > ★ It says `arm64,amd64`, not `arm64`. It was `arm64` alone from before x86 was supported, and
 > that is not merely untidy on an Intel or AMD box — it tells apt to look for arm64 packages only,

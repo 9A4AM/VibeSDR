@@ -29,6 +29,16 @@ APT_DIR="${APT_DIR:-$HOME/VibeServer}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_KEY="packages@vibesdr.net"
 ARCH="$(dpkg --print-architecture)"
+# ★★★ armhf IS CROSS-COMPILED (2026-09-22) — see vibeserver/linux/armhf-toolchain.cmake. The container
+#     is the Mac's native arm64 and the PACKAGE is armhf, so the architecture being published comes
+#     from the caller, not from dpkg. Everything keyed on $ARCH (pool, index, high-water mark) follows.
+CROSS_CMAKE=""
+if [ -n "${VIBE_CROSS_ARCH:-}" ]; then
+  ARCH="$VIBE_CROSS_ARCH"
+  CROSS_CMAKE="-DCMAKE_TOOLCHAIN_FILE=/opt/$ARCH-toolchain.cmake"
+  # ★ dpkg-shlibdeps reads these to resolve the ARMHF libraries rather than the host's.
+  export DEB_HOST_ARCH="$ARCH" DEB_HOST_MULTIARCH=arm-linux-gnueabihf DEB_HOST_GNU_TYPE=arm-linux-gnueabihf
+fi
 DRY_RUN=0
 # ★ An `if`, not `&&` — as the last command in the line, a REAL publish (no --dry-run) made the
 #   test false and `set -e` killed the script instantly with no output. Same shape as the
@@ -251,7 +261,7 @@ runbuild "
   set -euo pipefail
   cd $BUILD_SRC/vibeserver
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
-        -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
+        -DVIBESERVER_STRICT_RADIOS=ON $CROSS_CMAKE >/dev/null
   # ★★★ JOBS IS SETTABLE BECAUSE AN EMULATED BUILD CANNOT TAKE nproc. Under qemu, four concurrent
   #     compilers on translation units this size segfault the compiler outright — three failures in
   #     one evening (2026-08-26), on a DIFFERENT FILE each time, which is exactly how you tell it

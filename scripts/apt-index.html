@@ -54,9 +54,10 @@
   <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500, and on Ubuntu 24.04 on an
      Intel i5. Anything <strong>arm64</strong> or <strong>amd64</strong> running Debian or Ubuntu
      should work &mdash; the install below is the same command on either.</p>
-  <p><strong>64-bit only.</strong> On ARM the DSP's NEON path is gated on <code>__aarch64__</code>,
-     and a 32-bit userland silently loses all of it &mdash; roughly <strong>13&times; slower</strong>
-     on the same hardware. There is no 32-bit package for that reason.</p>
+  <p><strong>One package, every architecture</strong> &mdash; apt picks arm64, amd64 or armhf
+     (32-bit ARM) to suit the machine. Minimum confirmed hardware: <strong>Raspberry Pi 2</strong>
+     (quad-core ARMv7, 0.9&nbsp;GHz); 512&nbsp;MB of RAM recommended. 32-bit ARM needs NEON, so ARMv6
+     boards (Pi Zero, Zero W, Pi 1) are not supported yet.</p>
   <p><strong>On Intel/AMD it runs the scalar path</strong>, which costs about
      <strong>12.8% of one core</strong> for a stereo FM listener at 1.92&nbsp;MSPS (measured on an
      i5-11300H). That is roughly twice what NEON costs on an Apple M4, and it does not matter:

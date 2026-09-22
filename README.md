@@ -76,7 +76,7 @@ Raspberry Pi, any Linux box, a Mac, or an Android phone with the radio plugged i
 ```bash
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64,amd64 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 sudo apt update && sudo apt install vibeserver
 ```
