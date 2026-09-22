@@ -1291,6 +1291,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
          *  ★ `currentFreq` is now a CACHE written by the server's config (see onMessage), kept for
          *    the lock-screen metadata and the skip grid. It is never transmitted on our behalf. */
         var url = "$s/ws?user_session_id=$currentUuid&format=opus&version=2"
+        /* ★★★ …EXCEPT THAT THIS SOCKET ONLY EVER REACHES UberSDR (2026-09-22). `/ws?` is UberSDR's
+         *  audio endpoint (a VibeServer serves /ws/audio, via LocalAudioPlayer), and UberSDR gives
+         *  every listener their OWN VFO, tuned from this URL. With no frequency it started us on its
+         *  default — FT8 audio under an MW readout (Stuart, on both his Mac and iPhone). No shared
+         *  dial exists there to protect. Mirror of VibePowerModule.audioWsURL(). */
+        if (currentFreq > 0) url += "&frequency=$currentFreq&mode=$currentMode"
         // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client
         //     delays the spectrum socket a second to let the session register, so it is THIS one
         //     that claims the occupant slot — and it was anonymous, so the server stamped an empty

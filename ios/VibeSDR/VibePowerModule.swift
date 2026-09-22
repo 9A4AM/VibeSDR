@@ -2099,7 +2099,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
      *  ★★ Stuart: "The app should have always taken the servers word as gospel and never tried to
      *     force itself." The server owns the dial; we adopt it. Only a USER ACTION transmits.
      *  ★ Mirror of VibeStreamService.wsUrl() — one rule, two readers: change both or neither. */
+    /* ★★★ …EXCEPT THAT THIS ENGINE ONLY EVER TALKS TO UberSDR (2026-09-22). `/ws?` is UberSDR's audio
+     *  endpoint — a VibeServer serves /ws/audio through LocalAudioPlayer and never sees this socket —
+     *  and UberSDR gives EVERY listener their OWN VFO, tuned from this URL at session start. With no
+     *  frequency it started us on its default (FT8) while the app showed the remembered MW tune.
+     *  Stuart: "it says I am tuned to the MW band yet the audio is FT8". There is no shared dial on
+     *  UberSDR to protect, so the frequency goes back in. Nothing else of 3a23642a is undone.
+     *  ★ Mirror of VibeStreamService.wsUrl() — one rule, two readers: change both or neither. */
     var path = "/ws?user_session_id=\(uuid)&format=opus&version=2"
+    if currentFreq > 0 {
+      path += "&frequency=\(currentFreq)&mode=\(currentMode)"
+    }
     // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client delays
     //     the spectrum socket a second to let the session register, so it is THIS one that claims
     //     the occupant slot — and it was anonymous, so the server stamped an empty agent and the
