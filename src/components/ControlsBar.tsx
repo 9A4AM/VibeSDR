@@ -337,7 +337,10 @@ export interface ControlsBarProps {
    *  you know if its safe to tune without asking the chat."*
    *  ★★ ALONE IS THE LOAD-BEARING STATE, so it gets words rather than a number: "Only you" is
    *     instantly readable as permission, where "1 listening" makes you count. */
-  sharedDial?: { listeners: number; max: number; alone: boolean; tuning: string } | null;
+  sharedDial?: { listeners: number; max: number; alone: boolean; tuning: string;
+                 /** ★ FM-DX: one tuner fanned out, no session cap — say "You+N" rather than a
+                  *  total over a denominator it does not have (Stuart's wording, 2026-09-22). */
+                 youPlus?: boolean } | null;
   /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
    *  asked; the number rides in the accessibility label, as the web's tooltip. */
@@ -562,12 +565,20 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
       <View style={[pm.sharedBox, { backgroundColor: t.pillBg }]}
             accessibilityRole="text"
             accessibilityLabel={sharedTuner.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
-              : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
+              : sharedTuner.youPlus
+                ? `Shared tuner. You and ${Math.max(1, sharedTuner.listeners - 1)} other${sharedTuner.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
+                : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
         <Text style={[pm.sharedTxt, { fontFamily: t.font, fontSize: sharedFontSize,
                       color: sharedTuner.alone ? '#7bd88f' : t.snrColor }]}
               numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
           {sharedTuner.alone ? 'SHARED TUNER · FREE TO TUNE'
-            : `SHARED TUNER · ASK TO TUNE · ${sharedTuner.listeners}${sharedTuner.max > 1 ? `/${sharedTuner.max}` : ''} 👤`}
+            : sharedTuner.youPlus
+              /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
+               *  whether they are in it. No "/max" — FM-DX has no cap to report. */
+              //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
+              //    that matter — truncating mid-word is the one outcome that is not allowed.
+              ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, sharedTuner.listeners - 1)})`
+              : `SHARED TUNER · ASK TO TUNE · ${sharedTuner.listeners}${sharedTuner.max > 1 ? `/${sharedTuner.max}` : ''} 👤`}
         </Text>
       </View>
     )}

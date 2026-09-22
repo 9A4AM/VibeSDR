@@ -1701,6 +1701,7 @@ export abstract class SdrWsClient {
       this.dbg('Spectrum WS closed code=' + e.code);
       this.lastReconnectAt = Date.now();
       this.gapHist.length = 0;
+      this.rttHist.length = 0;   // ★ a new socket, a new path — old pings describe the last one
       this._evalLink(); // → 0 (down) immediately
       if (!this.destroyed && !this.pausedByApp) {
         this.callbacks.onDisconnect();
@@ -1971,7 +1972,8 @@ export abstract class SdrWsClient {
   private lastReconnectAt = 0;
   private pingSentAt     = 0;
   private rttAvg         = 0;       // EMA of ping RTT
-  private rttJit         = 0;       // EMA of |rtt − rttAvg|
+  private rttJit         = 0;       // median of |rtt − rttAvg| over rttHist
+  private rttHist: number[] = [];   // the last 8 ping RTTs
   private lastLink: -1 | 0 | 1 | 2 | 3 = -1;
 
   /** Score the link like a phone signal indicator. Stalls are judged against
@@ -2266,8 +2268,18 @@ export abstract class SdrWsClient {
       if (this.pingSentAt > 0) {
         const rtt = Date.now() - this.pingSentAt;
         this.pingSentAt = 0;
-        this.rttAvg += 0.3 * (rtt - this.rttAvg);
-        this.rttJit += 0.3 * (Math.abs(rtt - this.rttAvg) - this.rttJit);
+        /* ★★★ MEDIANS, NOT EMAs (2026-09-22). One ping every 5 s, and on Wi-Fi a single one can
+         *  come back 200-300 ms late (the radio dozing between pings) while the STREAM is clean —
+         *  measured off the Pi 2: 234 frames, zero stalls, yet the meter sat yellow on Stuart's
+         *  Wi-Fi devices. An EMA at 0.3 turned that one late ping into `rttJit > 80` for the next
+         *  half-minute. The median of the last eight ignores an isolated spike and still sees a
+         *  link that is genuinely jittery, because then MOST of the samples are. */
+        this.rttHist.push(rtt);
+        if (this.rttHist.length > 8) this.rttHist.shift();
+        const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+        this.rttAvg = med(this.rttHist);
+        this.rttJit = this.rttHist.length >= 3
+          ? med(this.rttHist.map(r => Math.abs(r - this.rttAvg))) : 0;
       }
       return;
     }
