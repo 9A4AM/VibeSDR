@@ -302,7 +302,7 @@ export default function App() {
         ? { name: 'Tuner', params: { baseUrl: f.url, instanceName: f.name, viewMode } }
         : { name: 'SDR', params: {
               baseUrl: f.url, instanceName: f.name, viewMode,
-              serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'web888' | 'owrx',
+              serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'vibeserver' | 'kiwi' | 'web888' | 'owrx',
               ...(extra ?? {}),
             } };
       // RESET, never navigate() — navigate PUSHES and leaves the old screen mounted
@@ -351,7 +351,11 @@ export default function App() {
         : { host, port, centerFreq: 100_000_000, fftSize: 8192, fftRate: 10, mode: 'wfm' };
       const res = await start(opts);
       return goTo(
-        { name: name || `${host}:${port}`, url: res.wsBaseUrl, serverType: 'ubersdr' },
+        /* ★★ 'vibeserver', as the phone's own picker opens it (InstancePickerScreen startTcp /
+         *  startSpyServer). 'ubersdr' built UberSDRAdapter for our OWN engine: UberSDR's frame-rate
+         *  ladder, set_rate divisors at our server, no &bins= (audit, 2026-09-22). Raw-IQ sources
+         *  get their own module next; until then they must at least not be UberSDR. */
+        { name: name || `${host}:${port}`, url: res.wsBaseUrl, serverType: 'vibeserver' },
         viewMode,
         { isLocal: true, isTcp: true, localPort: res.port, tcpHost: host, tcpPort: port,
           localGen: newLocalSession() },
@@ -666,7 +670,23 @@ export default function App() {
             // If the same server is also FAVOURITED we know its type — use it, so an
             // OWRX or FM-DX default doesn't get mis-opened as UberSDR.
             const known = favs.find((f) => f.url === def.url);
-            goTo({ name: def.name, url: def.url, serverType: known?.serverType }, viewMode);
+            /* ★★★ AND WHEN IT IS NOT A FAVOURITE, ASK THE SERVER — never guess 'ubersdr'
+             *  (2026-09-22). An unknown default fell through goTo's `?? 'ubersdr'`, so a VibeServer
+             *  default was driven by the UberSDR client. A VibeServer goes through the picker's
+             *  autoVibe route, exactly like the wrist's own VibeServer branch above. */
+            (async () => {
+              const type = known?.serverType ?? await detectServerType(def.url).catch(() => null);
+              if (type === 'vibeserver') {
+                navigationRef.reset({
+                  index: 0,
+                  routes: [{ name: 'InstancePicker',
+                             params: { noAutoConnect: true, autoVibe: { url: def.url, name: def.name } } }],
+                } as never);
+                splashBridge.dismiss();
+                return;
+              }
+              goTo({ name: def.name, url: def.url, serverType: type ?? undefined }, viewMode);
+            })();
           } else if (favs.length) {
             // We have candidates but no standing answer — let the wrist choose rather
             // than picking one for them.
