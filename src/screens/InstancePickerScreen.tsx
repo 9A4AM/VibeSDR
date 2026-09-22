@@ -404,6 +404,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // effects (declared above those callbacks) call it through this ref to avoid a
   // use-before-declaration cycle.
   const tryUsbLaunchRef = useRef<null | ((m?: typeof viewMode) => Promise<boolean>)>(null);
+  /** ★ connectFav, reachable from the launch effect above it — see the default auto-connect. */
+  const connectFavRef = useRef<null | ((f: Favourite) => Promise<void>)>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -470,7 +472,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           watchProvider.setPhoneStatus('closed');
           return;
         }
-        navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
+        /* ★★★ THROUGH THE SAME DETECTION AS A FAVOURITE (2026-09-22). This navigated with NO
+         *  serverType, so the screen fell back to 'ubersdr' whatever the default really was — a
+         *  VibeServer default was driven by the UberSDR client, and an OWRX or Kiwi default by the
+         *  wrong protocol altogether. connectFav re-detects the type on every connect and routes a
+         *  VibeServer through connectVibeServer, exactly as tapping the favourite does. */
+        if (connectFavRef.current) {
+          await connectFavRef.current({ url: dEarly.url, name: dEarly.name } as Favourite);
+        } else {
+          navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
+        }
       }
     }
 
@@ -1373,6 +1384,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }
     connect(fav.url, fav.name, undefined, null, type as ServerType | 'fmdx');
   }, [connect, connectDetected, setFavourites]);
+  connectFavRef.current = connectFav;
 
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;

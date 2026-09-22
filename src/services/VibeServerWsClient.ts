@@ -59,7 +59,7 @@ import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { noteUnhandled, noteDecision } from './protocolLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
-import { LinkManager, LADDERS, type LinkMode } from './linkManager';
+import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
 
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;

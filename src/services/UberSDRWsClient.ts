@@ -46,7 +46,6 @@
 //     delta: uint16 changeCount, then changeCount × {uint16 index, float32 value}
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
-import type { DabState } from './dabTypes';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -205,9 +204,6 @@ export abstract class UberSDRWsClient {
   // VFO lock / waterfall panning (see SDRBackend.setFollowMode/panSpan).
   // followVfo=true reproduces today's behaviour: tune() recentres the view.
   private followVfo = true;
-  /** ★ Does this receiver share one dial? Set from the server's `dial` message. On a shared dial a centre
-   *  change we did not ask for is another listener tuning, and must be ADOPTED rather than argued with. */
-  private sharedDial = false;
   // Local hardware only — set by the adapter from the device config. Drives the
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
   /**
@@ -382,25 +378,7 @@ export abstract class UberSDRWsClient {
     }
   }
 
-  /** ★★★ DAB OWNS THE DIAL AND THE VIEW, AND THE HOLD LIVES HERE — ONE READER.
-   *
-   *  An ensemble is one 1.536 MHz block: there is nothing to tune inside it and nothing to zoom
-   *  into, and on an RTL the IF filter FOLLOWS the view, so a zoom cuts the multiplex out from
-   *  under the decoder. The web client learned this the expensive way (Stuart, 2026-09-07: "the
-   *  zoom still worked instead of being locked out… the spectrum can be clicked which knocks the
-   *  multiplex tuning off") — the server refused `tune` but never `zoom`, so a stray tap on the
-   *  waterfall parked the dongle on the view and the lock was gone.
-   *
-   *  ★ EVERY path that moves the dial or the view — drum, arrows, drag, tap, bookmark, band
-   *    button, search — ends in tune()/zoom()/pan()/resetView(). Gating those four is gating all
-   *    of them; gating call sites is how the web client missed one. AGENTS.md, "ONE RULE, TWO
-   *    READERS": there is one reader here on purpose.
-   *
-   *  ★ Base value is false and only VibeServerClient ever sets it, so UberSDR carries no branch. */
-  protected dabHeld = false;
 
-  /** True while a DAB multiplex is being decoded — the UI locks zoom and the VFO out. */
-  get inDab(): boolean { return this.dabHeld; }
 
   /** ★ A message only ONE server speaks. Return true if handled; the base speaks neither DAB nor
    *  anything else UberSDR lacks, so it returns false and the unhandled-type log still fires for
@@ -419,10 +397,8 @@ export abstract class UberSDRWsClient {
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
-    if (this.dabHeld) return;            // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
-    this._armTuneSettleAsk();
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
     this._routeTune(frequency, mode ?? this.status.mode);
@@ -581,7 +557,6 @@ export abstract class UberSDRWsClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    if (this.dabHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
     /* ★★★ THE VIEW CENTRE IS NOT A TUNE REQUEST — DO NOT CLAMP IT TO THE TUNER'S RANGE.
      *
      *  This was `Math.max(this.minHz, …)`, and for every VibeServer connection minHz is
@@ -617,7 +592,6 @@ export abstract class UberSDRWsClient {
   }
 
   pan(frequency: number) {
-    if (this.dabHeld) return;            // ★ see dabHeld
     // ★ Same rule as zoom(): panning the VIEW is not tuning, so the tuner's range does not bound
     //   it. Clamping here hid the low end of every radio that reaches below the RTL-SDR's floor.
     const f = Math.round(frequency);
@@ -780,18 +754,6 @@ export abstract class UberSDRWsClient {
     }
   }
 
-  /** ★ Turn the Advanced RDS analyser on or off. Costs the server real CPU and ~5 frames a
-   *  second of extra traffic, so it is switched by the panel being OPEN — there is no setting
-   *  for a user to find, forget, and leave running. Remembered across reconnects, because the
-   *  server forgets on a new socket and the panel would otherwise go quietly blank. */
-  setAdvRds(on: boolean) {
-    this.advRds = on;
-    if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-      // ★ eyeEvery: the eye grids in every 2nd message (~2/s at the ~3.9/s rdsx rate) — see the 'rdsx' parse, which keeps the last ones.
-      this.spectrumWs.send(JSON.stringify({ type: 'rdsx', on: on ? 1 : 0, eyeEvery: 2 }));
-    }
-  }
-  private advRds = false;
   private adminSet = false;
   /** ★★ The server has DELIBERATELY turned us away (time up, cooldown). Terminal:
    *  the 3-second reconnect below is right for a dropped link and utterly wrong
@@ -800,25 +762,7 @@ export abstract class UberSDRWsClient {
    *  a fresh user-initiated connect clears it. */
   private refused = false;
 
-  /** ★ Unlock the protected controls. Challenge-response: the caller has already turned the
-   *  password into an HMAC over a server-issued nonce, so the password never crosses the link
-   *  — the same scheme as the PIN, and it inherits the same brute-force lockout. */
-  adminUnlock(nonce: string, token: string) {
-    this._sendCtl({ type: 'admin_unlock', nonce, token });
-  }
 
-  /** Airspy HF+ controls. Keys are optional — send only what changed.
-   *  ★ AGC LAST, matching the server's own apply order: it owns the gain path, so applying it
-   *  before a manual attenuation would immediately override it. */
-  ahfControl(o: { att?: number; lna?: boolean; thresh?: boolean; ppb?: number; agc?: boolean }) {
-    const m: Record<string, unknown> = { type: 'ahf_control' };
-    if (o.att    !== undefined) m.att    = o.att;
-    if (o.lna    !== undefined) m.lna    = o.lna ? 1 : 0;
-    if (o.thresh !== undefined) m.thresh = o.thresh ? 1 : 0;
-    if (o.ppb    !== undefined) m.ppb    = o.ppb;
-    if (o.agc    !== undefined) m.agc    = o.agc ? 1 : 0;
-    this._sendCtl(m);
-  }
 
   /** ★★★ HackRF One controls. Same shape — only the keys present are applied.
    *  ★★ amp and biast are OWNER-ONLY and the SERVER enforces that (adminGate in the
@@ -843,21 +787,6 @@ export abstract class UberSDRWsClient {
    *  inaudible and the reset costs everyone a moment of audio. */
   rspAgcRestart() { this.sendSpectrum({ type: 'rsp_agc_restart' }); }
 
-  rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
-                  /** ★ OUR RF loop (the LNA), distinct from the radio's own IF AGC. Wire key is
-                   *  `rfagc`, lower case, like its siblings — the server reads exactly that. */
-                  rfagc?: boolean;
-                  rfNotch?: boolean; dabNotch?: boolean }) {
-    const m: Record<string, unknown> = { type: 'rsp_control' };
-    if (o.lna      !== undefined) m.lna      = o.lna;
-    if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
-    if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
-    if (o.rfagc    !== undefined) m.rfagc    = o.rfagc ? 1 : 0;
-    if (o.agcset   !== undefined) m.agcset   = o.agcset;
-    if (o.rfNotch  !== undefined) m.rfNotch  = o.rfNotch ? 1 : 0;
-    if (o.dabNotch !== undefined) m.dabNotch = o.dabNotch ? 1 : 0;
-    this._sendCtl(m);
-  }
 
 
   private _flushView() {
@@ -899,7 +828,6 @@ export abstract class UberSDRWsClient {
   }
 
   resetView() {
-    if (this.dabHeld) return;            // ★ see dabHeld
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
   }
@@ -1034,7 +962,6 @@ export abstract class UberSDRWsClient {
 
   destroy() {
     this.destroyed = true;
-    if (this.tuneSettleAsk) { clearTimeout(this.tuneSettleAsk); this.tuneSettleAsk = null; }
     this.stopLinkManager();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
@@ -1053,9 +980,6 @@ export abstract class UberSDRWsClient {
     this.callbacks.onDbg?.(msg);
   }
 
-  /** True once a radio has announced itself on this client — so a LATER hwinfo means we came
-   *  back, rather than arrived. */
-  private hadSession = false;
   /** ★ Set on socket open; the first `config` decides whether to restore our view or adopt the
    *  server's. See _restoreViewOnConfig. */
   private viewRestorePending = false;
@@ -1086,39 +1010,13 @@ export abstract class UberSDRWsClient {
     }));
   }
 
-  /** ★★★ "GIVE ME YOUR FULL STATE" — the question that replaces every re-assert. The server
-   *  answers unconditionally with config + hwinfo + dial (+ DAB). VibeServer only: an UberSDR
-   *  would not know the message. */
-  /** ★★★ ASK WHEN OUR OWN SETTLE WINDOW CLOSES — Jr's `armTuneSettle` on the phone. The adopt
-   *  branch ignores every config for 1500 ms after OUR tune (so our own echo is not read as
-   *  somebody else); if another listener moved the dial inside that window, the server will not
-   *  say it again until it CHANGES, and we would sit on our own stale frequency for ever. So once
-   *  the window closes we ask. Armed ONLY by our own tune — never by an incoming message, which
-   *  is the discipline whose absence made the app deaf (2026-09-21). Shared dials only: on a
-   *  per-listener VFO nobody else can move ours. */
-  private tuneSettleAsk: ReturnType<typeof setTimeout> | null = null;
-  private _armTuneSettleAsk() {
-    if (!this.isVibe || !this.sharedDial) return;
-    if (this.tuneSettleAsk) clearTimeout(this.tuneSettleAsk);
-    this.tuneSettleAsk = setTimeout(() => {
-      this.tuneSettleAsk = null;
-      if (!this.destroyed) this.requestState();
-    }, 1600);
-  }
 
-  requestState() {
-    const ws = this.spectrumWs;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'state' }));
-  }
   /** The tune we connected FOR, when it came from memory rather than from the server. Re-sent once
    *  the server has told us where it actually put us; cleared the moment it is honoured. */
   private wantTune: { frequency: number; mode: SDRMode } | null = null;
   /** When this client last tuned itself — so the server's echo of our own tune is not mistaken
    *  for another listener moving a shared dial. */
   private lastLocalTuneAt = 0;
-  /** The VFO the SERVER last told us it has us on (config.vfo). The only honest way to ask whether
-   *  a tune took: our own status is set by tune() itself. */
-  private lastServerVfo = 0;
 
   /** Re-run the preflight for THIS session id. Public because the fault it cures is detected by
    *  the NATIVE audio watchdog, which can reopen a socket but cannot POST — see onSessionRegistered
@@ -1290,10 +1188,6 @@ export abstract class UberSDRWsClient {
       // whatever rung we had settled on rather than silently jumping back to full rate.
       this.startLinkManager();
       this.link?.reassert();
-      // ★ The server forgets the analyser on a new socket. If the panel is open, say so again
-      // — otherwise a reconnect the user never noticed leaves it frozen on its last frame,
-      // which reads as "the decoder died" rather than "the link blipped".
-      if (this.advRds) ws.send(JSON.stringify({ type: 'rdsx', on: 1, eyeEvery: 2 }));
     };
 
     ws.onmessage = (e) => {
@@ -1477,24 +1371,6 @@ export abstract class UberSDRWsClient {
   /** The receiver's terms as last read. Undefined fields never happen — see the defaults above. */
   getIdlePolicy(): IdlePolicy { return { ...this.idlePolicy }; }
 
-  /**
-   * Bins to ask a VibeServer for — the FFT/BIN lever, as Jr has always used.
-   *
-   * ★★ MEASURED 2026-07-26. The phone asked for NOTHING and so got the server's
-   * full 4096 bins (4118 B/frame). `sendWs()` on the server is a BLOCKING send,
-   * so the server can only emit as fast as the client drains — and at the same
-   * configured 5 fps it sent 20.1 KB/s to a loopback probe but only 12 KB/s to
-   * the phone. The server was not under-delivering; THE PHONE WAS THE BOTTLENECK,
-   * and every "the rate controller is broken" symptom followed from it.
-   *
-   * ★ 4096 bins is detail no phone screen can show: it costs a 4096-iteration JS
-   * loop per frame plus a Skia image, for a display about 1200 px wide. 1024 is
-   * still roughly one bin per pixel, cuts the bytes 4x and the per-frame work
-   * with it. Jr has done exactly this since it shipped (`bins=` its waterfall
-   * width); the phone simply never did.
-   */
-  /** ★ protected: VibeServerClient asks for this; UberSDR has no use for it. */
-  protected static readonly VIBE_BINS = 1024;
 
   /**
    * Tell the client it is talking to a VibeServer BEFORE the socket opens.
@@ -1534,24 +1410,7 @@ export abstract class UberSDRWsClient {
       lowDataRung: 2,
       mode,
       apply: (rung, fps) => {
-        if (this.isVibe) {
-          this.ladderFps = fps;
-          if (this.spectrumWs?.readyState === WebSocket.OPEN) {
-            // ★★ SEND THE RUNG'S RATE, UNDIVIDED. Dividing by the idle-saver's
-            // rateDivisor here made the controller FIGHT ITSELF: it asks for 20,
-            // deliberately sends 6.7, then measures 6.7 against an expectation of
-            // 20, reads 33% as starvation and degrades — over and over, so the
-            // link glyph flapped red/green and the rate collapsed to the floor.
-            //
-            // The controller must only ever ask for what it expects to receive.
-            // The idle saver PAUSES it before applying a divisor (setLinkPaused),
-            // so the two can never be active at once and apply() needs no
-            // knowledge of powersave at all.
-            this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
-          }
-        } else {
-          this.setRate(rung);          // UberSDR: rung IS the poll divisor
-        }
+        this.setRate(rung);          // UberSDR: rung IS the poll divisor (fftRate is VibeServer's lever)
       },
     });
     if (this.serverMaxFps > 0) this.link.applyServerCeiling(this.serverMaxFps);
@@ -1922,422 +1781,9 @@ export abstract class UberSDRWsClient {
       }
       return;
     }
-    // Server replies with type:"config" — sent on connect and after every
-    // zoom/pan/reset/set_rate (sendStatus in user_spectrum_websocket.go):
-    //   { type:"config", centerFreq, binCount, binBandwidth, totalBandwidth }
-    // This is the ONLY way the client learns binBandwidth (binary frames carry
-    // just the centre frequency) — without it bwHz stays 0 and the entire
-    // frequency→pixel mapping (needle, band plan, gestures) is dead.
-    // V4 local hardware: FM RDS + stereo → reuse the OWRX metadata display path.
-    if (msg.type === 'rds') {
-      const ps = typeof msg.ps === 'string' ? msg.ps.trim() : '';
-      const rt = typeof msg.radiotext === 'string' ? msg.radiotext.trim() : '';
-      const stereo = msg.stereo === true;
-      // PI (hex) + ECC → station country (for the flag + logo lookup), same as
-      // the FM-DX backend. The shim sends pi (int, -1 = none) and ecc (0 = none).
-      const pi = typeof msg.pi === 'number' && msg.pi >= 0
-        ? msg.pi.toString(16).toUpperCase().padStart(4, '0') : undefined;
-      const ecc = typeof msg.ecc === 'number' && msg.ecc > 0 ? msg.ecc : undefined;
-      (this.callbacks as any).onMetadata?.({
-        stationName: ps || undefined,
-        text: rt || undefined,
-        // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and
-        // without the badge it would show up unlabelled, indistinguishable from a bookmark.
-        badge: (ps || rt) ? 'RDS' : undefined,
-        stereo,
-        pi,
-        // ECC + PI when the station sends an ECC; otherwise the PI's country nibble
-        // VALIDATED against the receiver's own country. Most stations never transmit an
-        // ECC (it rides in group 1A), which is why the flag and the station logo almost
-        // never appeared — with no country, the logo lookup demanded a near-exact name
-        // match and silently failed. The nibble check recovers the country for domestic
-        // stations without inventing one for a foreign catch: a sporadic-E Spaniard's
-        // nibble does not match a British receiver, so it stays blank.
-        countryIso: resolveStationIso(ecc, pi, receiverIso()) || undefined,
-        // ★★ THE RAW ECC TOO, not only the country derived from it. The SERVER's logo lookup takes
-        //    the ECC and, when we send none, tries the plausible candidates itself — which is the
-        //    only way a station that never transmits group 1A gets its broadcaster's artwork. The
-        //    app was throwing this away here and then doing a lookup that REQUIRED one.
-        ecc,
-      });
-      return;
-    }
-    if (msg.type === 'session_expired') {
-      this.refused = true;                    // never auto-retry a deliberate refusal
-      // ★ `fresh` = when a FULL turn returns, which is a different (and much longer) window than
-      //   the cooldown — see the server's note. 0 when an older server did not say.
-      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0);
-      return;
-    }
-    if (msg.type === 'cooldown') {
-      this.refused = true;
-      this.callbacks.onCooldown?.(Number(msg.secs) || 0);
-      return;
-    }
-    if (msg.type === 'busy') {
-      this.refused = true;                    // a busy server must not be hammered
-      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
-      this.callbacks.onBusy?.({ queuePos: n(msg.queuePos), queueLen: n(msg.queueLen),
-                                freeIn: n(msg.freeIn), queueFull: msg.queueFull === true });
-      return;
-    }
-    if (msg.type === 'elsewhere') {
-      // ★★★ THE SERVER EXPLAINED ITSELF AND THE APP WAS NOT LISTENING. This arrives, correctly and
-      //     within microseconds, naming the radio already held — and only the BROWSER handled it.
-      //     The app and Jr ignored it and sat on "waterfall initializing" until something else
-      //     timed out, so a deliberate, well-explained policy looked exactly like a broken server.
-      //     Found from the field: ff-mish's watch shares its iPhone's address (a watch tunnels
-      //     through its paired phone), so the pair trips a rule an iPad never does (GitHub #21).
-      this.refused = true;                    // nothing to wait for — retrying cannot help
-      this.callbacks.onElsewhere?.(String(msg.radio || 'another radio'));
-      return;
-    }
-    if (msg.type === 'evicted') {
-      this.refused = true;
-      this.callbacks.onEvicted?.();
-      return;
-    }
-    if (msg.type === 'session_warning') {
-      // ★ NOT terminal — we are still connected and still listening. Setting `refused` here
-      //   would tear down a perfectly good session two minutes early.
-      this.callbacks.onSessionWarning?.(Number(msg.secs) || 0);
-      return;
-    }
-    if (msg.type === 'dial') {
-      // ★ Remembered because it changes what an "unsolicited" centre MEANS — see the config handler.
-      this.sharedDial = String(msg.mode || 'exclusive') !== 'exclusive';
-      this.callbacks.onDial?.({
-        mode: String(msg.mode || 'exclusive'),
-        tuner: Number(msg.tuner) || 0,
-        mine: msg.mine === true,
-        you: Number(msg.you) || 0,
-        listeners: Number(msg.listeners) || 0,
-        decoding: msg.decoding === true,
-      });
-      return;
-    }
-    if (msg.type === 'dial_refused') { this.callbacks.onDialRefused?.(); return; }
-    if (msg.type === 'said') {
-      this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''));
-      return;
-    }
-    if (msg.type === 'notice') {
-      /* ★★★ ONE TYPE, TWO MESSAGES, AND THE REFUSAL WAS BEING THROWN AWAY.
-       *  `text` is the owner's STANDING notice (persistent, posted from the setup page); `why` is
-       *  a REFUSAL of something this listener just tried (transient). Only `text` was read, so
-       *  every refusal became the empty string: "the notches are on automatic — …", "the operator
-       *  has reserved the notch filters". The server explained itself and we discarded it — which
-       *  is precisely why a locked control reads as a DEAD control (Stuart, 2026-09-13: "the
-       *  controls just appear dead").
-       *  ★★ They must not share a slot: a refusal routed into the owner's notice would clobber a
-       *     message somebody deliberately posted, and leave it clobbered. */
-      const why = typeof msg.why === 'string' ? msg.why : '';
-      if (why) { this.callbacks.onRefused?.(why); return; }
-      // ★ `vts` = a transient server line for the bar (gain start-up, sampling switch); the
-      //   refusal path already lands there, with the same look.
-      const vts = typeof msg.vts === 'string' ? msg.vts : '';
-      if (vts) { this.callbacks.onRefused?.(vts); return; }
-      this.callbacks.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
-      return;
-    }
-    if (msg.type === 'admin') {
-      // ★★ `superseded` = an owner proved the same password more recently, so this session is no
-      //    longer admin. Distinct from `refused` (the password was wrong): nothing was mistyped
-      //    here, and the honest response is to let the credential go rather than to re-assert it.
-      this.callbacks.onAdminState?.({
-        set: this.adminSet, ok: msg.ok === true, refused: msg.refused === true,
-        superseded: msg.superseded === true });
-      return;
-    }
-    if (msg.type === 'rdsx') {
-      // ★ Trust the shape, not the sender: this arrives on the same socket as everything
-      // else and a field the server has not sent yet must not crash the panel. Numbers
-      // default to -1 (the "unknown" the renderers already understand), arrays to empty.
-      const num = (x: any, d = -1) => (typeof x === 'number' && isFinite(x) ? x : d);
-      const str = (x: any) => (typeof x === 'string' ? x : '');
-      const arr = (x: any): number[] => (Array.isArray(x) ? x.filter((n) => typeof n === 'number') : []);
-      this.callbacks.onRdsExt?.({
-        pty: num(msg.pty), tp: num(msg.tp), ta: num(msg.ta), ms: num(msg.ms), di: num(msg.di),
-        ptyRaw: num(msg.ptyRaw), tpRaw: num(msg.tpRaw), taRaw: num(msg.taRaw),
-        msRaw: num(msg.msRaw), diRaw: num(msg.diRaw),
-        ct: num(msg.ct), ctoff: num(msg.ctoff, 0), gtot: num(msg.gtot, 0), afseen: num(msg.afseen, 0),
-        rtpTitle: str(msg.rtpTitle), rtpArtist: str(msg.rtpArtist),
-        longPs: str(msg.longPs), ptyn: str(msg.ptyn),
-        lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
-        phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
-        pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev), ber: num(msg.ber),
-        pilotLock: Boolean(msg.pilotLock),
-        grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
-        // ★ NAMED EXPLICITLY, like every other field here — this object literal is built by
-        //   hand, so a field left out arrives undefined rather than failing to compile.
-        // ★ ABSENT = UNCHANGED, not empty: with eyeEvery the server sends the grids in every 3rd message only
-        //   (Stuart, 2026-09-19 — Advanced RDS took a server from 18 to 80-90 kB/s).
-        eyeP: typeof msg.eyeP === 'string' ? (this.lastEye.P = msg.eyeP) : this.lastEye.P,
-        eyeS: typeof msg.eyeS === 'string' ? (this.lastEye.S = msg.eyeS) : this.lastEye.S,
-        eyeR: typeof msg.eyeR === 'string' ? (this.lastEye.R = msg.eyeR) : this.lastEye.R,
-        eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
-        eyeAmp: Array.isArray(msg.eyeAmp) ? (msg.eyeAmp as unknown[]).map((v) => num(v, 0)) : [0, 0, 0],
-        mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
-        eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
-          pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
-        oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({
-          aid: str(o?.aid), grp: num(o?.grp, 0) })) : [],
-        // ★ Defaults chosen so an OLDER SERVER reads as "nothing to report" rather than as alarming
-        //   news: no pilot problem, no multipath, filters wide open. A corner of 0 would say
-        //   "everything is being cut", which is the opposite of the truth on a server that simply
-        //   does not have the feature.
-        mpxSnr: num(msg.mpxSnr, 0),
-        snrOk: Number(msg.snrOk ?? 1) === 1,
-        multipath: num(msg.multipath, 0),
-        multipathOk: Number(msg.multipathOk ?? 0) === 1,
-        hiCutLmr: num(msg.hiCutLmr, 15000), hiCutAud: num(msg.hiCutAud, 15000),
-        nbRate: num(msg.nbRate, 0),
-        ceqOn: Number(msg.ceqOn ?? 0) === 1,
-        ceqAfter: num(msg.ceqAfter, 0), ceqWhy: num(msg.ceqWhy, 3),
-        ifGain: num(msg.ifGain, 0), ifCand: num(msg.ifCand, 0), ifBw: num(msg.ifBw, 0),
-        afAll: Array.isArray(msg.afAll)
-          ? msg.afAll.filter((e: any) => Array.isArray(e) && e.length >= 2)
-                     .map((e: any) => [Number(e[0]) || 0, Number(e[1]) ? 1 : 0] as [number, number])
-          : [],
-      });
-      return;
-    }
-    if (msg.type === 'rspstat') {
-      this.callbacks.onRspStat?.({
-        /* ★ −999, not 0, for "not reported". Now that the panel prints zero and NEGATIVE gains as
-         *  real readings (they are — the RSP's LNA states are attenuators at medium wave), a
-         *  missing field defaulting to 0 would draw a confident "0.0 dB" for a value nobody sent.
-         *  −999 is the server's own sentinel for "cannot read it". */
-        sysGain:  Number.isFinite(Number(msg.sysGain)) ? Number(msg.sysGain) : -999,
-        lna:      Number(msg.lna) || 0,
-        ifgr:     Number(msg.ifgr) || 0,
-        overload: Number(msg.overload) === 1,
-        settling: Number(msg.settling) === 1,
-        /* ★★★ THE TWELVE FIELDS THE SERVER HAS ALWAYS SENT AND THIS CLIENT NEVER READ.
-         *  rspstat carries seventeen; the web client uses all of them and the app used five.
-         *  Each of the ones added here drives a control that was otherwise wrong or dead:
-         *
-         *  · autoNotch/userNotch — WHO OWNS THE NOTCHES. With automatic notching on, the server
-         *    REFUSES a listener's notch and says so; without this the panel drew them live, the
-         *    tap did nothing, and (before the refusal fix) nothing explained it. The dead control
-         *    Stuart reported.
-         *  · lnaN — HOW MANY LNA STATES EXIST AT THIS FREQUENCY. The count is per BAND, not per
-         *    model: an RSP1A has seven on medium wave and ten higher up. Sizing the slider from
-         *    the model's capability maps its top third onto states the radio clamps away — the
-         *    exact bug the web client already fixed, still present here.
-         *  · rfAgc/agcSet — the RF AGC and its target, both new controls (2026-09-13).
-         *  · adcPeak/adcClip — the level every gain decision turns on.
-         *  · gainStuck — the SDRplay gain API has frozen; offer the reset.
-         *  · agcInit/agcReinit — the chip is (re)initialising, so readings are not yet meaningful.
-         *  ★ Defaults chosen so a server that has not sent a field yet behaves as before rather
-         *    than as "off": lnaN 0 means "fall back to the capability", the notch owners default
-         *    to NOT owning, and gainStuck defaults to false. */
-        rfNotch:   Number(msg.rfNotch) === 1,
-        dabNotch:  Number(msg.dabNotch) === 1,
-        autoNotch: Number(msg.autoNotch) === 1,
-        userNotch: Number(msg.userNotch) === 1,
-        rfAgc:     Number(msg.rfAgc) === 1,
-        agcSet:    Number.isFinite(Number(msg.agcSet)) ? Number(msg.agcSet) : -30,
-        adcPeak:   Number.isFinite(Number(msg.adcPeak)) ? Number(msg.adcPeak) : 0,
-        adcClip:   Number(msg.adcClip) || 0,
-        lnaN:      Number(msg.lnaN) || 0,
-        agcInit:   Number(msg.agcInit) === 1,
-        agcReinit: Number(msg.agcReinit) === 1,
-        gainStuck: Number(msg.gainStuck) === 1,
-      });
-      return;
-    }
-    // ★★★ THE GAIN LOOP SAID SOMETHING. Sent by the VibeServer shim on every automatic change:
-    //     `steps` below the ceiling, `dir` (+1 up / −1 down), the applied `gain` and whether the
-    //     AGC is what moved it. The client shows a short readout rather than the server's full
-    //     sentence — see the status row.
-    if (msg.type === 'lx') {
-      this.callbacks.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
-      return;
-    }
-    if (msg.type === 'ovl') {
-      this.callbacks.onOverload?.({
-        gainTenthDb: Number(msg.gain) || 0,
-        dir: Number(msg.dir) || 0,
-        agc: msg.agc === 1 || msg.agc === true,
-      });
-      return;
-    }
-    if (msg.type === 'hwinfo') {
-      // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
-      //     Backgrounding pauses the spectrum, and resuming opens a FRESH socket — a new session
-      //     as far as the server is concerned, so it starts the listener at the radio's landing
-      //     frequency. On the way back from the background the Airspy therefore jumped from the
-      //     2 m band to broadcast FM, which is not a retune anyone asked for (Stuart, 2026-08-13).
-      //     ★★ onopen re-asserts the VIEW (the zoom/centre) and always has — but the view is where
-      //        the waterfall is LOOKING, not what the demodulator is TUNED to. The two were never
-      //        the same thing, and only one of them was being restored.
-      //     ★ Only on a socket that has been here before (`this.hadSession`): on a FIRST connect
-      //       the server's landing frequency is exactly what should win, and SDRScreen's own
-      //       last-tune restore runs then too — re-asserting here would fight it.
-      /* ★★★ AND NEVER ON A SHARED DIAL — THIS IS THE SECOND WRITER, AND IT IS HALF THE BOUNCE.
-       *     Everything above is right for a PER-LISTENER VFO, where the dial is ours and a resume
-       *     must put the listener back. On a shared dial the opposite is true: the room owns the
-       *     frequency, the landing IS the room, and re-asserting our own is the app arguing with
-       *     the server.
-       *  ★★★ AND hwinfo IS NOT RARE — IT ARRIVES ON EVERY RETUNE BY ANYONE. The server re-sends it
-       *      to every spectrum client whenever the RF centre, tuner bandwidth or gain cap moves
-       *      ("★ Only on a CHANGE. This runs on every retune", local_sdr_shim.cpp), so while one
-       *      listener works the dial, every OTHER client gets a stream of them. That made this the
-       *      engine of the whole fault, not an edge case on resume:
-       *        1. someone tunes -> the dongle moves -> hwinfo to everybody
-       *        2. each other client re-asserts ITS OWN stale frequency here
-       *        3. tune() stamps lastLocalTuneAt, so `settled` (1500 ms) is false
-       *        4. the stream of hwinfos keeps it false FOR EVER, so the adopt branch in the config
-       *           handler can never run — the client is structurally deaf while anyone is tuning
-       *        5. and step 2 drags the room back, which is the bounce
-       *      Stuart named the symptom of (4) without knowing the cause: "I used to see user xx has
-       *      tuned to xxxxMHz ... I've not seen that toast in a while" — that toast is fired FROM
-       *      the adopt branch, so its disappearance was the branch going dead.
-       *  ★★ Which is also the honest answer to "the web client just works": it has no equivalent
-       *     of this block, so nothing ever stamps its settle timer and its adopt always runs.
-       *  ★★★ TWO WRITERS IS WHY IT BOUNCES RATHER THAN SITTING STALE. Stuart, 2026-09-21: "its now
-       *      fucking bouncing between the 2 ... the server tells the app hey I am on 103.0 now and
-       *      the app sticks its fingers in its ears". A single stale writer sits on the wrong
-       *      number quietly; two that each re-assert produce a ping-pong. The adopt path (see the
-       *      config handler) was already fixed — it could not win while this kept shouting over it.
-       *  ★★ THE FIX IS A SUBTRACTION, as it was the first time: ONE writer of the frequency, the
-       *     server, and the app transmits only on a USER ACTION. ✗ Do not add a guard, a settle
-       *     timer or a reconciliation pass here — each of those is a second route by another name.
-       *  ★ The web client has no equivalent of this block at all, which is the whole reason it
-       *    "just works": it has nothing that can assert a frequency nobody asked for. */
-      if (this.hadSession && this.status.frequency > 0 && !this.sharedDial) {
-        this.tune(this.status.frequency, this.status.mode, { recenter: true });
-      } else if (this.hadSession && this.sharedDial) {
-        this.dbg('shared dial — not re-asserting our tune on this hwinfo; the room owns the dial');
-      }
-      this.hadSession = true;
-      // VibeServer sent the serving device's tuner gains + offered sample rates.
-      // ★ The radio describes ITSELF. Everything the hardware panel offers is decided from
-      // this — see RadioCaps. Forwarded verbatim rather than normalised: a driver we do not
-      // know yet must still be able to say what it is.
-      if (msg.radio && typeof msg.radio === 'object') {
-        this.callbacks.onRadioCaps?.(msg.radio as RadioCaps);
-      }
-      if (typeof msg.adminSet === 'boolean') {
-        this.adminSet = msg.adminSet;
-        this.callbacks.onAdminState?.({ set: msg.adminSet, ok: msg.adminOk === true });
-      // ★ Absent on a server too old to send it — the clock then keeps showing the phone's time
-      //   rather than going blank.
-      if (typeof msg.tzOffsetMin === 'number')
-        this.callbacks.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''));
-      }
-      // ★★★ THE SESSION CLOCK RIDES HWINFO, NOT CONFIG — the exact trap that made Jr's whole
-      // session-limit feature silently never happen (jr_vibeserver_release_pass). The phone was
-      // deriving its countdown ONLY from route params filled in by the server-list probe, so
-      // connecting by direct IP — or to a server whose limit changed after the probe — showed no
-      // countdown at all. Take the server's own number whenever it speaks.
-      // ★★★ PASS A NEGATIVE THROUGH — IT IS THE ONLY WAY THE SERVER CAN SAY "NO DEADLINE". The
-      // shim's occupantSecsLeft() returns -1 for an admin, for loopback and for an unlimited
-      // server. Filtering on `> 0` meant the one message that could STOP a countdown was the one
-      // message we dropped, so a clock started from stale route params ran on for ever with
-      // nothing behind it. The web client already accepts >= 0 (spectrum.ts) — this end did not,
-      // and a wire value has to be read the same way at both ends.
-      if (typeof msg.sessionSecsLeft === 'number') {
-        this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
-      }
-      // ★★★ THE SERVER'S WORD ON ITS OWN DSP. These are sticky AND shared, so what this phone last
-      //     asked for is irrelevant — only the radio knows, and a control that misreports it is
-      //     worse than a missing one because nothing tells you to look. Absent = an older server
-      //     that HAS the treatment but does not talk about it, so default ON rather than OFF.
-      if (typeof msg.wsp === 'boolean' || typeof msg.ims === 'boolean'
-          || typeof msg.ceq === 'boolean' || typeof msg.nb === 'boolean'
-          || typeof msg.autobw === 'boolean') {
-        this.callbacks.onFmDsp?.({
-          wsp: msg.wsp !== false, ims: msg.ims !== false,
-          ceq: msg.ceq !== false, nb: msg.nb !== false,
-          autobw: typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
-          nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
-        });
-      }
-      if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
-      if (typeof msg.gainNow === 'number') this.callbacks.onHwGainNow?.(msg.gainNow);
-      // ★ Only when the server states it — an older one does not, and 0 must not be read as
-      //   "the radio is running at nothing".
-      if (typeof msg.rateNow === 'number' && msg.rateNow > 0)
-        this.callbacks.onHwRateNow?.(msg.rateNow);
-      // ★ Whether the server's own AGC is running — see onHwAgc.
-      // ★★ The server writes it as 1/0, not true/false — a boolean-only test never fired.
-      if (typeof msg.agc === 'boolean' || typeof msg.agc === 'number')
-        this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);
-      if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
-      // >0 = the host PINNED the capture rate. The server ignores our sampleRate
-      // messages outright, so the client hides the picker rather than offer a
-      // control that silently does nothing.
-      this.callbacks.onHwLockedRate?.(Number(msg.lockedRate) || 0);
-      // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
-      //   offers a control whose every use is refused.
-      this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
-      // ★ Same rule again: the server refuses, so the client must not offer. Absent = not locked,
-      //   which is what every server before this one meant.
-      this.callbacks.onHwGainLocked?.(msg.gainLocked === true);
-      this.callbacks.onHwIfGrFloor?.(
-        typeof msg.ifGrFloor === 'number' ? (msg.ifGrFloor as number) : -1);
-      // ★ -1 when absent, never 0 — an older server that does not send the field must read as
-      //   "no limit", and 0 would read as "no gain allowed at all".
-      this.callbacks.onHwGainCap?.(
-        typeof msg.gainCap === 'number' ? (msg.gainCap as number) : -1);
-      /* ★★★ MODES AND DECODERS THE OWNER HAS SWITCHED OFF. Same rule as the locks above and for
-       *  the same reason: the server REFUSES these, so the app must not offer them. Stuart's
-       *  cases are an RSP1B locked to HF (where WFM and Adv RDS can do nothing) and an XCover set
-       *  up for AM/FM only. Absent = nothing blocked, which is what every server before this one
-       *  meant — never "block everything". */
-      if (Array.isArray(msg.blocked))
-        this.callbacks.onHwBlockedModes?.((msg.blocked as string[]).map(x => String(x).toLowerCase()));
-      // ★ Only when the server actually states it — an older server has no such filter and must
-      //   not be read as "wide open", which is a claim about hardware we have not been told about.
-      if (msg.tunerBw !== undefined)
-        this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
-      if (msg.rfCentre !== undefined || msg.lockedCentre !== undefined)
-        this.callbacks.onRfCentre?.(Number(msg.rfCentre) || 0, Number(msg.lockedCentre) || 0);
-      // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
-      // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
-      // permitted one, and read the difference as a failing link — stepping down forever chasing a
-      // limit that can never be reached. (The server's own comment makes the same point.)
-      // ★★ REBUILD THE CONTROLLER ON THE RIGHT LADDER.
-      //
-      // startLinkManager() runs in ws.onopen, but `hwinfo` is a MESSAGE — it can
-      // only arrive afterwards. So the controller was ALWAYS constructed with
-      // isVibeServer false and took LADDERS.ubersdr [10, 5, 3.3], and it early-
-      // returns if the timer already exists, so it never got a second chance.
-      //
-      // Once hwinfo landed, apply() switched to the VibeServer lever (fftRate)
-      // but kept UberSDR's RUNGS — so the phone asked a 20 fps VibeServer for
-      // 10 / 5 / 3.3 and could never request full rate. The browser, which just
-      // asks for min(displayRate, serverCap), sat at 83 KB/s on the same server
-      // while the phone crawled. (Stuart spotted this: "is auto link management
-      // set to UberSDR standards?")
-      //
-      // ★ Deciding a backend-specific policy from state that arrives LATER than
-      // the decision is the bug; rebuilding when the truth lands is the fix.
-      /* ★★★ THE REBUILD THAT USED TO LIVE HERE IS GONE, AND SO IS THE RACE IT PATCHED. hwinfo set
-       *  isVibeServer=true, discovered the link controller had been built on UberSDR's ladder, tore
-       *  it down and built it again. None of that is reachable now: a VibeServerClient was
-       *  constructed as one, so startLinkManager() took the right ladder the first time.
-       *  ★ The comment above is kept because its diagnosis is the reason this class was split —
-       *    "deciding a backend-specific policy from state that arrives LATER than the decision is
-       *    the bug". The fix is no longer to rebuild when the truth lands; it is to know at
-       *    construction. */
-      this.serverMaxFps = Number(msg.maxFftRate) || 0;
-      if (this.serverMaxFps > 0) this.link?.applyServerCeiling(this.serverMaxFps);
-      return;
-    }
     if (msg.type === 'config') {
       this._restoreViewOnConfig(msg);
-      /* ★★★ THE RADIO'S IF FILTER AND GAIN, FROM THE SAME MESSAGE AS ITS FREQUENCY AND ZOOM —
-       *  the server's full state in one place (2026-09-22). hwinfo still carries them for older
-       *  servers; these fields are absent there, so nothing changes against one. */
-      if (typeof msg.ifBw === 'number')
-        this.callbacks.onHwTunerBw?.(msg.ifBw, msg.ifAuto === true);
-      if (typeof msg.gainNow === 'number' && msg.gainNow >= 0)
-        this.callbacks.onHwGainNow?.(msg.gainNow);
-      if (typeof msg.agc === 'number' || typeof msg.agc === 'boolean')
-        this.callbacks.onHwAgc?.(msg.agc === true || msg.agc === 1);      // Local hardware advertises its full span here → cap zoom-out to it.
+      // Local hardware advertises its full span here → cap zoom-out to it.
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;
       if (typeof msg.binBandwidth === 'number') this.status.binBandwidth = msg.binBandwidth;
@@ -2350,212 +1796,12 @@ export abstract class UberSDRWsClient {
         : this.status.binBandwidth * this.status.binCount;
       this.dbg(`config: ${this.status.binCount} bins @ ${this.status.binBandwidth} Hz ` +
                `centre ${this.status.centerHz} bw ${this.status.bwHz}`);
-      // ★★★ THE SERVER HAS JUST TOLD US WHERE IT ACTUALLY PUT US. If we connected to restore a
-      //     remembered tune, this is the moment to find out whether it took — and on a new session
-      //     it will NOT have, because the server lands newcomers on the owner's chosen frequency
-      //     during the handshake. Without this the app showed 106.8 MHz WFM while the radio sat in
-      //     the AM broadcast band playing Radio Caroline, and one manual tune "fixed" it.
-      // ★★ NOT ON A LOCKED RECEIVER. The comment on the server's own config says it: on a shared
-      //    radio there is one VFO and "a joiner must adopt it rather than impose one — otherwise
-      //    the last person to connect silently retunes the radio for everybody already listening".
-      //    So we adopt there, and only assert where the VFO is genuinely ours.
-      // ★ Once. Cleared either way, so a server that lands us somewhere on purpose is argued with
-      //   exactly once and never again.
-      if (Number.isFinite(Number(msg.vfo)) && Number(msg.vfo) > 0) this.lastServerVfo = Number(msg.vfo);
-      /* ★★★ TELL NATIVE WHERE THE DIAL IS — SILENTLY. This is the server's word, so it is the ONE
-       *  thing entitled to write native's `currentFreq`, and it must not reach the wire.
-       *
-       *  ★★★ WHY HERE AND NOT IN NATIVE'S OWN HANDLER: the server sends `config` to SPECTRUM clients
-       *      only (`for (auto& c : allSpecClients()) sendConfig(c)` — local_sdr_shim.cpp). The audio
-       *      socket, which native owns, never receives one, so native cannot learn this by itself.
-       *  ★★ Native used to learn the dial ONLY from our own sendTuneCommand, so it went stale the
-       *     moment anyone else tuned a shared receiver — and it then re-imposed that stale value on
-       *     every reconnect and engine restart. That is the bug this whole change removes.
-       *  ★ Unconditional, outside the "somebody else moved it" branch below: native wants the dial
-       *    after OUR tunes too (the server's confirmation is the authoritative value), and it is a
-       *    no-op when nothing changed. Cheap enough to do on every config. */
-      {
-        const sv = Number(msg.vfo);
-        if (Number.isFinite(sv) && sv > 0) {
-          try {
-            VibePowerModule?.noteServerFreq?.(
-              sv, typeof msg.mode === 'string' && msg.mode ? msg.mode : this.status.mode);
-          } catch {}
-        }
-      }
-      // ★★★ FOLLOW THE DIAL WHEN SOMEBODY ELSE TURNS IT. On a shared-VFO receiver the frequency
-      //     moves because another listener moved it, and this client adopted the server's vfo only
-      //     during the first-connect negotiation below — so the audio followed and the readout,
-      //     the mode and everything keyed off them did not. The browser had the identical gap
-      //     (fixed 2026-08-20); this is the same fix in the app.
-      //  ★★ AND IT IS WHY RadioDNS LOGOS WERE MISSING on the phone: the lookup is keyed on the
-      //     frequency (with the PI), so a stale readout asks about a station nobody is listening
-      //     to and finds nothing. Stuart spotted the pair — "the moto doesnt get the RadioDNS
-      //     icons which is odd but could be related to the wrong frequency". It was.
-      //  ★ Guarded against our own echo: the server confirms every tune WE send as a config, and
-      //    adopting inside that window would fight a drag or a held step key.
-      {
-        const sv = Number(msg.vfo);
-        const bw = Math.abs(Number(this.status.bandwidthHigh) - Number(this.status.bandwidthLow)) || 3000;
-        const settled = Date.now() - this.lastLocalTuneAt > 1500;
-        // ★★★ ADOPT EVERY MOVE, HOWEVER SMALL — the READOUT is not a jitter problem. This was
-        //     gated on the move exceeding the demodulator's bandwidth, which on WFM is ~200 kHz,
-        //     so 100 kHz steps never qualified: the phone followed only once several steps had
-        //     accumulated past the threshold, and settled wherever the arithmetic left it.
-        //     Stuart, watching both screens: "on the webclient i am on 96.6 but on the moto its
-        //     on 96.4" (2026-08-20).
-        //  ★★ The BANDWIDTH threshold still governs the expensive half — flushing audio and
-        //     recentring the view — because doing those on every 100 Hz nudge of somebody else's
-        //     drum would stutter for everyone watching. Two questions, two thresholds; they were
-        //     one, and the cheap one inherited the costly one's caution.
-        const moved = Math.abs(sv - Number(this.status.frequency));
-        /* ★★★ THE ONE CLAUSE THE WEB CLIENT DOES NOT HAVE — AND IT IS THE BUG.
-         *
-         *  Compared clause by clause against spectrum.ts, which does this correctly:
-         *      web:  if (settled && cfg.serverVfo && moved > 100)
-         *      app:  if (!this.wantTune && settled && ... && moved > 100)
-         *  Same 1500 ms settle, same 100 Hz floor, same view-follow below. The ONLY difference is
-         *  `!this.wantTune`, and it is why an app can sit on a stale dial for ever while the
-         *  browser beside it tracks perfectly.
-         *
-         *  ★★★ HOW IT BITES: the adopt runs BEFORE the wantTune block below, so the config that
-         *      carries the remembered tune is skipped here. The server sends `config` on connect
-         *      and on CHANGE — so if nothing moves the dial afterwards, the only config that
-         *      client will ever see was the one it threw away. Measured 2026-09-21 on Stuey3D
-         *      SonyTV: server on 99.7 (moved there from the iPhone), Mac reading 97.8 — a
-         *      frequency not even on the Mac's own axis.
-         *  ★★ AND THERE IS NOTHING FOR THE GUARD TO PROTECT ON A SHARED DIAL: the wantTune block
-         *     below already refuses to assert a remembered tune there ("NEVER ON A SHARED DIAL"),
-         *     so blocking the adopt buys a stale readout and prevents nothing.
-         *  ★ Stuart, stating the model: "The apps should simply mirror the server ... they should
-         *    not fight the server and should not be holding the tuning." On a shared dial the
-         *    server is the authority; a client that can disagree with it is the fault.
-         *  ✗ Left in place for a PER-LISTENER VFO, where the dial genuinely is ours and a
-         *    remembered tune is the listener's own answer — that is the case the guard was for. */
-        const sharedNow = msg.shared === true || this.sharedDial;
-        if (sharedNow && this.wantTune) {
-          this.dbg('shared dial — the server owns this VFO; dropping the remembered tune');
-          this.wantTune = null;
-        }
-        /* ★★★ SAY WHAT WAS DECIDED, WHERE A RELEASE BUILD CAN BE READ. dbg() goes to onDbg, which
-         *     nothing in the UI consumes, so on a device this decision has always been invisible —
-         *     and it is THE decision the shared dial turns on. Recorded into the diagnostics ring
-         *     the About screen already exports, so a reproduction can be read instead of guessed
-         *     at. See protocolLog.noteDecision. */
-        const wouldAdopt = (sharedNow || !this.wantTune) && settled
-                        && Number.isFinite(sv) && sv > 0 && moved > 100;
-        if (!wouldAdopt && Number.isFinite(sv) && sv > 0 && moved > 100) {
-          noteDecision('vibe', `dial NOT adopted ${sv} (moved ${Math.round(moved)})`
-            + ` shared=${sharedNow ? 1 : 0} settled=${settled ? 1 : 0}`
-            + ` wantTune=${this.wantTune ? 1 : 0} msgShared=${msg.shared === true ? 1 : 0}`
-            + ` dialShared=${this.sharedDial ? 1 : 0}`);
-        }
-        if (wouldAdopt) {
-          noteDecision('vibe', `dial adopted ${sv} (moved ${Math.round(moved)})`);
-          this.dbg(`another listener moved the dial to ${sv}`);
-          this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
-          this.status.frequency = sv;
-          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
-          // ★★★ AND BRING THE VIEW WITH IT. Adopting the frequency alone leaves the waterfall
-          //     pointed where the radio ISN'T — the server is capturing around the new dial, so
-          //     the old view has no data behind it and goes BLACK. Stuart hit exactly that from
-          //     the phone (2026-08-20): "it made the spectrum go black and the audio stayed on
-          //     greatest hits". A local tune already does this (see tune()); a remote one must.
-          //  ★ Only when this client is following the VFO. Somebody who has deliberately panned
-          //    away to watch another part of the band chose that view, and yanking it back on
-          //    every move somebody else makes would be the opposite of helpful.
-          // ★★★ AND WHEN SMALL STEPS ADD UP: an rtl_tcp app walking the dial in 100 kHz steps on
-          //     WFM never crossed one bandwidth, so the view never followed and the VFO walked to
-          //     the edge of a LOCKed view (web client, 2026-09-10). Also recentre once the dial
-          //     has drifted more than a tenth of the view from its middle.
-          const bbNow = this.view.binBandwidth || this.status.binBandwidth;
-          const viewSpan = bbNow ? bbNow * (this.status.binCount || 4096) : 0;
-          const drifted = viewSpan > 0 && Math.abs(sv - this.view.centerHz) > viewSpan * 0.1;
-          if (this.followVfo && (moved > bw || drifted)) {
-            const bb = this.view.binBandwidth || this.status.binBandwidth;
-            if (bb) this.zoom(sv, bb); else this.pan(sv);
-          }
-          this.callbacks.onStatus({ ...this.status });
-        }
-      }
-      if (this.wantTune) {
-        const want = this.wantTune;
-        this.wantTune = null;
-        const serverVfo = Number(msg.vfo);
-        // ★★★ CAN THE MEMORY EVEN BE HONOURED? A receiver with a LOCKED WINDOW still allows free
-        //     tuning INSIDE it, so a remembered frequency in range is perfectly reachable and
-        //     should be restored. One outside the window is not, and insisting on it would leave
-        //     the dial showing a frequency the radio can never reach — which is the very fault
-        //     this code exists to end, in a new costume.
-        // ★★ SO: IN RANGE, ASSERT. OUT OF RANGE, TAKE THE LANDING FREQUENCY AND MODE, which is the
-        //    owner's answer for "a listener who cannot go where they wanted". Stuart's case,
-        //    exactly: "if I change the unlocked single-user radio to a fixed range with multiple
-        //    users, and I connect and cannot tune to the last used memory, then I should default
-        //    to the landing frequency and mode of the radio" (2026-08-15).
-        // ★ Unlocked receivers have no window to be outside of, so memory always wins there —
-        //   which is the two single-user radios, and the common case.
-        const span = Number(this.status.bwHz) || 0;
-        const centre = Number(this.status.centerHz) || 0;
-        const windowed = msg.locked === true && span > 0 && centre > 0;
-        const reachable = !windowed
-          || Math.abs(want.frequency - centre) <= span / 2;
-        /* ★★★ AND NEVER ON A SHARED DIAL, WHOEVER ELSE IS ALREADY ON IT.
-         *
-         *  Everything below assumes the dial is OURS to put back where we left it. On a shared
-         *  receiver it is not: the frequency is the room's, a joining listener arrives into
-         *  somebody else's programme, and asserting a remembered one drags them off it. The note
-         *  further down already saw the danger — "it would fight a shared VFO for ever" — and
-         *  guarded only the REPEAT, not the first assertion.
-         *
-         *  ★★ THE ASSUMPTION WAS WRITTEN DOWN AND IT WAS WRONG: "Unlocked receivers have no window
-         *     to be outside of, so memory always wins there — which is the two single-user radios,
-         *     and the common case." Unlocked does NOT mean single-user. Stuart's XCover is unlocked
-         *     AND shared (ten listeners, dial mode "open"), so the one rule that was never meant to
-         *     apply to a shared dial applied to it on every connect.
-         *
-         *  ★★ AND THIS IS THE "RANDOM" DISTORTION ON CONNECT. Stuart, 2026-09-11: "it will look like
-         *     its sat on a signal and the correct demodulator set but the tuning will be off broken
-         *     up and distorted, if i tune away then back it all lines up perfectly … this is on a
-         *     shared VFO radio which should leave the tuning where it was left so new connecting
-         *     clients dont trigger a retune." Random because it only bites when the remembered
-         *     frequency differs from where the room is sitting — join on the same station and
-         *     nothing happens at all.
-         *
-         *  ★ `shared` is in THIS message, beside `locked`, and always has been — the config names
-         *    both and only one was read. No new field, no ordering question, no guess from the
-         *    listener count. */
-        if (!reachable || msg.shared === true) {
-          // Adopt what the server actually did, so the readout stops claiming otherwise.
-          this.dbg(msg.shared === true
-            ? `shared dial — adopting the room's ${serverVfo}, not the remembered ${want.frequency}`
-            : `remembered ${want.frequency} is outside the locked window — keeping the landing`);
-          if (Number.isFinite(serverVfo) && serverVfo > 0) this.status.frequency = serverVfo;
-          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
-          this.callbacks.onStatus({ ...this.status });
-        } else if (Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
-          this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
-          this.tune(want.frequency, want.mode, { recenter: true });
-          // ★★★ AND AGAIN A MOMENT LATER, BECAUSE THE AUDIO PATH IS NOT OURS TO SEE. tune() reaches
-          //     the radio through VibePowerModule's native audio socket, and on this server the
-          //     AUDIO socket arrives FIRST and is what triggers the landing — so at the instant the
-          //     spectrum config lands, the native side has just been retuned underneath us and may
-          //     not carry ours. The log showed exactly that: audio chain wfm, then the landing to
-          //     am/648, then nothing for twenty-three seconds. The listener saw FM on the dial and
-          //     heard Radio Caroline (Stuart, 2026-08-15).
-          // ★★ ONE repeat, not a loop. If the second one does not take either, something is wrong
-          //    that retrying cannot fix, and a client that keeps shoving a frequency at a server is
-          //    worse than one that gets it wrong once — it would fight a shared VFO for ever.
-          // ★ Judged on the SERVER's reported vfo, never on our own status — tune() sets that
-          //   itself, so asking it whether the tune took is asking the question of the answer.
-          setTimeout(() => {
-            if (this.destroyed) return;
-            if (Math.abs(this.lastServerVfo - want.frequency) > 500) {
-              this.dbg(`still on ${this.lastServerVfo}; asserting ${want.frequency} once more`);
-              this.tune(want.frequency, want.mode, { recenter: true });
-            }
-          }, 2500);
-        }
-      }
+      /* ★★★ UberSDR HAS NO SHARED DIAL AND ITS config CARRIES NO vfo (2026-09-22). Every listener
+       *  has their own VFO, tuned by the audio socket URL and our own tune messages — so there is no
+       *  server dial to adopt. The shared-dial adopt/decline logic, noteServerFreq and the
+       *  remembered-tune reconciliation live in VibeServerWsClient only. On UberSDR they never ran
+       *  (no vfo, no shared): this is what they reduced to. */
+      this.wantTune = null;
       // binBandwidth change ⇒ the session may have migrated shared↔private,
       // which resets the server-side poll divisor — re-assert ours.
       if (this.status.binBandwidth !== this.lastRateBinBw) {
@@ -2602,12 +1848,11 @@ export abstract class UberSDRWsClient {
        *  hauled it back to 96.1, and both waterfalls emptied while the RDS followed the station nobody could
        *  see. The server says as much in its own config: "a joiner must adopt it rather than impose one".
        *  ★★ So here we adopt: fall through to the lines below, which take the server's centre as ours. */
-      if (unsolicitedChange && !this.sharedDial) {
+      if (unsolicitedChange) {
         this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
         this._sendView(Math.round(v.centerHz), v.binBandwidth);
         return;
       }
-      if (unsolicitedChange) this.dbg(`shared dial: adopting the server's centre ${this.status.centerHz}`);
       this.view.centerHz     = this.status.centerHz;
       this.view.binBandwidth = this.status.binBandwidth;
       this.callbacks.onStatus({ ...this.status });
