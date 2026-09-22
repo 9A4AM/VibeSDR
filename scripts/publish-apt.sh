@@ -123,10 +123,19 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 # ★★ THE FUZZ CORPUS IS LIVE. scripts/fuzz-dab.sh writes into vibeserver/fuzz-corpus while it
 #    runs, and rsync exits 24 ("file has vanished") if a run is in flight — which failed a package
 #    build mid-audit, 2026-09-10. None of these belong in a .deb anyway.
-COPY_EXCLUDES="--exclude build --exclude .git --exclude node_modules --exclude Pods
+COPY_EXCLUDES=(--exclude build --exclude .git --exclude node_modules --exclude Pods
                --exclude tvos --exclude ios --exclude spike --exclude web/dist
                --exclude fuzz-corpus --exclude build-fuzz --exclude build-san
-               --exclude fuzz-crashes"
+               --exclude fuzz-crashes
+               --exclude .cxx --exclude lite --exclude '*.zip' --exclude .armhf-out
+               --exclude tools/vibeiq/out --exclude screenshots
+               --exclude 'build-*' --exclude .claude --exclude .gradle
+               --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32')
+# ★ AN ARRAY, so the glob patterns reach rsync as patterns — unquoted in a string they would be
+#   expanded by the shell against whatever directory the script happens to be standing in.
+# ★★ THE DOCKER VM HAS A 12 GB DISK (2026-09-22). The copy was 4.2 GB — Android .cxx intermediates,
+#    the Lite app, old release zips — none of which the Linux server reads, and with the build
+#    images beside it the arm64 publish died "No space left on device" mid-rsync.
 
 # ★★★ A .deb BUILT SOMEWHERE ELSE — VIBE_PREBUILT_DEB.
 #
@@ -222,7 +231,7 @@ if [ -r /etc/os-release ] && grep -q 'VERSION_CODENAME=bookworm' /etc/os-release
   #    build dies with "No such file or directory" pointing at a path that cannot exist here.
   # ★ --exclude build is the line that matters; .git is excluded only for speed.
   mkdir -p /build
-  rsync -a --delete $COPY_EXCLUDES "$SRC_DIR/" /build/VibeSDR/
+  rsync -a --delete "${COPY_EXCLUDES[@]}" "$SRC_DIR/" /build/VibeSDR/
 else
   NATIVE_BUILD=0
   BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
@@ -236,7 +245,7 @@ else
   for d in proc sys dev dev/pts; do
     sudo mountpoint -q "$BUILD_ROOT/$d" || sudo mount --bind "/$d" "$BUILD_ROOT/$d"
   done
-  sudo rsync -a --delete $COPY_EXCLUDES "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
+  sudo rsync -a --delete "${COPY_EXCLUDES[@]}" "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
 fi
 
 # ★ One command, run either through the chroot or straight. Keeping a single copy of the cmake
