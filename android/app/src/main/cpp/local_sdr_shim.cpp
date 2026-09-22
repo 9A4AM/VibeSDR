@@ -2696,6 +2696,24 @@ static std::atomic<float>    g_contrastBeforeMove{99.0f};
  *    never fired here — 104.2 measured 21.8-26.9 dB at every gain including the ruinous ones. What
  *    distinguishes the two cases is the CHANGE across a move, not the level. */
 static constexpr float       kContrastCostDb = 2.0f;
+/* ★★★ HOW FAR A SINGLE UNJUDGED MOVE MAY TRAVEL WHERE HARM SHOWS OUTSIDE THE CHANNEL.
+ *     TWO code paths jump the gain by arithmetic on the ADC peak alone — the "recovering:" one
+ *     and the "clear by ... — jumping to" one — and the ADC peak cannot see intermodulation from a
+ *     signal outside the sampled window. On an R820T the mixer goes non-linear long before an
+ *     8-bit converter fills, so "headroom allows" sanctions a leap straight past the knee.
+ * ★★★ AND A HILL-CLIMBER THAT LEAPS OVER THE SUMMIT READS THE FAR SLOPE AS LEVEL GROUND.
+ *     Measured on the Pi 2, 106.9, 2026-09-21: the loop went 0 -> 29.7 -> 44.5 dB in two jumps and
+ *     judged the second "bought 1.4 dB of separation — going on". Band contrast is 7.3 at 29.7 and
+ *     6.9 at 44.5, a fall of 0.4 that is under kContrastCostDb — but the PEAK between them, at
+ *     32.8, is 9.6. The contrast term was working; it was never allowed to stand on the summit.
+ *     Stuart, watching the same run: "gain looks too high at 48 as the whole floor around it is
+ *     bouncing like intermodulation ... Around the 29-34 mark is probably best". The swept optimum
+ *     is 32.8 dB.
+ *  ★★ ONE constant for both paths. They were capped separately, hours apart, and the second was
+ *     missed precisely because the first one's fix read as done. Who ELSE jumps the gain?
+ *  ★ Only where watchShoulders is set. WIDE/DAB has no neighbourhood to damage and says so in its
+ *    profile; there the whole of the predicted headroom is still taken in one move, as before. */
+static constexpr double      kBlindJumpMaxDb = 10.0;  // ★ 4 was tried 2026-09-22: 106.9 undershot to 7.7 again — keep 10
 /** ★ DAB's own "before the move" figures — see the DAB verdict in overloadTick. */
 static std::atomic<float>    g_dabFibBeforeMove{-1.0f};
 static std::atomic<float>    g_dabNullBeforeMove{0.0f};
@@ -24702,6 +24720,11 @@ void LocalSdrShim::overloadTick() {
         const float contrastNow  = p->bandContrastDb.load();
         const float contrastFell = (contrastWas < 90.0f && contrastNow < 90.0f)
                                  ? (contrastWas - contrastNow) : 0.0f;
+        /* ★ The same quantity with the sign the climb reads — see the "going on" arm. Gated on the
+         *  profile that makes band contrast mean something, like the veto it partners. */
+        const float contrastRose = (g_profile.load(std::memory_order_relaxed)->watchShoulders
+                                    && !g_dabMode.load(std::memory_order_relaxed))
+                                 ? -contrastFell : 0.0f;
         const float d = sepComparable ? (sepNow - sepWas) : 0.0f;   // ★ unlike units: no evidence
         const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
 
@@ -24925,10 +24948,32 @@ void LocalSdrShim::overloadTick() {
             g_nextStride.store(0, std::memory_order_relaxed);
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
-        } else if (d > 0.5f) {
-            // ★ Better. Keep it and keep going the same way — this is a hill and we are climbing it.
-            LOGI("that %s bought %.1f dB of separation (%.1f -> %.1f) — going on",
-                 dir > 0 ? "step up" : "step down", d, sepWas, sepNow);
+        } else if (d > 0.5f || contrastRose > 0.5f) {
+            /* ★★★ CONTRAST IS ALLOWED TO SAY "KEEP GOING", NOT ONLY "STOP". It was added as a pure
+             *     veto — refuses, never requests — and that left the climb steering by separation
+             *     alone through a region where separation cannot see the hill it is standing on.
+             *  ★★★ MEASURED, 106.9 on the Pi 2 (2026-09-21), the swept curve rung by rung:
+             *        gain   15.7  16.6  19.7  22.9 ... 32.8
+             *        sep     2.0   2.1   2.2   3.4      6.1     <- +0.1 a rung, UNDER the 0.5 test
+             *        contr   2.5   2.9   3.7   5.9      9.6     <- +0.4 to +0.8 a rung, readable
+             *     The separation hill below ~23 dB is real but gentler than the threshold that
+             *     judges it, so every step read as noise and the loop settled on the shallow slope
+             *     at 16.6 dB. It only ever escaped that region by ACCIDENT — the blind headroom
+             *     jump vaulting across it — and capping that jump (kBlindJumpMaxDb) removed the
+             *     accident and exposed this.
+             *  ★★ The two terms together bracket the answer: contrast carries the climb up the
+             *     shallow half, and the contrast VETO above stops it at the peak, where the front
+             *     end starts filling the band in. On 106.9 that peak is 32.8 dB. Stuart, watching
+             *     the uncapped run settle at 48: "gain looks too high at 48 as the whole floor
+             *     around it is bouncing like intermodulation ... Around the 29-34 mark is probably
+             *     best."
+             *  ★ Only where the profile watches shoulders. On WIDE/DAB band contrast is not a
+             *    meaningful quantity — the signal fills the passband — and it is excluded there,
+             *    exactly as the veto is. */
+            LOGI("that %s bought %.1f dB of separation (%.1f -> %.1f) and %.1f dB of band contrast "
+                 "(%.1f -> %.1f) — going on",
+                 dir > 0 ? "step up" : "step down", d, sepWas, sepNow,
+                 contrastRose, contrastWas, contrastNow);
             g_settled.store(false, std::memory_order_relaxed);
             // ★ Proved right again: earn a longer stride — see agcStride().
             g_sameDirRun.fetch_add(1, std::memory_order_relaxed);
@@ -25364,6 +25409,8 @@ void LocalSdrShim::overloadTick() {
     if (want > tgtIdx) want = tgtIdx;                 // cannot go below the bottom of the list
     if (want < 0) want = 0;
     int idx = tgtIdx - want;   // ★ not const: backoffToFit re-sizes the move below
+    /* ★ Where this tick started, for the one cap that bounds every jump path below together. */
+    const int idxBeforeJumps = idx;
     /* ★★★ THE WAY BACK UP, SIZED THE SAME WAY THE WAY DOWN IS. Stuart: "it doesnt need to climb
      *  step by step if it detects the max signal level is 10db below clipping then it can jump say
      *  8db." Exactly so — and now that the tuner's own list is in hand the jump is COUNTED against
@@ -25409,7 +25456,7 @@ void LocalSdrShim::overloadTick() {
          *    than seventeen rungs, and small enough that the separation verdict gets to judge the
          *    approach instead of meeting the knee on arrival. */
         const AgcProfile& prof0 = *g_profile.load(std::memory_order_relaxed);
-        const double roomCap = prof0.watchShoulders ? std::min(room, 10.0) : room;
+        const double roomCap = room;   // ★ capped ONCE, after both jump paths — see kBlindJumpMaxDb
         if (from >= 0 && roomCap > 1.0) {
             int best = from;
             for (int i = from + 1; i < n && (tgtIdx - i) >= 0; ++i) {
@@ -25554,6 +25601,37 @@ void LocalSdrShim::overloadTick() {
                 want = tgtIdx - best;
                 LOGI("clear by %.1f dB — jumping to %.1f dB, then stepping the last couple",
                      agcTargetDbfs() - peak, gains[(size_t)idx] / 10.0);
+            }
+        }
+        /* ★★★ ONE CAP, AFTER BOTH JUMP PATHS — AND IT HAS TO BE HERE, NOT IN EACH OF THEM.
+         *     They were capped separately first, and BOTH obeyed their cap while composing past it:
+         *     measured on the Pi 2, 106.9, 2026-09-21, inside a SINGLE tick —
+         *       "recovering: taking 8.9 dB in one move (29.7 -> 38.6)"
+         *       "clear by 24.1 dB — jumping to 43.9"
+         *     8.9 dB is legal, the follow-on 5.3 dB is legal, and the pair moved the gain 14.2 dB
+         *     with no verdict in between. A per-path limit cannot bound a sequence of paths.
+         *  ★★ Ask who ELSE moves the gain in this tick — the same question this file keeps having
+         *     to be asked (see the HackRF and backToPicker cases). The answer is "a later block",
+         *     so the cap belongs where the decision ENDS.
+         *  ★ Upward only. An overload cut must never be slowed down: the whole point of the
+         *    back-off is that it happens at once. */
+        if (idx > idxBeforeJumps
+                && g_profile.load(std::memory_order_relaxed)->watchShoulders
+                && !g_dabMode.load(std::memory_order_relaxed)) {
+            int capped = idx;
+            while (capped > idxBeforeJumps
+                   && (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0
+                        > kBlindJumpMaxDb)
+                capped--;
+            if (capped != idx) {
+                LOGI("holding that jump to %.1f dB of the %.1f dB it asked for (%.1f -> %.1f dB) — "
+                     "the converter cannot see what the mixer is doing, so the verdict judges the "
+                     "approach",
+                     (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0,
+                     (gains[(size_t)idx]    - gains[(size_t)idxBeforeJumps]) / 10.0,
+                     gains[(size_t)idxBeforeJumps] / 10.0, gains[(size_t)capped] / 10.0);
+                idx  = capped;
+                want = tgtIdx - capped;
             }
         }
     }
