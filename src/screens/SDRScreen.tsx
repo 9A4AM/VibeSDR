@@ -853,9 +853,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // a USB dongle uses ':usb'. The old single 'lsv_local_hw' / ':local' keys let
   // every local device clobber each other — and could restore an out-of-band
   // frequency (e.g. 96.6 MHz WFM onto an HF-only UberSDR RTL-TCP).
+  /* ★★ PER RADIO, NOT PER CONNECTION TYPE (2026-09-22). "usb" alone let an RTL and an Airspy HF+
+   *  share one memory — gain, rate, direct sampling and all. Stuart: "local hardware needs the
+   *  correct settings PER SDR type". The native start now reports the kind and serial. */
   const localDeviceKey = route.params.isTcp
     ? `tcp:${route.params.tcpHost ?? ''}:${route.params.tcpPort ?? ''}`
-    : 'usb';
+    : route.params.localRadio ? `usb:${route.params.localRadio}` : 'usb';
   const localHwKey = `lsv_local_hw:${localDeviceKey}`;
   /** ★★★ WHAT A BOOKMARK IS SCOPED TO — and it must be STABLE ACROSS SESSIONS or the bookmark is
    *  gone. For a network receiver that is its address, which does not move. For LOCAL HARDWARE and
@@ -967,7 +970,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Per-device key first; migrate the old global blob on first connect so a
         // single existing dongle keeps its gain/rate/etc.
         let j = await AsyncStorage.getItem(localHwKey);
-        if (j == null) j = await AsyncStorage.getItem('lsv_local_hw');
+        // ★ The old shared "usb" memory only ever seeds an RTL — it almost certainly came from one,
+        //   and giving it to an HF+ or HackRF is exactly the bug the per-radio key fixes.
+        const legacyOk = !route.params.localRadio || route.params.localRadio.startsWith('rtl:');
+        if (j == null && legacyOk && localHwKey !== 'lsv_local_hw:usb')
+          j = await AsyncStorage.getItem('lsv_local_hw:usb');
+        if (j == null && legacyOk) j = await AsyncStorage.getItem('lsv_local_hw');
         if (j) prefs = JSON.parse(j);
       } catch {}
       if (cancelled) return;
@@ -976,7 +984,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       let rate = typeof prefs.sampleRate === 'number' ? prefs.sampleRate : 2_400_000;
       // Local USB needs >=1 MHz (a dongle is sluggish/underfiltered lower); only
       // RTL-TCP may sit low. Clamp a stale/low saved rate for USB.
-      if (!route.params.isTcp && rate < 1_000_000) rate = 2_400_000;
+      // ★ An RTL cannot run below ~1 MS/s; an Airspy HF+ tops out at 912 kHz, so this clamp is the
+      //   RTL's alone (it used to force 2.4 MS/s onto an HF+ — per-radio audit, 2026-09-22).
+      const isRtlRadio = !route.params.localRadio || route.params.localRadio.startsWith('rtl:');
+      if (!route.params.isTcp && isRtlRadio && rate < 1_000_000) rate = 2_400_000;
+      const autoDs = prefs.autoDs === true;
       const bias = !!prefs.biasTee;
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
@@ -1016,6 +1028,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setBiasTee?.(bias);
       LocalHw?.setAgc?.(agc);
       LocalHw?.setDirectSampling?.(ds);
+      setHwAutoDs(autoDs);
+      if (autoDs) LocalHw?.setAutoDirectSampling?.(true, typeof prefs.dsBelowHz === 'number' ? prefs.dsBelowHz : 24e6);
       LocalHw?.setDeemphasis?.(deemph);
       LocalHw?.setStereoEnabled?.(stereo);
       LocalHw?.setSquelch?.(sql > -100, sql);
@@ -1093,9 +1107,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   localDeviceKey identifies. Nothing new to sync or migrate.
       converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
       squelch: hwSquelch,            // ★ remembered per device — see the restore above (#28)
+      autoDs: hwAutoDs, dsBelowHz: hwDsBelowHz,   // ★ per-radio audit, 2026-09-22 — was never saved
     })).catch(() => {});
     // NB: nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch]);
+  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.

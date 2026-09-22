@@ -291,6 +291,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val res = Arguments.createMap()
         res.putInt("port", port)
         res.putString("wsBaseUrl", "http://127.0.0.1:$port")
+        /* ★★ WHICH RADIO WAS OPENED, so the app can remember settings PER RADIO (2026-09-22). The
+         *  settings were keyed by connection type ("usb"), so an RTL and an Airspy HF+ shared one
+         *  memory — and an RTL's 2.4 MS/s was restored onto an HF+ that tops out at 912 kHz. The
+         *  serial (readable now that permission is granted) separates two of the same kind. */
+        res.putString("radioKind", when {
+            isAirspyHf(dev) -> "airspyhf"; isHackRf(dev) -> "hackrf"; else -> "rtl" })
+        res.putString("radioSerial", try { dev.serialNumber ?: "" } catch (_: SecurityException) { "" })
         promise.resolve(res)
     }
 

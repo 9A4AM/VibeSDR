@@ -117,6 +117,8 @@ export type RootStackParamList = {
     // only stops the shim if this is still the latest session, so a stale screen
     // can't tear down a newer one when switching instances.
     localGen?:       number;
+    /** ★ 'rtl:<serial>' / 'airspyhf:…' / 'hackrf:…' — local settings are remembered per radio. */
+    localRadio?:     string;
     // vibesdr:// deep link: connect and optionally apply an initial tune. These
     // override the persisted last-tune for this instance on first connect only.
     deepLink?:       boolean;

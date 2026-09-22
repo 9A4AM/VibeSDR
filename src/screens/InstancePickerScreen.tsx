@@ -756,7 +756,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         // fftSize 8192 over 2.4 MHz ≈ 293 Hz/bin (sharp AM/SSB); fftRate 10 to
         // match UberSDR's line cadence so the waterfall interpolation lines up.
         centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
-      }) as { port: number; wsBaseUrl: string };
+      }) as { port: number; wsBaseUrl: string; radioKind?: string; radioSerial?: string };
       setConnecting(false);
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode: modeOverride ?? viewMode,
@@ -764,6 +764,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         //   at the connectVibeServer navigate() for why this used to say 'ubersdr'.
         serverType: 'vibeserver', isLocal: true, localPort: res.port,
         localGen: newLocalSession(),
+        // ★ Which radio — the key its settings are remembered under (see SDRScreen localDeviceKey).
+        localRadio: res.radioKind ? `${res.radioKind}:${res.radioSerial ?? ''}` : undefined,
       });
     } catch (e: any) {
       setConnecting(false);
