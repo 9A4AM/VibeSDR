@@ -11,7 +11,7 @@ import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { createBackend } from '../services/UberSDRAdapter';
+import { createBackend } from '../services/backendFactory';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { getFavourites, toggleFavourite } from '../services/favourites';

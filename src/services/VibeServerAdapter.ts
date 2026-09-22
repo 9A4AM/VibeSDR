@@ -1,17 +1,17 @@
 /**
- * UberSDRAdapter — UberSDRClient behind the SDRBackend contract (v3 brief §8
- * phase 0). Near pass-through by design: the internal model IS UberSDR-shaped,
- * so this wrapper only contributes kind/caps and the delegation plumbing.
- * Zero behaviour change from calling the client directly.
+ * VibeServerAdapter — VibeServerClient behind the SDRBackend contract.
  *
- * ★★★ UberSDR ONLY (2026-09-22). VibeServer has its own copy, VibeServerAdapter.ts, and the factory
- *  lives in backendFactory.ts. Nothing VibeServer needs may be added here.
+ * ★★★ A SEPARATE CODEBASE FROM UberSDRAdapter, NOT A SUBCLASS OF IT (2026-09-22). It began as a
+ *  copy. Stuart: "Something that we need on VibeServer should not effect UberSDR" — and a subclass
+ *  inherits every change made to its parent. Same arrangement as OwrxAdapter / KiwiAdapter /
+ *  FmdxAdapter: they share the SDRBackend CONTRACT and nothing that runs.
  */
 
-import { UberSDRClient, type SDRMode, type SDRStatus } from './UberSDRClient';
-import type { SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind } from './SDRBackend';
+import { VibeServerClient } from './VibeServerClient';
+import type { SDRMode, SDRStatus } from './sdrProtocol';
+import type { BackendCallbacks, BackendCapabilities, BackendKind, SDRBackend } from './SDRBackend';
 
-const UBERSDR_CAPS: BackendCapabilities = {
+const VIBESERVER_CAPS: BackendCapabilities = {
   profiles:       false,
   serverSideZoom: true,
   smeter:         'derived',
@@ -25,19 +25,19 @@ const UBERSDR_CAPS: BackendCapabilities = {
 // Per-mode bandwidth ceilings — WFM is broadcast-wide, so the slider must reach
 // ±100 kHz (without a wfm entry it fell back to default=6k and snapped narrow).
 const LOCAL_CAPS: BackendCapabilities = {
-  ...UBERSDR_CAPS,
+  ...VIBESERVER_CAPS,
   freqRange: [100_000, 1_766_000_000],
   maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 100000 },
 };
 
-export class UberSDRAdapter implements SDRBackend {
+export class VibeServerAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
   /* ★ NOT readonly any more, and the declaration should say so: the tuning range is LEARNED from
    *  the receiver after construction (see learnTuningRange), so this genuinely changes once. It
    *  was declared readonly and assigned in a method anyway — which tsc did not flag here, and a
    *  declaration that quietly disagrees with the code is how the next reader is misled. */
   caps: BackendCapabilities;
-  protected client: UberSDRClient;
+  protected client: VibeServerClient;
   private baseUrl: string;
   private cb: BackendCallbacks;
 
@@ -46,8 +46,8 @@ export class UberSDRAdapter implements SDRBackend {
    *  the note at the top of SdrWsClient.ts. A subclass overrides this and the decision is made
    *  before a socket is opened, which is the whole point of the split. */
   protected makeClient(baseUrl: string, uuid: string, callbacks: BackendCallbacks,
-                       password?: string): UberSDRClient {
-    return new UberSDRClient(baseUrl, uuid, callbacks, password);
+                       password?: string): VibeServerClient {
+    return new VibeServerClient(baseUrl, uuid, callbacks, password);
   }
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string, local = false) {
@@ -56,11 +56,11 @@ export class UberSDRAdapter implements SDRBackend {
     this.baseUrl = baseUrl;
     this.cb = callbacks;
     /* ★★★ A COPY, NOT THE SHARED CONSTANT. The tuning range is learned from the server below,
-     *  and `UBERSDR_CAPS` is a module-level object: writing the learned ceiling into it would
+     *  and `VIBESERVER_CAPS` is a module-level object: writing the learned ceiling into it would
      *  leak one receiver's limit onto every later connection in the same session — a 60 MHz
      *  server would leave the next 30 MHz one believing it could tune to 60. */
     // Local hardware tunes far beyond UberSDR's HF cap.
-    this.caps = { ...(local ? LOCAL_CAPS : UBERSDR_CAPS) };
+    this.caps = { ...(local ? LOCAL_CAPS : VIBESERVER_CAPS) };
     if (!local) { void this.learnTuningRange(baseUrl); void this.learnExtensions(baseUrl); }
     if (local) {
       this.client.minHz = LOCAL_CAPS.freqRange[0];
@@ -150,8 +150,8 @@ export class UberSDRAdapter implements SDRBackend {
    *  the adapter, and without this getter/setter the toggle vanished (the adapter had no linkMode and no
    *  `.inner`, so Low Data never reached the controller and held 10fps; Auto only "worked" as the
    *  default). The client's own setter reconfigures the running LinkManager live. */
-  get linkMode(): UberSDRClient['linkMode'] { return this.client.linkMode; }
-  set linkMode(m: UberSDRClient['linkMode']) { this.client.linkMode = m; }
+  get linkMode(): VibeServerClient['linkMode'] { return this.client.linkMode; }
+  set linkMode(m: VibeServerClient['linkMode']) { this.client.linkMode = m; }
 
   /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
   setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }
@@ -245,8 +245,8 @@ export class UberSDRAdapter implements SDRBackend {
   setAdvRds(on: boolean) { this.client.setAdvRds(on); }
   /** Radio-specific hardware controls. Forwarded for the same reason as above — the screen
    *  holds the adapter, and an absent method on an `any`-cast call fails silently. */
-  ahfControl(o: Parameters<UberSDRClient['ahfControl']>[0]) { this.client.ahfControl(o); }
-  rspControl(o: Parameters<UberSDRClient['rspControl']>[0]) { this.client.rspControl(o); }
+  ahfControl(o: Parameters<VibeServerClient['ahfControl']>[0]) { this.client.ahfControl(o); }
+  rspControl(o: Parameters<VibeServerClient['rspControl']>[0]) { this.client.rspControl(o); }
   adminUnlock(nonce: string, token: string) { this.client.adminUnlock(nonce, token); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
@@ -268,4 +268,14 @@ export class UberSDRAdapter implements SDRBackend {
 
   getStatus(): SDRStatus { return this.client.getStatus(); }
   getView():   SDRStatus { return this.client.getView(); }
+
+  /** ★ The cast is CHECKED, not asserted away: makeClient above is the only thing that builds this
+   *  adapter's client and it builds a VibeServerClient, so the narrowing is a fact about this
+   *  class. A `(c as any).dab?.()` would have been the setAdminAuth mistake again. */
+  private get vibe(): VibeServerClient { return this.client; }
+
+  dab(on: boolean, channel?: number, sid?: number): void { this.vibe.dab(on, channel, sid); }
+  dabService(sid: number): void { this.vibe.dabService(sid); }
+  iqOut(on: boolean, rate = 48000): void { this.vibe.iqOut(on, rate); }
+  get inDab(): boolean { return this.vibe.inDab; }
 }

@@ -14,7 +14,7 @@
  *   └── AudioPlayer           (renderless; plays Opus stream)
  */
 
-import { UPDATE_APP_MESSAGE } from '../services/SdrWsClient';
+import { UPDATE_APP_MESSAGE } from '../services/sdrProtocol';
 import { APP_PROTO } from '../constants/version';
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
@@ -59,7 +59,7 @@ import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
-import { createBackend } from '../services/UberSDRAdapter';
+import { createBackend } from '../services/backendFactory';
 import {
   type ConverterProfile, NO_CONVERTER, active as convActive, isIdentity as convIsIdentity,
   toDisplay as convToDisplay, toHardware as convToHardware,

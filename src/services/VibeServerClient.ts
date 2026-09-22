@@ -15,7 +15,7 @@
 // ★★ WHAT IS *NOT* HERE, DELIBERATELY: everything both servers speak. That is SdrWsClient, one
 //    copy, so a fix to the shared half still reaches both — which is the good half of the old
 //    arrangement and worth keeping. Only the divergence is below.
-import { SdrWsClient, LADDERS_FOR } from './SdrWsClient';
+import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 
 export {
@@ -26,12 +26,12 @@ export {
   type RdsExt,
   type RadioCaps,
   type SDRCallbacks,
-} from './SdrWsClient';
+} from './sdrProtocol';
 
-export class VibeServerClient extends SdrWsClient {
+export class VibeServerClient extends VibeServerWsClient {
   /** ★ How many spectrum bins to ask for. A VibeServer honours the request — that is what makes
    *  one waterfall serve tens of listeners at a quarter of the bandwidth. UberSDR ignores it. */
-  static readonly BINS = SdrWsClient.VIBE_BINS;
+  static readonly BINS = VibeServerWsClient.VIBE_BINS;
   protected binsSuffix(): string { return `&bins=${VibeServerClient.BINS}`; }
 
   /** VibeServer's rungs. Its full rate is 20 fps, not UberSDR's 10 — asking a 20 fps server for

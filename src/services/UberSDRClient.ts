@@ -9,7 +9,7 @@
 //    / RadioCaps / SDRCallbacks / MODE_BANDWIDTHS from this path and care nothing about which
 //    server they came from. Re-exporting them keeps every one of those imports working unchanged,
 //    so the split touches the client layer and stops there.
-import { SdrWsClient, LADDERS_FOR } from './SdrWsClient';
+import { UberSDRWsClient, LADDERS_FOR } from './UberSDRWsClient';
 
 export {
   MODE_BANDWIDTHS,
@@ -19,9 +19,9 @@ export {
   type RdsExt,
   type RadioCaps,
   type SDRCallbacks,
-} from './SdrWsClient';
+} from './sdrProtocol';
 
-export class UberSDRClient extends SdrWsClient {
+export class UberSDRClient extends UberSDRWsClient {
   /** UberSDR sends its own bin count and ignores a request for one. */
   protected binsSuffix(): string { return ''; }
 
