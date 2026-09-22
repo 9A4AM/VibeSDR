@@ -141,6 +141,10 @@ export interface RdsExt {
 export interface RadioCaps {
   driver: 'rtl' | 'sdrplay' | 'airspyhf' | string;
   model: string;
+  /** ★ An rtl_tcp stream whose server reported NO gains — relayed IQ (a VibeServer's raw-IQ output,
+   *  an UberSDR), not a dongle. There is no tuner at the far end: no gain, no VibeAGC, no dongle
+   *  settings. The engine refuses them; the panel does not offer them. */
+  noHwGain?: boolean;
   // ── Airspy HF+ ──
   attSteps?: number;        // 9 => 0..8
   attStepDb?: number;       // 6 dB per step

@@ -929,12 +929,20 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 you know what is on the end of the coax.
               </Text>
             </>
+          ) : p.radio?.noHwGain ? (
+            /* ★ A RELAYED rtl_tcp stream: its server sent no gains, so there is no tuner to steer. */
+            <Text style={[styles.note, { marginTop: 12 }]}>
+              This RTL-TCP stream is relayed (from a VibeServer or UberSDR), not a dongle — there is no
+              gain to adjust here. Gain belongs to whoever runs that receiver.
+            </Text>
           ) : (
             <>
               <Text style={styles.section}>GAIN</Text>
-              {/* ★ Over RTL-TCP "auto" is the dongle's own broken AGC — see GainSlider.vibeAgc. */}
+              {/* ★★ Over RTL-TCP "auto" is VibeAGC too now (2026-09-22): the engine steers the
+               *  dongle with rtl_tcp gain commands exactly as it does over USB. The dongle's own AGC
+               *  is broken everywhere and is never used. */}
               <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc={!p.isTcp} />
+                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc />
             </>
           ))}
           {p.isSpy && <Text style={styles.note}>
@@ -1145,7 +1153,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
               are all properties of an RTL dongle. Showing them for another radio is how the
               panel became a hybrid of two receivers. */}
-          {!p.isSpy && isRtl && canProtected && <>
+          {!p.isSpy && isRtl && canProtected && !p.radio?.noHwGain && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
             <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>

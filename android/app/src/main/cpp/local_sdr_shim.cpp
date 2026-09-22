@@ -4455,8 +4455,7 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
     agcSettleAfterGain(now);
     p->lastGainTenthDb = applied;
-    { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingGainTenth = applied; }
-    p->hwWrCv.notify_one();
+    p->queueHwGain(applied);
     LOGI("[DAB] entering block %s at the gain it last decoded at: %.1f dB (%d steps below the ceiling)",
          vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, applied / 10.0, want);
     LocalSdrShim::instance().broadcastHwInfo();   // ★ the clients' gain readout follows the radio
@@ -4670,6 +4669,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double displaySpan() const { return spyFftSpan > 0.0 ? spyFftSpan : usableSpan(); }
 
     int tcpTunerType = 0;
+    /** ★★★ The rtl_tcp greeting's GAIN COUNT (2026-09-22). A real rtl_tcp in front of a dongle sends
+     *  the tuner's list (29 on an R820T); a RELAYED stream — our own raw-IQ output, an UberSDR — sends
+     *  0, because there is no tuner at the far end to steer. Stuart: "if its an UberSDR or VibeServer
+     *  sending the IQ then the AGC will be ignored as there is no gain to adjust". 0 = no hardware
+     *  gain: no VibeAGC, no gain commands, no gain control offered. -1 = not connected yet. */
+    int tcpGainCount = -1;
+    bool tcpHasGain() const { return tcpGainCount != 0; }
     std::vector<int> tcpGains;            // tuner gains (tenths dB) from the header
     // rtl_tcp 5-byte command: [code][param big-endian u32].
     void sendTcpCmd(uint8_t code, uint32_t param) {
@@ -5429,7 +5435,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (sc) sendConfig(sc);
             }
         }
-        else if (useTcp()) sendTcpCmd(0x01, hz);
+        else if (useTcp()) {
+            /* ★★ AUTO DIRECT SAMPLING OVER RTL-TCP (2026-09-22) — the same crossover rule the USB
+             *  writer applies, sent as rtl_tcp's direct-sampling command (0x09) BEFORE the tune. */
+            if (g_autoDs.load(std::memory_order_relaxed)) {
+                const double below = g_dsBelowHz.load(std::memory_order_relaxed);
+                const int want = ((double)hz < below) ? 2 : 0;   // 2 = Q branch
+                if (want != g_dsNow.load(std::memory_order_relaxed)) {
+                    sendTcpCmd(0x09, (uint32_t)want);
+                    const int was = g_dsNow.exchange(want, std::memory_order_relaxed);
+                    LOGI("auto direct sampling (rtl_tcp): %s at %.3f MHz (crossover %.3f MHz)",
+                         want ? "ON (Q branch)" : "OFF (tuner)", hz / 1e6, below / 1e6);
+                    if (was >= 0) g_dsAnnounce.store(want ? 1 : 2, std::memory_order_relaxed);
+                }
+            }
+            sendTcpCmd(0x01, hz);
+        }
         else if (useSdrplay()) { sdrp->setFrequency((double)hz); lastHwWriteAt.store(nowSecs(), std::memory_order_relaxed); }
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
         else if (useHackRf())   hrf->setFrequency((double)hz);
@@ -19251,8 +19272,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     steps = ceilIdx - restIdx;
                     if (steps < 0) steps = 0;
                     lastGainTenthDb = gl[(size_t)restIdx];
-                    { std::lock_guard<std::mutex> lk(hwWrMtx); pendingGainTenth = gl[(size_t)restIdx]; }
-                    hwWrCv.notify_one();
+                    queueHwGain(gl[(size_t)restIdx]);
                 }
             }
             LOGI("everybody has left — AGC restarts from the owner's resting gain %d "
@@ -20737,6 +20757,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     //    the handle cannot be freed underneath a transfer in flight.
     //  ★ RTL ONLY. The other drivers reach their hardware through their own libraries with their
     //    own threading, and dragging them through here would be blast radius for no reported fault.
+    /** ★★★ ONE ROAD FROM A GAIN DECISION TO THE RADIO — USB OR RTL-TCP (2026-09-22). The AGC loop,
+     *  the DAB entry and the restore-on-open all queued for the hardware writer, which only drives
+     *  a USB dongle, so over RTL-TCP VibeAGC could never have moved anything. Stuart: "RTL-TCP is
+     *  simply an RTL-SDR uncompressed over local network rather than USB". On TCP the same number
+     *  goes out as rtl_tcp's own commands: manual gain mode (0x03 1), then the gain (0x04). */
+    void queueHwGain(int tenth) {
+        if (useTcp()) {
+            if (tcpHasGain()) { sendTcpCmd(0x03, 1); sendTcpCmd(0x04, (uint32_t)tenth); }
+            return;
+        }
+        { std::lock_guard<std::mutex> lk(hwWrMtx); pendingGainTenth = tenth; }
+        hwWrCv.notify_one();
+    }
     void startHwWriter() {
         if (hwWrRun.exchange(true)) return;
         hwWrThread = std::thread([this]{
@@ -21289,14 +21322,22 @@ void LocalSdrShim::setVibeAgcRtl(bool on) {
     //     a client for anything to happen (Stuart, 2026-08-21).
     if (was == on && (!on || g_gainTarget.load(std::memory_order_relaxed) >= 0)) return;
     LOGI("RTL AGC: %s", on ? "ON — free to use the tuner's whole range" : "off");
-    if (!p || !p->dev) return;
+    // ★★ RTL-TCP: the rtl_tcp gain table stands in for the USB driver's list (2026-09-22).
+    const bool tcpSrc = p && p->useTcp() && p->tcpHasGain();
+    if (!p || (!p->dev && !tcpSrc)) return;
     // ★ The same recursive mutex VIBE_HW_LOCK wraps — that macro is defined further down the file
     //   than this function, so it is spelled out rather than moved.
     std::lock_guard<std::recursive_mutex> hwlk(p->modeMtx);
-    int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    std::vector<int> gains;
+    if (tcpSrc) gains = p->tcpGains;
+    else {
+        const int nn = rtlsdr_get_tuner_gains(p->dev, nullptr);
+        if (nn <= 1) return;
+        gains.resize((size_t)nn);
+        rtlsdr_get_tuner_gains(p->dev, gains.data());
+    }
+    const int n = (int)gains.size();
     if (n <= 1) return;
-    std::vector<int> gains((size_t)n);
-    rtlsdr_get_tuner_gains(p->dev, gains.data());
     const int cur = p->lastGainTenthDb;
     if (on) {
         // ★ Ceiling to the top, and the CURRENT gain becomes the starting point — expressed, as
@@ -23653,13 +23694,23 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
         err = "bad rtl_tcp header (not an rtl_tcp server?)"; impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
     }
     impl->tcpTunerType = (hdr[4] << 24) | (hdr[5] << 16) | (hdr[6] << 8) | hdr[7];
-    impl->tcpGains.assign(kR820tGains, kR820tGains + (sizeof(kR820tGains) / sizeof(int)));
+    impl->tcpGainCount = (hdr[8] << 24) | (hdr[9] << 16) | (hdr[10] << 8) | hdr[11];
+    if (impl->tcpHasGain())
+        impl->tcpGains.assign(kR820tGains, kR820tGains + (sizeof(kR820tGains) / sizeof(int)));
+    else
+        LOGI("rtl_tcp: the server reports NO gains (tuner type %d) — a relayed stream, not a dongle; "
+             "gain and VibeAGC are off", impl->tcpTunerType);
 
     // Initial config via rtl_tcp commands (0x02 rate, 0x01 freq, 0x03/0x04 gain).
     impl->sendTcpCmd(0x02, (uint32_t)sampleRate);
     impl->tuneHw(impl->rtlCenter.load());   // offset tuning (HW_OFFSET_HZ above centre)
-    if (gainTenthDb < 0) { impl->sendTcpCmd(0x03, 0); }                       // auto
-    else { impl->sendTcpCmd(0x03, 1); impl->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
+    /* ★★ NEVER the dongle's own AGC (0x03 0) — "dongles auto is broken everywhere". Manual mode
+     *  always; an "auto" start gets VibeAGC once the source is live (the app re-applies the gain as
+     *  it connects, and setGain's TCP branch switches the loop on). Relayed streams: nothing to set. */
+    if (impl->tcpHasGain()) {
+        impl->sendTcpCmd(0x03, 1);
+        if (gainTenthDb >= 0) impl->sendTcpCmd(0x04, (uint32_t)gainTenthDb);
+    }
 
     impl->fftSize = fftSizeForRate(impl->sampleRate);
 
@@ -24432,9 +24483,25 @@ void LocalSdrShim::setGain(int gainTenthDb) {
         LOGI("gain: index %u", idx);
         return;
     }
+    if (p->useTcp() && !p->tcpHasGain()) { LOGI("gain ignored — this rtl_tcp stream has no tuner gain"); return; }
     if (p->useTcp()) {
-        if (gainTenthDb < 0) p->sendTcpCmd(0x03, 0);
-        else { p->sendTcpCmd(0x03, 1); p->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
+        /* ★★★ "AUTO" IS VibeAGC, NEVER THE DONGLE'S OWN (Stuart: "dongles auto is broken everywhere
+         *  that is why VibeAGC exists"). This sent rtl_tcp gain mode 0 — the tuner's own AGC. Now it
+         *  is the same as a USB dongle: the loop is switched on and the dongle stays in manual mode,
+         *  its gain moved by our commands (queueHwGain). */
+        if (gainTenthDb < 0) {
+            p->sendTcpCmd(0x03, 1);
+            setVibeAgcRtl(true);
+            LOGI("gain (rtl_tcp): VibeAGC");
+            return;
+        }
+        setVibeAgcRtl(false);
+        p->lastGainTenthDb = gainTenthDb;
+        g_gainTarget.store(gainTenthDb, std::memory_order_relaxed);
+        g_gainRef.store(gainTenthDb, std::memory_order_relaxed);
+        g_ovlSteps.store(0, std::memory_order_relaxed);
+        p->queueHwGain(gainTenthDb);
+        LOGI("gain (rtl_tcp): %.1f dB", gainTenthDb / 10.0);
         return;
     }
     if (p->useSdrplay()) {
@@ -24557,7 +24624,10 @@ static constexpr double kClimbTrialMaxSec = 20.0;
 
 void LocalSdrShim::overloadTick() {
     if (!p) return;
-    if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
+    // ★ RTL-TCP IS AN RTL: the loop measures our own IQ and steers through queueHwGain, which speaks
+    //   rtl_tcp (2026-09-22). SpyServer has no gain protocol worth steering; the RSP runs its own.
+    if (p->useSpy() || p->useSdrplay()) return;
+    if (p->useTcp() && !p->tcpHasGain()) return;   // a relayed stream: nothing to steer
     // ★★★ AGC OR NOTHING. A gain the owner typed is a decision, and the loop does not second-guess
     //     it — see the note by g_vibeAgcRtlOn for what this used to do and what it cost.
     if (!g_vibeAgcRtlOn.load(std::memory_order_relaxed)) return;
@@ -25396,14 +25466,17 @@ void LocalSdrShim::overloadTick() {
     //   no benefit — the radio is already set by then.
     {
     VIBE_HW_LOCK();
-    if (!p || !p->dev || p->radioReleased.load()) return;
-    if (gainList.empty()) {
+    // ★★ RTL-TCP steers the same loop with rtl_tcp's gain table (2026-09-22) — see queueHwGain.
+    const bool tcpSrc = p && p->useTcp() && p->tcpHasGain();
+    if (!p || (!p->dev && !tcpSrc) || p->radioReleased.load()) return;
+    if (!tcpSrc && gainList.empty()) {
         int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
         if (n <= 1) return;
         gainList.resize((size_t)n);
         rtlsdr_get_tuner_gains(p->dev, gainList.data());
     }
-    const std::vector<int>& gains = gainList;
+    const std::vector<int>& gains = tcpSrc ? p->tcpGains : gainList;
+    if (gains.size() <= 1) return;
     const int n = (int)gains.size();
     // The tuner's list is ascending; find where the owner's target sits on it.
     int tgtIdx = 0;
@@ -25894,11 +25967,7 @@ void LocalSdrShim::overloadTick() {
         //     writer does differently, it does it demonstrably better.
         //  ★ Latest-wins, as the slider is: if the loop ever asks twice before the writer runs,
         //    only the destination matters.
-        {
-            std::lock_guard<std::mutex> lk(p->hwWrMtx);
-            p->pendingGainTenth = applied;
-        }
-        p->hwWrCv.notify_one();
+        p->queueHwGain(applied);
     }
     // ★★★ AND TELL THE LISTENERS, or an automatic gain is invisible. hwinfo is otherwise sent once
     //     on connect, so a slider would go on showing the value the radio HAD while the protection
@@ -26916,6 +26985,12 @@ std::string LocalSdrShim::radioCapsJson() const {
             }
         }
         for (auto& c : n) if (c == '"' || c == '\\') c = ' ';   // device strings, kept simple
+        /* ★ RTL-TCP: say which kind — a dongle we can steer, or a relayed stream we cannot. */
+        if (p->useTcp()) {
+            if (!p->tcpHasGain())
+                return ",\"radio\":{\"driver\":\"rtl\",\"model\":\"rtl_tcp stream\",\"noHwGain\":true}";
+            n = "RTL-SDR (rtl_tcp)";
+        }
         return ",\"radio\":{\"driver\":\"rtl\",\"model\":\"" + n + "\"}";
     }
     auto& d = *p->sdrp;
