@@ -11848,6 +11848,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ A headless Linux server is unaffected: its wizard makes the admin password
             //   mandatory, so `needed` is always true there and this branch never applies.
             if (!needed && sock && isLoopback(sock->peerAddress())) return true;
+            /* ★★ NOT SERVING: this is the phone's own radio and the engine is bound to localhost, so a
+             *  loopback caller IS the owner — even if an admin password was set for a VibeServer run
+             *  earlier (2026-09-22; see gainLockedAt). While serving, a tunnel's visitors also arrive
+             *  on loopback, which is why this is never true then. */
+            if (!g_serveOnLan.load() && sock && isLoopback(sock->peerAddress())) return true;
             LOGI("refused %s — %s", what,
                  needed ? "admin password required"
                         : "no admin password is set, so only this machine may change the radio");
@@ -13799,6 +13804,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // advertisement is a protection nobody can see.
         { bool aset;
           { std::lock_guard<std::mutex> al(g_vsAdminMtx); aset = !g_vsAdminSecret.empty(); }
+          aset = aset && g_serveOnLan.load();   // ★ not serving: nothing is protected — see gainLockedAt
           j += std::string(",\"adminSet\":") + (aset ? "true" : "false");
           j += std::string(",\"adminOk\":")  + (adminNow(sock) ? "true" : "false"); }
         // ★★ THE COUNTDOWN NEEDS A DEADLINE AT CONNECT, not just the two warnings. The first
@@ -21384,7 +21390,13 @@ void LocalSdrShim::setGainLocks(const std::string& csv) {
  *   every caller below checks for one.
  * ★ The legacy whole-radio flag applies only while the list is empty: an owner who has since
  *   locked one band must not find themselves locked on all of them. */
+/* ★★★ SERVER PROTECTIONS ARE FOR A SERVER (Stuart, 2026-09-22): "Local hardware doesnt need any
+ *  locks like server gets ... in local mode its a users own hardware." These limits are process-wide
+ *  and outlived the server — set by VibeServerBoot, never cleared on stop — so a local session after a
+ *  VibeServer run inherited them. They now apply only while serving (g_serveOnLan, which applyAndStart
+ *  sets and every stop clears). Not serving, the engine is bound to localhost: the phone's owner. */
 bool LocalSdrShim::gainLockedAt(double hz) {
+    if (!g_serveOnLan.load()) return false;
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
     if (g_gainLocks.empty()) return g_gainLock.load();
     return vibebands::valueAt(g_gainLocks, hz) > 0;
@@ -21405,6 +21417,7 @@ void LocalSdrShim::setIfGrFloors(const std::string& csv) {
  *   loosen the specific one an owner wrote for the band that was overloading — the exact failure
  *   gainCapAt's own note warns about, in a mirror. */
 int LocalSdrShim::ifGrFloorAt(double hz) {
+    if (!g_serveOnLan.load()) return -1;   // ★ see gainLockedAt
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
     int floor = -1;
     for (const auto& g : g_ifGrFloors)
@@ -21428,9 +21441,10 @@ void LocalSdrShim::setAgcLock(bool on) {
     g_agcLock.store(on);
     LOGI("AGC lock: %s", on ? "ON — listeners may not turn it off" : "off");
 }
-bool LocalSdrShim::agcLocked() { return g_agcLock.load(); }
+bool LocalSdrShim::agcLocked() { return g_agcLock.load() && g_serveOnLan.load(); }   // ★ see gainLockedAt
 
 int LocalSdrShim::gainCapAt(double hz) {
+    if (!g_serveOnLan.load()) return -1;   // ★ see gainLockedAt
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
     if (g_gainLimits.empty()) return -1;
     return vibebands::gainCapAt(g_gainLimits, hz);
